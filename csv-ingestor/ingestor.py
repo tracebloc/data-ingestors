@@ -28,16 +28,16 @@ logger.addHandler(log_handler)
 if __name__ == "__main__":
     # Define default configuration
     default_config = {
-        "src_path": "",
-        "dest_path": "txt",
-        "label_file": "label.json",
-        "company": "CS",
-        "table_name": "documents_data",
-        "text_intent": "train",
-        "edge_username": "xyz",
-        "edge_password": "1234",
-        "edge_env": "dev",
-        "trigger_send_to_server": 50,
+        "src_path": "<source_file_directory>",  # Path to source files for processing
+        "dest_path": "<destination_directory>",  # Directory to store processed files
+        "label_file": "label.json",  # Name of the label file used in processing
+        "company": "<company_name>",  # Placeholder for company name, e.g., "MyCompany"
+        "table_name": "<database_table_name>",  # Name of the database table, e.g., "processed_documents"
+        "text_intent": "<intent_type>",  # Intent type, e.g., "train", "test", or "inference"
+        "edge_username": "<edge_username_placeholder>",  # Username for edge server authentication
+        "edge_password": "<edge_password_placeholder>",  # Password for edge server authentication
+        "edge_env": "<environment_type>",  # Environment, e.g., "dev", "stg", or "prod"
+        "trigger_send_to_server": 50,  # Number of processed items before triggering send
     }
 
     # Get configuration from environment variables (optional)
