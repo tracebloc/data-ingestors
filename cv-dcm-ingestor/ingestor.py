@@ -10,7 +10,7 @@ from logging.handlers import TimedRotatingFileHandler
 from utils import get_files_with_extensions, list_image_files
 import pandas as pd
 
-log_filename = "logs/watchman.log"
+log_filename = "logs/ingestor.log"
 os.makedirs(os.path.dirname(log_filename), exist_ok=True)
 log_handler = TimedRotatingFileHandler(
     log_filename, when="midnight", interval=1, encoding="utf8", backupCount=10
@@ -213,15 +213,15 @@ def process_image(file_path):
 if __name__ == "__main__":
     argv = sys.argv[1:]
 
-    # default path where raw images are copied by Watchman M
-    src_path = "Machine"
-    final_path = "CancerImages"
+    # default path where raw images are copied
+    src_path = ""
+    final_path = ""
     label_file = "label.csv"
-    userName = "testedge"
-    passwd = "&6edg*D9e"
+    userName = ""
+    passwd = ""
     env = "dev"
-    company = "SKU"
-    table_name = "sku_data"
+    company = ""
+    table_name = ""
     image_intent = "train"
 
     options, args = getopt.getopt(
