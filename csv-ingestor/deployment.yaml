@@ -21,7 +21,7 @@ spec:
             mountPath: "/data/shared"
         env:
         - name: EDGE_ENV
-          value: "dev"
+          value: "prod"
         - name: EDGE_USERNAME
           value: ""
         - name: EDGE_PASSWORD
