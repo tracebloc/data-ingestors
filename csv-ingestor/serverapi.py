@@ -58,7 +58,7 @@ class GenericDBAPI:
         if self.auth_token is None:
             self.auth_token = self.get_auth_token()
 
-        url_with_dataset_type = f"{self.url}meta_data_endpoint/"
+        url_with_dataset_type = f"{self.url}global_meta/{self.config.get('table_name', 'inspections_table')}/"
         headers = {
             "Authorization": f"TOKEN {self.auth_token}",
             "Content-Type": "application/json",
