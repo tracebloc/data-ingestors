@@ -34,6 +34,7 @@ csv_options = {
     "escapechar": "\\",
 }
 
+
 # Define a simple processor
 class UpperCaseProcessor(BaseProcessor):
     def __init__(self, column_name: str):
@@ -52,7 +53,7 @@ upper_case_processor = UpperCaseProcessor(column_name="name")
 ingestor = CSVIngestor(
     database=database,
     api_client=api_client,
-    table_name="employees",
+    table_name=config.TABLE_NAME,
     schema=schema,
     csv_options=csv_options,
     processors=[upper_case_processor],
@@ -64,6 +65,6 @@ ingestor = CSVIngestor(
 
 # Ingest data
 with ingestor:
-    failed_records = ingestor.ingest("src/examples/data/sample.csv", batch_size=50)
+    failed_records = ingestor.ingest(config.LABEL_FILE, batch_size=config.BATCH_SIZE)
     if failed_records:
         print(f"Failed to process {len(failed_records)} records") 

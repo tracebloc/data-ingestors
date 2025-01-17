@@ -34,6 +34,10 @@ spec:
           value: "edgeuser"
         - name: MYSQL_PASSWORD
           value: ""
+        - name: MYSQL_DATABASE
+          value: "xraymetadata"
+        - name: MYSQL_PORT
+          value: "3306"
         - name: SRC_PATH
           value: "/data/shared/welds_inspections"
         - name: DEST_PATH
