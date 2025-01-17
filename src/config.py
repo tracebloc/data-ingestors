@@ -11,7 +11,18 @@ class Config:
     DB_NAME: str = os.getenv("MYSQL_DATABASE", "ingestor_db")
     
     BATCH_SIZE: int = int(os.getenv("BATCH_SIZE", "50"))
-    API_ENDPOINT: str = os.getenv("API_ENDPOINT", "https://dev-api.tracebloc.io")
+    
+    # Define API endpoints for different environments
+    API_ENDPOINTS = {
+        "dev": "https://dev-api.tracebloc.io",
+        "stg": "https://stg-api.tracebloc.io",
+        "prod": "https://api.tracebloc.io"
+    }
+    
+    # Get environment and set appropriate API endpoint, default to dev
+    EDGE_ENV: str = os.getenv("EDGE_ENV", "dev")
+    API_ENDPOINT: str = API_ENDPOINTS.get(EDGE_ENV, API_ENDPOINTS["dev"])
+    
     CLIENT_USERNAME: str = os.getenv("EDGE_USERNAME", "testedge")
     CLIENT_PASSWORD: str = os.getenv("EDGE_PASSWORD", "&6edg*D9e")
     
