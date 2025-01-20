@@ -1,0 +1,72 @@
+[
+
+    {
+        "name": "John Doe changed",
+        "email": "john.doe@example.com",
+        "age": 30,
+        "active": true,
+        "unique_id": 1,
+        "data_intent": "data_intent_changed",
+        "annotation": "annotation_1"
+    },
+    {
+        "name": "John Doe 2",
+        "email": "john.doe@example.com",
+        "age": 30,
+        "active": true,
+        "unique_id": 7,
+        "data_intent": "data_intent_2",
+        "annotation": "annotation_2",
+        "label": "label_2"
+    },
+    {
+        "name": "John Doe 2",
+        "email": "john.doe@example.com",
+        "age": 30,
+        "active": true,
+        "unique_id": 6,
+        "data_intent": "data_intent_2",
+        "annotation": "annotation_2",
+        "label": "label_2"
+    },
+    {
+        "name": "Jane Smith",
+        "email": "JANE.SMITH@EXAMPLE.COM",
+        "age": 25,
+        "active": true,
+        "unique_id": 2,
+        "data_intent": "data_intent_3",
+        "annotation": "annotation_3",
+        "label": "label_3"
+    },
+    {
+        "name": "Bob Johnson",
+        "email": "bob.johnson@example.com",
+        "age": 45,
+        "active": false,
+        "unique_id": 3,
+        "data_intent": "data_intent_4",
+        "annotation": "annotation_4",
+        "label": "label_4"
+    },
+    {
+        "name": "Alice Brown",
+        "email": "alice.brown@example.com",
+        "age": 28,
+        "active": true,
+        "unique_id": 4,
+        "data_intent": "data_intent_5",
+        "annotation": "annotation_5",
+        "label": "label_5"
+    },
+    {
+        "name": "Charlie Wilson",
+        "email": "charlie.wilson@example.com",
+        "age": 35,
+        "active": true,
+        "unique_id": 5,
+        "data_intent": "data_intent_6",
+        "annotation": "annotation_6",
+        "label": "label_6"
+    }
+] 

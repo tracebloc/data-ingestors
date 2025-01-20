@@ -1,0 +1,4 @@
+name,document_type,content_type,document_data,thumbnail,metadata
+"Sample Text","txt","text/plain","SGVsbG8sIHRoaXMgaXMgYSBzYW1wbGUgdGV4dCBmaWxlIQ==","","{\"size\": 28, \"encoding\": \"utf-8\"}"
+"Small Image","image","image/png","iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==","iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==","{\"width\": 1, \"height\": 1, \"format\": \"PNG\"}"
+"Binary Data","binary","application/octet-stream","AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=","","{\"size\": 32, \"type\": \"random-bytes\"}" 
