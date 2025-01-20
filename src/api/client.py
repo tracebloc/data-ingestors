@@ -65,7 +65,7 @@ class APIClient:
             headers = {"Authorization": f"TOKEN {self.token}"}
             
             response = self.session.post(
-                f"{self.config.API_ENDPOINT}/global_meta//{table_name}/",
+                f"{self.config.API_ENDPOINT}/global_meta/{table_name}/",
                 json=payload,
                 headers=headers,
                 timeout=30

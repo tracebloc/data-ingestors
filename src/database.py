@@ -19,10 +19,19 @@ class Database:
         self.unique_id_column: Optional[str] = None  # Store table-specific unique ID column mappings
 
     def _create_engine(self) -> Engine:
-        connection_string = (
+        # First create database if it doesn't exist
+        base_connection_string = (
             f"mysql+mysqldb://{self.config.DB_USER}:{quote(self.config.DB_PASSWORD)}"
-            f"@{self.config.DB_HOST}:{self.config.DB_PORT}/{self.config.DB_NAME}"
+            f"@{self.config.DB_HOST}:{self.config.DB_PORT}"
         )
+        engine = create_engine(base_connection_string, pool_pre_ping=True)
+        
+        with engine.connect() as connection:
+            connection.execute(text(f"CREATE DATABASE IF NOT EXISTS {self.config.DB_NAME}"))
+            connection.commit()
+        
+        # Now connect to the specific database
+        connection_string = f"{base_connection_string}/{self.config.DB_NAME}"
         print(connection_string)
         return create_engine(connection_string, pool_pre_ping=True)
 
