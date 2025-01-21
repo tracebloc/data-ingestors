@@ -1,15 +1,31 @@
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Generator, List, Optional, Callable
+from typing import Dict, Any, Generator, List, Optional, Callable, NamedTuple
 from sqlalchemy.orm import Session
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 import logging
+from tqdm import tqdm
+import os
 from ..database import Database
 from ..processors.base import BaseProcessor
 from ..api.client import APIClient
+from ..utils.logging import setup_logging
+from ..config import Config
 
+# Configure unified logging with config
+config = Config()
+setup_logging(config)
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
+class IngestionSummary(NamedTuple):
+    """Data class to hold ingestion summary statistics"""
+    total_records: int
+    processed_records: int
+    inserted_records: int
+    api_sent_records: int
+    failed_records: int
 
 class BaseIngestor(ABC):
     def __init__(self, 
@@ -82,7 +98,7 @@ class BaseIngestor(ABC):
                 columns_not_found = True
 
         if columns_not_found:
-            print(f"Record: {record}")
+            logger.warning(f"Record {record} does not contain the required columns: {columns_not_found}")
 
         if self.label_column:
             cleaned_record['label'] = record.get(self.label_column)
@@ -134,9 +150,27 @@ class BaseIngestor(ABC):
         """Read data from the input source"""
         pass
 
+    def _count_records(self, source: Any) -> Optional[int]:
+        """
+        Try to count total records in the source for progress tracking.
+        Subclasses should override this if they can provide a more efficient count.
+        
+        Args:
+            source: The data source
+            
+        Returns:
+            Total number of records if countable, None otherwise
+        """
+        try:
+            # Default implementation tries to count by iterating
+            return sum(1 for _ in self.read_data(source))
+        except Exception as e:
+            logger.debug(f"Unable to count records: {str(e)}")
+            return None
+
     def ingest(self, source: Any, batch_size: int = 50) -> List[Dict[str, Any]]:
         """
-        Ingest data from the source
+        Ingest data from the source with progress tracking
         
         Args:
             source: The input data source
@@ -148,31 +182,82 @@ class BaseIngestor(ABC):
         batch = []
         failed_records = []
         
+        # Statistics tracking
+        stats = {
+            'total_records': 0,
+            'processed_records': 0,
+            'inserted_records': 0,
+            'api_sent_records': 0,
+            'failed_records': 0
+        }
+        
+        # Try to get total count for progress bar
+        total = self._count_records(source)
+        stats['total_records'] = total or 0
+        
+        # Determine if we should show progress bar
+        disable_progress = not os.isatty(0) or os.getenv('DISABLE_PROGRESS_BAR')
+        
         with Session(self.engine) as session:
             try:
+                pbar = tqdm(
+                    total=total,
+                    desc="Ingesting records",
+                    unit="records",
+                    disable=disable_progress
+                )
+                
                 for record in self.read_data(source):
+                    stats['total_records'] += 0 if total else 1  # Increment if total wasn't pre-counted
+                    
                     processed_record = self.process_record(record)
                     if processed_record:
+                        stats['processed_records'] += 1
                         batch.append(processed_record)
                         
                         if len(batch) >= batch_size:
                             try:
-                                self._process_batch(batch, session)
+                                inserted_ids, api_success, db_failures = self._process_batch(batch, session)
+                                # Only count records that were successfully inserted
+                                if inserted_ids:
+                                    stats['inserted_records'] += len(inserted_ids)
+                                if api_success:
+                                    stats['api_sent_records'] += len(inserted_ids)
+                                if db_failures:
+                                    stats['failed_records'] += len(db_failures)
+                                    failed_records.extend(db_failures)
                             except Exception as e:
                                 logger.error(f"Batch processing failed: {str(e)}")
-                                failed_records.extend(batch)
                             finally:
+                                pbar.update(len(batch))
                                 batch = []
+                    else:
+                        stats['skipped_records'] += 1
+                        pbar.update(1)  # Update progress bar for skipped records
                 
                 # Process remaining records
                 if batch:
                     try:
-                        self._process_batch(batch, session)
+                        inserted_ids, api_success, db_failures = self._process_batch(batch, session)
+                        # Only count records that were successfully inserted
+                        if inserted_ids:
+                            stats['inserted_records'] += len(inserted_ids)
+                        if api_success:
+                            stats['api_sent_records'] += len(inserted_ids)
+                        if db_failures:
+                            stats['failed_records'] += len(db_failures)
+                            failed_records.extend(db_failures)
+                        pbar.update(len(batch))
                     except Exception as e:
                         logger.error(f"Final batch processing failed: {str(e)}")
-                        failed_records.extend(batch)
                 
                 session.commit()
+                pbar.close()
+                
+                # Create and log summary
+                summary = IngestionSummary(**stats)
+
+                self._log_summary(summary)
                 
             except Exception as e:
                 session.rollback()
@@ -208,19 +293,35 @@ class BaseIngestor(ABC):
         """
         try:
             # Insert batch and get IDs
-            ids = self.database.insert_batch(self.table_name, batch)
-            # schema = self.database.get_table_schema(self.table_name)
+            ids, db_failures = self.database.insert_batch(self.table_name, batch)
+
             # Send to API
-            success = self.api_client.send_batch(
-                [(id, record) for id, record in zip(ids, batch)],
-                self.table_name
-            )
-            
-            if not success:
-                raise Exception("Failed to send batch to API")
-            
-            return ids
+            if ids:  # Only send to API if we have valid IDs
+                api_success = self.api_client.send_batch(
+                    [(id, record) for id, record in zip(ids, batch)],
+                    self.table_name
+                )
+            return ids if ids else [], api_success, db_failures  # Ensure we always return a list
             
         except Exception as e:
             logger.error(f"Error processing batch: {str(e)}")
-            raise 
+            raise
+
+    def _log_summary(self, summary: IngestionSummary):
+        """Log ingestion summary in a clear, formatted way"""
+
+        logger.info("\n" + "="*50)
+        logger.info("INGESTION SUMMARY")
+        logger.info("="*50)
+        logger.info(f"Total Records Found:     {summary.total_records:,}")
+        logger.info(f"Successfully Processed:  {summary.processed_records:,}")
+        logger.info(f"Inserted to Database:    {summary.inserted_records:,}")
+        logger.info(f"Sent to API:            {summary.api_sent_records:,}")
+        logger.info(f"Failed Records:          {summary.failed_records:,}")
+        logger.info("="*50)
+        
+        # Calculate success rate
+        if summary.total_records > 0:
+            success_rate = (summary.inserted_records / summary.total_records) * 100
+            logger.info(f"Success Rate: {success_rate:.2f}%")
+        logger.info("="*50 + "\n") 

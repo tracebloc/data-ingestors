@@ -56,7 +56,7 @@ class CSVIngestor(BaseIngestor):
         
     def _validate_csv(self, df: pd.DataFrame) -> None:
         """
-        Validate CSV data against schema
+        Validate CSV data against schema using pandas functionality
         
         Args:
             df: Pandas DataFrame
@@ -64,34 +64,30 @@ class CSVIngestor(BaseIngestor):
         Raises:
             ValueError: If validation fails
         """
-        # Check for required columns
-        schema_columns = set(self.schema.keys())
-        df_columns = set(df.columns)
-        
-        missing_columns = schema_columns - df_columns
+        # Check for required columns using pandas operations
+        missing_columns = set(self.schema.keys()) - set(df.columns)
         if missing_columns:
-            raise ValueError(
-                f"Missing required columns in CSV: {', '.join(missing_columns)}"
-            )
+            raise ValueError(f"Missing required columns in CSV: {', '.join(missing_columns)}")
             
-        # Basic data type validation
+        # Type validation using pandas dtypes
         for column, dtype in self.schema.items():
             try:
                 if 'INT' in dtype.upper():
-                    pd.to_numeric(df[column], errors='raise')
+                    df[column] = pd.to_numeric(df[column], downcast='integer')
                 elif 'FLOAT' in dtype.upper():
-                    pd.to_numeric(df[column], errors='raise')
+                    df[column] = pd.to_numeric(df[column], downcast='float')
                 elif 'BOOL' in dtype.upper():
-                    df[column].astype(bool)
-                # Add more type validations as needed
+                    df[column] = df[column].astype('boolean')
+                elif 'DATE' in dtype.upper():
+                    df[column] = pd.to_datetime(df[column])
+                elif 'STRING' in dtype.upper() or 'TEXT' in dtype.upper():
+                    df[column] = df[column].astype('string')
             except Exception as e:
-                raise ValueError(
-                    f"Data type validation failed for column {column}: {str(e)}"
-                )
+                raise ValueError(f"Data type validation failed for column {column}: {str(e)}")
 
     def read_data(self, file_path: str) -> Generator[Dict[str, Any], None, None]:
         """
-        Read and validate CSV file
+        Read and validate CSV file using pandas optimizations
         
         Args:
             file_path: Path to the CSV file
@@ -104,48 +100,41 @@ class CSVIngestor(BaseIngestor):
             raise FileNotFoundError(f"CSV file not found: {file_path}")
             
         try:
-            # Read CSV in chunks for memory efficiency
             chunk_size = self.csv_options.pop('chunk_size', 1000)
             
+            # Enhanced default options for pandas
             default_options = {
-                'dtype': 'object',  # Prevent automatic type inference
-                'keep_default_na': False,  # Prevent automatic NA handling
-                'na_values': [''],  # Only treat empty strings as NA
+                'dtype': None,  # Let pandas infer types initially
+                'keep_default_na': False,
+                'na_values': [''],
                 'encoding': 'utf-8',
-                'on_bad_lines': 'warn'  # Log warning for bad lines
+                'on_bad_lines': 'warn',
+                'low_memory': False,  # Prevent mixed type inference warnings
+                'engine': 'c'  # Use faster C engine
             }
             
-            # Merge default options with user-provided options
             csv_options = {**default_options, **self.csv_options}
             
-            # Read CSV in chunks
-            for chunk in pd.read_csv(
-                file_path, 
-                chunksize=chunk_size,
-                **csv_options
-            ):
-                if chunk.index[0] == 0:
+            first_chunk = True
+            for chunk in pd.read_csv(file_path, chunksize=chunk_size, **csv_options):
+                if first_chunk:
+                    chunk.columns = chunk.columns.str.strip()
                     self._validate_csv(chunk)
-                    # Validate unique_id_column exists if specified
                     if self.unique_id_column and self.unique_id_column not in chunk.columns:
                         raise ValueError(f"Specified unique_id_column '{self.unique_id_column}' not found in CSV")
+                    first_chunk = False
                 
-                chunk.columns = chunk.columns.str.strip()
-                
-                for _, row in chunk.iterrows():
-                    record = row.to_dict()
-                    yield record  # Let base class handle the cleaning and unique ID mapping
+                # Process each row efficiently using itertuples instead of iterrows
+                for row in chunk.itertuples(index=False, name=None):
+                    record = dict(zip(chunk.columns, row))
+                    yield record
                     
         except pd.errors.EmptyDataError:
             logger.warning(f"Empty CSV file: {file_path}")
             return
             
-        except pd.errors.ParserError as e:
-            logger.error(f"Error parsing CSV file: {str(e)}")
-            raise
-            
-        except Exception as e:
-            logger.error(f"Unexpected error reading CSV: {str(e)}")
+        except (pd.errors.ParserError, Exception) as e:
+            logger.error(f"Error reading CSV file: {str(e)}")
             raise
 
     def ingest(self, file_path: str, batch_size: int = 50) -> List[Dict[str, Any]]:
@@ -174,3 +163,20 @@ class CSVIngestor(BaseIngestor):
         except Exception as e:
             logger.error(f"CSV ingestion failed: {str(e)}")
             raise 
+
+    def _count_records(self, file_path: str) -> Optional[int]:
+        """
+        Count total records in CSV file efficiently using pandas
+        
+        Args:
+            file_path: Path to the CSV file
+            
+        Returns:
+            Total number of records if countable, None otherwise
+        """
+        try:
+            # Use pandas to count lines efficiently
+            return pd.read_csv(file_path).shape[0]
+        except Exception as e:
+            logger.debug(f"Unable to count CSV records using pandas: {str(e)}")
+            return None 

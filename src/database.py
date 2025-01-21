@@ -1,14 +1,17 @@
 from sqlalchemy import create_engine, MetaData, Table, Column, BigInteger, DateTime, text, Text, Integer, String, Float, Boolean, inspect
 from sqlalchemy.engine import Engine
 from sqlalchemy.dialects.mysql import insert, LONGBLOB, BLOB
+import logging
 from urllib.parse import quote
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 from .config import Config
-import logging
-logging.basicConfig()
-logging.getLogger('sqlalchemy.engine').setLevel(logging.WARNING)
+from .utils.logging import setup_logging
 
+# Configure unified logging with config
+config = Config()
+setup_logging(config)
+logger = logging.getLogger(__name__)
 
 class Database:
     def __init__(self, config: Config):
@@ -108,7 +111,7 @@ class Database:
         self.metadata.create_all(self.engine, tables=[table])
         return table
 
-    def insert_batch(self, table_name: str, records: List[Dict[str, Any]]) -> List[int]:
+    def insert_batch(self, table_name: str, records: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
         Insert or update batch of records based on data_id
         
@@ -117,49 +120,86 @@ class Database:
             records: List of records to insert/update
             
         Returns:
-            List of record IDs
+            Dictionary containing:
+            - success_ids: List of successfully processed record IDs
+            - failures: List of dictionaries containing failed records and their error messages
         """
         if not records:
-            return []
+            return {"success_ids": [], "failures": []}
 
         table = self.tables[table_name]
-        with self.engine.connect() as connection:
-            current_time = datetime.now()
-            processed_records = []
-            
-            for record in records:
-                processed_record = {
-                    **record,
-                    'updated_at': current_time,
+        result = {"success_ids": [], "failures": []}
+        
+        try:
+            with self.engine.connect() as connection:
+                current_time = datetime.now()
+                processed_records = []
+                
+                for record in records:
+                    processed_record = {
+                        **record,
+                        'updated_at': current_time,
+                    }
+                    
+                    if 'created_at' not in record:
+                        processed_record['created_at'] = current_time
+                        
+                    processed_records.append(processed_record)
+
+                # Create an "INSERT ... ON DUPLICATE KEY UPDATE" statement
+                insert_stmt = insert(table)
+                update_dict = {
+                    column.name: text(f"VALUES({column.name})")
+                    for column in table.columns
+                    if column.name not in ['id', 'created_at', 'data_id']
                 }
                 
-                # Only set created_at for new records
-                if 'created_at' not in record:
-                    processed_record['created_at'] = current_time
+                try:
+                    # Execute upsert
+                    connection.execute(
+                        insert_stmt.values(processed_records).on_duplicate_key_update(**update_dict)
+                    )
+                    connection.commit()
+
+                    # Get IDs for successfully processed records
+                    data_ids = [record['data_id'] for record in records]
+                    select_stmt = table.select().where(table.c.data_id.in_(data_ids))
+                    rows = connection.execute(select_stmt).fetchall()
+                    result["success_ids"] = [row.id for row in rows]
                     
-                processed_records.append(processed_record)
+                except Exception as e:
+                    # If batch insert fails, try one by one to identify problematic records
+                    connection.rollback()
+                    logger.warning(f"Batch insert failed, attempting individual inserts: {str(e)}")
+                    
+                    for record in processed_records:
+                        try:
+                            stmt = insert_stmt.values([record]).on_duplicate_key_update(**update_dict)
+                            connection.execute(stmt)
+                            connection.commit()
+                            
+                            # Get ID for the successful record
+                            select_stmt = table.select().where(table.c.data_id == record['data_id'])
+                            row = connection.execute(select_stmt).fetchone()
+                            if row:
+                                result["success_ids"].append(row.id)
+                                
+                        except Exception as individual_error:
+                            result["failures"].append({
+                                "record": record,
+                                "error": str(individual_error)
+                            })
+                            connection.rollback()
+                            logger.error(f"Failed to process record {record['data_id']}: {str(individual_error)}")
 
-            # Create an "INSERT ... ON DUPLICATE KEY UPDATE" statement
-            insert_stmt = insert(table)
-            
-            # Define which columns should be updated on duplicate
-            update_dict = {
-                column.name: text(f"VALUES({column.name})")
-                for column in table.columns
-                if column.name not in ['id', 'created_at', 'data_id']  # Don't update these fields
-            }
-            
-            # Execute upsert
-            result = connection.execute(
-                insert_stmt.values(processed_records).on_duplicate_key_update(**update_dict)
-            )
-            connection.commit()
+        except Exception as e:
+            logger.error(f"Database connection error in insert_batch: {str(e)}")
+            result["failures"].extend([{
+                "record": record,
+                "error": f"Database connection error: {str(e)}"
+            } for record in records])
 
-            # Get IDs for both inserted and updated records
-            data_ids = [record['data_id'] for record in records]
-            select_stmt = table.select().where(table.c.data_id.in_(data_ids))
-            rows = connection.execute(select_stmt).fetchall()
-            return [row.id for row in rows] 
+        return result["success_ids"], result["failures"]
 
     def get_table_schema(self, table_name: str) -> Dict[str, str]:
         """

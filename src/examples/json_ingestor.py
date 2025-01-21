@@ -9,15 +9,15 @@ from src.database import Database
 from src.api.client import APIClient
 from src.processors.base import BaseProcessor
 from src.config import Config
+from src.utils.logging import setup_logging
 import logging
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+# Initialize config and configure logging
+config = Config()
+setup_logging(config)
+logger = logging.getLogger(__name__)
 
 def main():
-    # Initialize config
-    config = Config()
-    
     # Initialize database connection
     database = Database(config)
     
@@ -61,23 +61,24 @@ def main():
         label_column="label",
         intent_column="data_intent",
         annotation_column="annotation"
+
     )
     
     try:
         # Ingest JSON file
         failed_records = ingestor.ingest(
             file_path="src/examples/data/users.json",
-            batch_size=50
+            batch_size=config.BATCH_SIZE
         )
         
         # Handle failed records if any
         if failed_records:
-            logging.warning(f"Failed to process {len(failed_records)} records")
+            logger.warning(f"Failed to process {len(failed_records)} records")
             for record in failed_records:
-                logging.warning(f"Failed record: {record}")
+                logger.warning(f"Failed record: {record}")
                 
     except Exception as e:
-        logging.error(f"Ingestion failed: {str(e)}")
+        logger.error(f"Ingestion failed: {str(e)}")
         raise
 
 if __name__ == "__main__":

@@ -1,8 +1,15 @@
 from typing import List, Tuple, Dict, Any
-import requests
+import requests, json
+import logging
 from requests.adapters import HTTPAdapter
 from requests.packages.urllib3.util.retry import Retry
 from ..config import Config
+from ..utils.logging import setup_logging
+
+# Configure unified logging with config
+config = Config()
+setup_logging(config)
+logger = logging.getLogger(__name__)
 
 class APIClient:
     def __init__(self, config: Config):
@@ -35,9 +42,10 @@ class APIClient:
                 timeout=10
             )
             response.raise_for_status()
+            logger.info(f"Authentication response: {response.json()}")
             return response.json().get("token")
         except requests.exceptions.RequestException as e:
-            print(f"Error during authentication: {str(e)}")
+            logger.error(f"Error during authentication: {str(e)}")
             raise
 
     def send_batch(self, records: List[Tuple[int, Dict[str, Any]]], table_name: str) -> bool:
@@ -52,31 +60,41 @@ class APIClient:
             bool: True if successful, False otherwise
         """
         try:
-            payload = [
+            payload = json.dumps([
                 {
-                    "id": record_id,
-                    "data": record_data
+                    "data_id": record_data.get("data_id"),
+                    "company": self.config.COMPANY,
+                    "data_intent": record_data.get("data_intent", "train"),
+                    "label": record_data.get("label", ""),
+                    "is_sample": False,
+                    "is_active": True,
+                    # "data": record_data
                 }
-                for record_id, record_data in records
-            ]
+                for _, record_data in records
+            ])
 
-            print(f"Sending token: {self.token}")
+            logger.info(f"Data to send: {payload}")
             
-            headers = {"Authorization": f"TOKEN {self.token}"}
+            headers = {
+                "Authorization": f"TOKEN {self.token}",
+                "Content-Type": "application/json"
+            }
             
             response = self.session.post(
                 f"{self.config.API_ENDPOINT}/global_meta/{table_name}/",
-                json=payload,
+                data=payload,
                 headers=headers,
                 timeout=30
             )
             
             response.raise_for_status()
+            logger.info(f"Successfully sent batch. Response: {response.json()}")
             return True
             
         except requests.exceptions.RequestException as e:
-            # In a production environment, we might use the azure SB to send the error message
-            print(f"Error sending batch to API: {str(e)}")
+            logger.error(f"Error sending batch to API: {str(e)}")
+            if hasattr(e.response, 'text'):
+                logger.error(f"Error response: {e.response.text}")
             return False
 
     def __del__(self):

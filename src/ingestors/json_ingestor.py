@@ -140,6 +140,28 @@ class JSONIngestor(BaseIngestor):
             logger.error(f"Unexpected error reading JSON: {str(e)}")
             raise
 
+    def _count_records(self, file_path: str) -> Optional[int]:
+        """
+        Count total records in JSON file efficiently
+        
+        Args:
+            file_path: Path to the JSON file
+            
+        Returns:
+            Total number of records if countable, None otherwise
+        """
+        try:
+            with open(file_path, 'r') as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    return 1
+                elif isinstance(data, list):
+                    return len(data)
+            return None
+        except Exception as e:
+            logger.debug(f"Unable to count JSON records: {str(e)}")
+            return None
+
     def ingest(self, file_path: str, batch_size: int = 50) -> List[Dict[str, Any]]:
         """
         Ingest JSON file with progress tracking

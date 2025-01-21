@@ -1,6 +1,7 @@
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 import os
 from dataclasses import dataclass
+import logging
 
 @dataclass
 class Config:
@@ -10,7 +11,7 @@ class Config:
     DB_PASSWORD: str = os.getenv("MYSQL_PASSWORD", "")
     DB_NAME: str = os.getenv("MYSQL_DATABASE", "ingestor_db")
     
-    BATCH_SIZE: int = int(os.getenv("BATCH_SIZE", "50"))
+    BATCH_SIZE: int = int(os.getenv("BATCH_SIZE", "10"))
     
     # Define API endpoints for different environments
     API_ENDPOINTS = {
@@ -32,3 +33,8 @@ class Config:
     LABEL_FILE: str = os.getenv("LABEL_FILE", "src/examples/data/sample.csv")
     COMPANY: str = os.getenv("COMPANY", "TB_INGESTOR")
     TABLE_NAME: str = os.getenv("TABLE_NAME", "tb_dataset")
+    
+    # Logging configuration
+    LOG_LEVEL: int = int(os.getenv("LOG_LEVEL", str(logging.WARNING)))
+    LOG_FORMAT: Optional[str] = os.getenv("LOG_FORMAT", None)
+    LOG_DATE_FORMAT: Optional[str] = os.getenv("LOG_DATE_FORMAT", None)

@@ -1,5 +1,6 @@
 import sys
 import os
+import logging
 from typing import Dict, Any
 
 # Add the src directory to the PYTHONPATH
@@ -10,9 +11,14 @@ from src.database import Database
 from src.api.client import APIClient
 from src.ingestors.csv_ingestor import CSVIngestor
 from src.processors.base import BaseProcessor
+from src.utils.logging import setup_logging
+
+# Initialize config and configure logging
+config = Config()
+setup_logging(config)
+logger = logging.getLogger(__name__)
 
 # Initialize components
-config = Config()
 database = Database(config)
 api_client = APIClient(config)
 
