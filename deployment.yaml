@@ -14,7 +14,7 @@ spec:
     spec:
       containers:
       - name: api
-        image: tracebloc/csv-ingestor:latest
+        image: company/your_image_name:latest
         imagePullPolicy: Always
         volumeMounts:
           - name: shared-volume
@@ -23,7 +23,7 @@ spec:
         - name: EDGE_ENV
           value: "prod"
         - name: EDGE_USERNAME
-          value: ""
+          value: "edgeuser"
         - name: EDGE_PASSWORD
           value: ""
         - name: EDGE_PVC
@@ -39,17 +39,15 @@ spec:
         - name: MYSQL_PORT
           value: "3306"
         - name: SRC_PATH
-          value: "/data/shared/welds_inspections"
+          value: "/data/shared/"
         - name: DEST_PATH
-          value: "/data/shared/welds_inspections/txt/"
+          value: "/data/shared/"
         - name: LABEL_FILE
-          value: "/data/shared/welds_inspections/data.csv"
+          value: "/data/shared/sample.csv"
         - name: COMPANY
           value: "ABC_MC"
         - name: TABLE_NAME
           value: "table_name"
-        - name: TEXT_INTENT
-          value: "train"
       imagePullSecrets:
       - name: regcred
       volumes:
