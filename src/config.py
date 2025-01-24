@@ -24,8 +24,8 @@ class Config:
     EDGE_ENV: str = os.getenv("EDGE_ENV", "dev")
     API_ENDPOINT: str = API_ENDPOINTS.get(EDGE_ENV, API_ENDPOINTS["dev"])
     
-    CLIENT_USERNAME: str = os.getenv("EDGE_USERNAME", "testedge")
-    CLIENT_PASSWORD: str = os.getenv("EDGE_PASSWORD", "&6edg*D9e")
+    CLIENT_USERNAME: str = os.getenv("EDGE_USERNAME", "")
+    CLIENT_PASSWORD: str = os.getenv("EDGE_PASSWORD", "")
     
     STORAGE_PATH: str = os.getenv("STORAGE_PATH", "/data/shared")
     SRC_PATH: str = os.getenv("SRC_PATH", "/data/shared")
