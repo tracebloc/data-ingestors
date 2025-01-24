@@ -5,6 +5,8 @@ FROM --platform=linux/amd64 python:3.9
 # Set working directory
 WORKDIR /app
 
+RUN apt-get update && apt-get install -y netcat-traditional
+
 # Copy the source code and requirements
 COPY src/requirements.txt requirements.txt
 COPY src/ src/
