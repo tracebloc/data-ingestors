@@ -64,9 +64,9 @@ ingestor = CSVIngestor(
     csv_options=csv_options,
     processors=[upper_case_processor],
     unique_id_column="id",  # Specify which column to use as unique ID
-    label_column="label",
+    label_column="name",
     intent_column="data_intent",
-    annotation_column="annotation"
+    annotation_column="notes"
 )
 
 # Ingest data

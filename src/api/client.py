@@ -151,15 +151,14 @@ class APIClient:
         try:
             url = f"{self.config.API_ENDPOINT}/global_meta/generate-edge-labels-meta/?dataset_type={dataset_type}"
             headers = {
-                "Authorization": f"TOKEN {self.token}",
-                "Content-Type": "application/json"
+                "Authorization": f"TOKEN {self.token}"
             }
             
             logger.info(f"Sending request to generate edge label metadata for dataset type: {dataset_type}")
             response = self.session.get(url, headers=headers, timeout=30)
             
             response.raise_for_status()
-            logger.info(f"Successfully generated edge label metadata. Response: {response.json()}")
+            logger.info(f"Successfully generated edge label metadata. Response")
             return True
             
         except requests.exceptions.RequestException as e:

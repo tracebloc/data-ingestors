@@ -32,7 +32,7 @@ class Config:
     DEST_PATH: str = os.getenv("DEST_PATH", "/data/shared/txt/")
     LABEL_FILE: str = os.getenv("LABEL_FILE", "src/examples/data/sample.csv")
     COMPANY: str = os.getenv("COMPANY", "TB_INGESTOR")
-    TABLE_NAME: str = os.getenv("TABLE_NAME", "tb_dataset")
+    TABLE_NAME: str = os.getenv("TABLE_NAME", "two_dataset")
     
     # Logging configuration
     LOG_LEVEL: int = int(os.getenv("LOG_LEVEL", str(logging.WARNING)))
