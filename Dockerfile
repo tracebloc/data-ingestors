@@ -10,8 +10,7 @@ COPY src/requirements.txt requirements.txt
 COPY src/ src/
 
 # Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
-
+RUN --mount=type=cache,target=/root/.cache/pip pip install -r requirements.txt
 # Create necessary directories
 RUN mkdir -p storage/text_files storage/images
 
