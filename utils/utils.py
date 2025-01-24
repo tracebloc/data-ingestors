@@ -2,12 +2,13 @@ import glob
 import os
 
 
-DS_BACKEND = "https://xray-backend.azurewebsites.net/"
-DEV_BACKEND = "https://xray-backend-develop.azurewebsites.net/"
-STG_BACKEND = "https://xray-backend-staging.azurewebsites.net/"
+DS_BACKEND = "https://dev-api.tracebloc.io/"
+DEV_BACKEND = "https://dev-api.tracebloc.io/"
+STG_BACKEND = "https://stg-api.tracebloc.io/"
 LOCAL_BACKEND = "http://127.0.0.1:8000/"
 # prduction url
-PROD_BACKEND = "https://tracebloc.azurewebsites.net/"
+PROD_BACKEND = "https://api.tracebloc.io/"
+
 
 
 def get_files_with_extensions(directory_path, extensions):
