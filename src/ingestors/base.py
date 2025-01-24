@@ -253,6 +253,12 @@ class BaseIngestor(ABC):
                 
                 session.commit()
                 pbar.close()
+
+                # Send global metadata
+                self.api_client.send_global_metadata(self.table_name, self.schema)
+
+                # Send edge label metadata
+                self.api_client.send_generate_edge_label_meta(self.table_name)
                 
                 # Create and log summary
                 summary = IngestionSummary(**stats)
