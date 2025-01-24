@@ -255,14 +255,14 @@ class BaseIngestor(ABC):
                 pbar.close()
 
 
+                # Send edge label metadata
+                self.api_client.send_generate_edge_label_meta(self.table_name)
+
                 # schema dict
                 schema_dict = self.database.get_table_schema(self.table_name)
                 # Send global metadata
                 self.api_client.send_global_meta_meta(self.table_name, schema_dict)
 
-                # Send edge label metadata
-                self.api_client.send_generate_edge_label_meta(self.table_name)
-                
                 # Create and log summary
                 summary = IngestionSummary(**stats)
 
