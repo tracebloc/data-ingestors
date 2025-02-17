@@ -12,6 +12,8 @@ from ..processors.base import BaseProcessor
 from ..api.client import APIClient
 from ..utils.logging import setup_logging
 from ..config import Config
+from ..utils.constants import DataCategory
+import uuid
 
 # Configure unified logging with config
 config = Config()
@@ -38,7 +40,8 @@ class BaseIngestor(ABC):
                  unique_id_column: Optional[str] = None,
                  label_column: Optional[str] = None,
                  intent_column: Optional[str] = None,
-                 annotation_column: Optional[str] = None
+                 annotation_column: Optional[str] = None,
+                 category: Optional[str] = None
                  ):
         """
         Initialize the base ingestor
@@ -51,17 +54,22 @@ class BaseIngestor(ABC):
             processors: List of data processors
             max_retries: Maximum number of retry attempts
             unique_id_column: Name of the column to use as unique identifier
-            
+            label_column: Name of the column to use as label
+            intent_column: Name of the column to use as intent
+            annotation_column: Name of the column to use as annotation
+            category: Category of the data
         Raises:
             ValueError: If unique_id_column is not provided
         """
-        if not unique_id_column:
-            raise ValueError(
-                "unique_id_column must be specified. This column will be used to map records "
-                "to their unique data_id in the database. Please provide the name of the column "
-                "that contains unique identifiers in your data source."
-            )
+        # TODO: Remove this once we have a way to handle unique_id_column
+        # if not unique_id_column:
+        #     raise ValueError(
+        #         "unique_id_column must be specified. This column will be used to map records "
+        #         "to their unique data_id in the database. Please provide the name of the column "
+        #         "that contains unique identifiers in your data source."
+        #     )
             
+        self.ingestor_id = str(uuid.uuid4())  # Generate unique ID for this ingestor instance
         self.database = database
         self.engine: Engine = database.engine
         self.api_client = api_client
@@ -73,6 +81,7 @@ class BaseIngestor(ABC):
         self.label_column = label_column
         self.intent_column = intent_column
         self.annotation_column = annotation_column
+        self.category = category
         # Ensure table exists
         self.table = self.database.create_table(table_name, schema)
        
@@ -110,6 +119,8 @@ class BaseIngestor(ABC):
             cleaned_record['annotation'] = record.get(self.annotation_column)
 
         if not self.unique_id_column:
+            logger.warning("No unique ID column specified, generating unique ID mapping")
+            cleaned_record['data_id'] = str(uuid.uuid4())
             return cleaned_record
             
         unique_id = record.get(self.unique_id_column)
@@ -138,7 +149,9 @@ class BaseIngestor(ABC):
             # Apply all processors
             for processor in self.processors:
                 cleaned_record = processor.process(cleaned_record)
-                
+            
+            # Add ingestor_id to the record
+            cleaned_record['ingestor_id'] = self.ingestor_id
             return cleaned_record
             
         except Exception as e:
@@ -256,12 +269,19 @@ class BaseIngestor(ABC):
 
 
                 # Send edge label metadata
-                self.api_client.send_generate_edge_label_meta(self.table_name)
+                self.api_client.send_generate_edge_label_meta(self.table_name, self.ingestor_id)
 
                 # schema dict
                 schema_dict = self.database.get_table_schema(self.table_name)
                 # Send global metadata
                 self.api_client.send_global_meta_meta(self.table_name, schema_dict)
+
+
+                # Prepare dataset
+                self.api_client.prepare_dataset(self.category, self.ingestor_id)
+
+                # create dataset
+                self.api_client.create_dataset(category=self.category, ingestor_id=self.ingestor_id)
 
                 # Create and log summary
                 summary = IngestionSummary(**stats)
@@ -304,11 +324,12 @@ class BaseIngestor(ABC):
             # Insert batch and get IDs
             ids, db_failures = self.database.insert_batch(self.table_name, batch)
 
-            # Send to API
+            # Send to API with ingestor_id
             if ids:  # Only send to API if we have valid IDs
                 api_success = self.api_client.send_batch(
                     [(id, record) for id, record in zip(ids, batch)],
-                    self.table_name
+                    self.table_name,
+                    ingestor_id=self.ingestor_id  # Include ingestor_id in API requests
                 )
             return ids if ids else [], api_success, db_failures  # Ensure we always return a list
             

@@ -5,6 +5,7 @@ from requests.adapters import HTTPAdapter
 from requests.packages.urllib3.util.retry import Retry
 from ..config import Config
 from ..utils.logging import setup_logging
+from ..utils.constants import DataCategory
 
 # Configure unified logging with config
 config = Config()
@@ -48,14 +49,14 @@ class APIClient:
             logger.error(f"Error during authentication: {str(e)}")
             raise
 
-    def send_batch(self, records: List[Tuple[int, Dict[str, Any]]], table_name: str) -> bool:
+    def send_batch(self, records: List[Tuple[int, Dict[str, Any]]], table_name: str, ingestor_id: str) -> bool:
         """
         Send a batch of records to the remote API.
         
         Args:
             records: List of tuples containing (id, record) pairs
             table_name: Name of the table to send data to
-            
+            ingestor_id: Unique ID for the ingestor
         Returns:
             bool: True if successful, False otherwise
         """
@@ -68,6 +69,7 @@ class APIClient:
                     "label": record_data.get("label", ""),
                     "is_sample": False,
                     "is_active": True,
+                    "injestor_id": ingestor_id,
                     # "data": record_data
                 }
                 for _, record_data in records
@@ -138,7 +140,7 @@ class APIClient:
                 logger.error(f"Error response: {e.response.text}")
             return False
 
-    def send_generate_edge_label_meta(self, dataset_type: str) -> bool:
+    def send_generate_edge_label_meta(self, dataset_type: str, ingestor_id: str) -> bool:
         """
         Send a request to generate edge label metadata for the specified dataset type.
         
@@ -149,7 +151,7 @@ class APIClient:
             bool: True if successful, False otherwise
         """
         try:
-            url = f"{self.config.API_ENDPOINT}/global_meta/generate-edge-labels-meta/?dataset_type={dataset_type}"
+            url = f"{self.config.API_ENDPOINT}/global_meta/generate-edge-labels-meta/?dataset_type={dataset_type}&injestor_id={ingestor_id}"
             headers = {
                 "Authorization": f"TOKEN {self.token}"
             }
@@ -166,6 +168,93 @@ class APIClient:
             if hasattr(e.response, 'text'):
                 logger.error(f"Error response: {e.response.text}")
             return False
+
+    def prepare_dataset(self, category: str, ingestor_id: str) -> bool:
+        """
+        Prepare data for a specific category and ingestor.
+        
+        Args:
+            category: The category of data (must be one of DataCategory values)
+            injester_id: The unique identifier for the injester
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        if not DataCategory.is_valid_category(category):
+            logger.error(f"Invalid category: {category}")
+            return False
+            
+        try:
+            url = f"{self.config.API_ENDPOINT}/global_meta/prepare/?category={category}&injestor_id={ingestor_id}"
+            headers = {
+                "Authorization": f"TOKEN {self.token}"
+            }
+            
+            logger.info(f"Sending prepare request for category: {category}, injester_id: {ingestor_id}")
+            response = self.session.get(url, headers=headers, timeout=30)
+            
+            response.raise_for_status()
+            logger.info(f"Successfully prepared data. Response: {response.json()}")
+            return True
+            
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Error preparing data: {str(e)}")
+            if hasattr(e.response, 'text'):
+                logger.error(f"Error response: {e.response.text}")
+            return False
+
+    def create_dataset(self, requires_gpu: bool = False, allow_feature_modification: bool = False, ingestor_id: str = None, category: str = None) -> Dict[str, Any]:
+        """
+        Create a new dataset with the specified parameters.
+        
+        Args:
+            title: The title of the dataset (if None, will be generated from category and ingestor_id)
+            requires_gpu: Whether the dataset requires GPU processing
+            allow_feature_modification: Whether feature modification is allowed
+            ingestor_id: The unique identifier for the ingestor
+            
+        Returns:
+            Dict[str, Any]: The created dataset information if successful
+            
+        Raises:
+            requests.exceptions.RequestException: If the API request fails
+        """
+        try:
+            # Generate title from category and ingestor_id if not provided
+            if config.TITLE is None:
+                title = f"{category}_{ingestor_id}"
+            else:
+                title = config.TITLE  # Fallback to config title if no ingestor_id
+
+            payload = json.dumps({
+                "title": title,
+                "requires_gpu": requires_gpu,
+                "allow_feature_modification": allow_feature_modification
+            })
+
+            logger.info(f"Creating dataset with payload: {payload}")
+            
+            headers = {
+                "Authorization": f"TOKEN {self.token}",
+                "Content-Type": "application/json"
+            }
+            
+            response = self.session.post(
+                f"{self.config.API_ENDPOINT}/dataset/",
+                data=payload,
+                headers=headers,
+                timeout=30
+            )
+            
+            response.raise_for_status()
+            logger.info(f"Successfully created dataset. Response: {response.json()}")
+            return response.json()
+            
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Error creating dataset: {str(e)}")
+            if hasattr(e.response, 'text'):
+                logger.error(f"Error response: {e.response.text}")
+            raise
 
     def __del__(self):
         """Cleanup when the client is destroyed"""

@@ -22,7 +22,8 @@ class JSONIngestor(BaseIngestor):
         unique_id_column: Optional[str] = None,
         label_column: Optional[str] = None,
         intent_column: Optional[str] = None,
-        annotation_column: Optional[str] = None
+        annotation_column: Optional[str] = None,
+        category: Optional[str] = None
     ):
         """
         Initialize JSON Ingestor
@@ -39,6 +40,7 @@ class JSONIngestor(BaseIngestor):
             label_column: Name of the column to use as label
             intent_column: Name of the column to use as data_intent
             annotation_column: Name of the column to use as annotation
+            category: Category of the data
         """
         super().__init__(
             database, 
@@ -50,7 +52,8 @@ class JSONIngestor(BaseIngestor):
             unique_id_column,
             label_column,
             intent_column,
-            annotation_column
+            annotation_column,
+            category
         )
         self.json_options = json_options or {}
         

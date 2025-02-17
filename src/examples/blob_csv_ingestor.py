@@ -15,6 +15,7 @@ from src.api.client import APIClient
 from src.ingestors.csv_ingestor import CSVIngestor
 from src.processors.base import BaseProcessor
 from src.utils.logging import setup_logging
+from src.utils.constants import DataCategory
 
 # Initialize config and configure logging
 config = Config()
@@ -126,6 +127,7 @@ ingestor = CSVIngestor(
     api_client=api_client,
     table_name="documents",
     schema=schema,
+    category=DataCategory.GENERIC_CLASSIFICATION,
     csv_options=csv_options,
     processors=[blob_processor]
 )
