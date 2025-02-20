@@ -5,7 +5,7 @@ from requests.adapters import HTTPAdapter
 from requests.packages.urllib3.util.retry import Retry
 from ..config import Config
 from ..utils.logging import setup_logging
-from ..utils.constants import DataCategory
+from ..utils.constants import DataCategory, API_TIMEOUT
 
 # Configure unified logging with config
 config = Config()
@@ -40,7 +40,7 @@ class APIClient:
             response = self.session.post(
                 f"{self.config.API_ENDPOINT}/api-token-auth/",
                 json={"username": self.config.CLIENT_USERNAME, "password": self.config.CLIENT_PASSWORD},
-                timeout=10
+                timeout=API_TIMEOUT
             )
             response.raise_for_status()
             logger.info(f"Authentication response: {response.json()}")
@@ -86,7 +86,7 @@ class APIClient:
                 f"{self.config.API_ENDPOINT}/global_meta/{table_name}/",
                 data=payload,
                 headers=headers,
-                timeout=30
+                timeout=API_TIMEOUT
             )
             
             response.raise_for_status()
@@ -127,7 +127,7 @@ class APIClient:
                 f"{self.config.API_ENDPOINT}/global_metadata/",
                 data=payload,
                 headers=headers,
-                timeout=30
+                timeout=API_TIMEOUT
             )
             
             response.raise_for_status()
@@ -157,7 +157,7 @@ class APIClient:
             }
             
             logger.info(f"Sending request to generate edge label metadata for dataset type: {dataset_type}")
-            response = self.session.get(url, headers=headers, timeout=30)
+            response = self.session.get(url, headers=headers, timeout=API_TIMEOUT)
             
             response.raise_for_status()
             logger.info(f"Successfully generated edge label metadata. Response")
@@ -191,7 +191,7 @@ class APIClient:
             }
             
             logger.info(f"Sending prepare request for category: {category}, injester_id: {ingestor_id}")
-            response = self.session.get(url, headers=headers, timeout=30)
+            response = self.session.get(url, headers=headers, timeout=API_TIMEOUT)
             
             response.raise_for_status()
             logger.info(f"Successfully prepared data. Response: {response.json()}")
@@ -243,7 +243,7 @@ class APIClient:
                 f"{self.config.API_ENDPOINT}/dataset/",
                 data=payload,
                 headers=headers,
-                timeout=30
+                timeout=API_TIMEOUT
             )
             
             response.raise_for_status()

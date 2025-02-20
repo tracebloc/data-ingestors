@@ -2,6 +2,9 @@
 Constants used throughout the application.
 """
 
+# API Constants
+API_TIMEOUT = 1500
+
 # Data Categories
 class DataCategory:
     """
