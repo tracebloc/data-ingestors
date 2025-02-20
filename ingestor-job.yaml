@@ -1,16 +1,9 @@
-apiVersion: apps/v1
-kind: Deployment
+apiVersion: batch/v1
+kind: Job
 metadata:
-  name: ingestor-deployment
+  name: ingestor-job
 spec:
-  selector:
-    matchLabels:
-      app: edge
-  replicas: 1
   template:
-    metadata:
-      labels:
-        app: edge
     spec:
       containers:
       - name: api
@@ -54,4 +47,4 @@ spec:
         - name: shared-volume
           persistentVolumeClaim:
             claimName: shared-pvc
-      restartPolicy: Always
+      restartPolicy: Never
