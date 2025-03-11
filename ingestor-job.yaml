@@ -41,6 +41,8 @@ spec:
           value: "ABC_MC"
         - name: TABLE_NAME
           value: "table_name"
+        - name: TITLE
+          value: "dataset title" # Optional: provide a title for the dataset
       imagePullSecrets:
       - name: regcred
       volumes:
