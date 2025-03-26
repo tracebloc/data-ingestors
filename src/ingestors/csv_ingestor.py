@@ -21,7 +21,7 @@ class CSVIngestor(BaseIngestor):
         csv_options: Optional[Dict[str, Any]] = None,
         unique_id_column: Optional[str] = None,
         label_column: Optional[str] = None,
-        intent_column: Optional[str] = None,
+        intent: Optional[str] = None,
         annotation_column: Optional[str] = None,
         category: Optional[str] = None
     ):
@@ -38,7 +38,7 @@ class CSVIngestor(BaseIngestor):
             csv_options: Additional options for pandas read_csv
             unique_id_column: Name of the column to use as unique identifier
             label_column: Name of the column to use as label
-            intent_column: Name of the column to use as intent
+            intent: Is the data for training or testing
             annotation_column: Name of the column to use as annotation
             category: Category of the data
         """
@@ -51,7 +51,7 @@ class CSVIngestor(BaseIngestor):
             max_retries,
             unique_id_column,
             label_column,
-            intent_column,
+            intent,
             annotation_column,
             category
         )

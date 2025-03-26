@@ -5,6 +5,15 @@ Constants used throughout the application.
 # API Constants
 API_TIMEOUT = 1500
 
+# Intent Constants
+class Intent:
+    """
+    Enumeration of supported intents for model training and classification.
+    """
+    TEST = "test"
+    TRAIN = "train"
+    
+
 # Data Categories
 class DataCategory:
     """
@@ -14,7 +23,7 @@ class DataCategory:
     OBJECT_DETECTION = "object_detection"
     KEYPOINT_DETECTION = "keypoint_detection"
     TEXT_CLASSIFICATION = "text_classification"
-    GENERIC_CLASSIFICATION = "generic_classification"
+    TABULAR_CLASSIFICATION = "generic_classification"
 
     @classmethod
     def get_all_categories(cls) -> list[str]:
@@ -29,7 +38,7 @@ class DataCategory:
             cls.OBJECT_DETECTION,
             cls.KEYPOINT_DETECTION,
             cls.TEXT_CLASSIFICATION,
-            cls.GENERIC_CLASSIFICATION
+            cls.TABULAR_CLASSIFICATION
         ]
 
     @classmethod

@@ -12,7 +12,7 @@ from src.api.client import APIClient
 from src.ingestors.csv_ingestor import CSVIngestor
 from src.processors.base import BaseProcessor
 from src.utils.logging import setup_logging
-from src.utils.constants import DataCategory
+from src.utils.constants import DataCategory, Intent
 
 # Initialize config and configure logging
 config = Config()
@@ -62,11 +62,11 @@ ingestor = CSVIngestor(
     api_client=api_client,
     table_name=config.TABLE_NAME,
     schema=schema,
-    category=DataCategory.GENERIC_CLASSIFICATION,
+    category=DataCategory.TABULAR_CLASSIFICATION,
     csv_options=csv_options,
     processors=[upper_case_processor],
     label_column="name",
-    intent_column="data_intent",
+    intent=Intent.TRAIN, # Is the data for training or testing
     annotation_column="notes"
 )
 

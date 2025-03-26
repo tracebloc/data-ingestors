@@ -99,12 +99,12 @@ class APIClient:
                 logger.error(f"Error response: {e.response.text}")
             return False
 
-    def send_global_meta_meta(self, dataset_type: str, schema: Dict[str, str]) -> bool:
+    def send_global_meta_meta(self, table_name: str, schema: Dict[str, str]) -> bool:
         """
         Sends global metadata, including the schema, to the remote server.
         
         Args:
-            dataset_type: The type of the dataset
+            table_name: The type of the dataset
             schema: A dictionary representing the schema
             
         Returns:
@@ -112,17 +112,20 @@ class APIClient:
         """
         try:
             payload = json.dumps({
-                "dataset_type": dataset_type,
+                "table_name": table_name,
                 "schema": schema
             })
 
-            logger.info(f"Global metadata to send: {json.dumps(payload)}")
+            logger.info(f"Global metadata to send: {(payload)}")
+            
             
             headers = {
                 "Authorization": f"TOKEN {self.token}",
                 "Content-Type": "application/json"
             }
-            
+
+            logger.info(f"Sending global metadata to API: {headers}")
+            return True
             response = self.session.post(
                 f"{self.config.API_ENDPOINT}/global_metadata/",
                 data=payload,
@@ -140,23 +143,23 @@ class APIClient:
                 logger.error(f"Error response: {e.response.text}")
             return False
 
-    def send_generate_edge_label_meta(self, dataset_type: str, ingestor_id: str) -> bool:
+    def send_generate_edge_label_meta(self, table_name: str, ingestor_id: str) -> bool:
         """
         Send a request to generate edge label metadata for the specified dataset type.
         
         Args:
-            dataset_type: The type of the dataset
+            table_name: The type of the dataset
             
         Returns:
             bool: True if successful, False otherwise
         """
         try:
-            url = f"{self.config.API_ENDPOINT}/global_meta/generate-edge-labels-meta/?dataset_type={dataset_type}&injestor_id={ingestor_id}"
+            url = f"{self.config.API_ENDPOINT}/global_meta/generate-edge-labels-meta/?table_name={table_name}&injestor_id={ingestor_id}"
             headers = {
                 "Authorization": f"TOKEN {self.token}"
             }
             
-            logger.info(f"Sending request to generate edge label metadata for dataset type: {dataset_type}")
+            logger.info(f"Sending request to generate edge label metadata for dataset type: {table_name}")
             response = self.session.get(url, headers=headers, timeout=API_TIMEOUT)
             
             response.raise_for_status()
@@ -226,6 +229,11 @@ class APIClient:
             else:
                 title = config.TITLE  # Fallback to config title if no ingestor_id
 
+            if category == DataCategory.TABULAR_CLASSIFICATION:
+                allow_feature_modification = True
+            else:
+                allow_feature_modification = False
+            
             payload = json.dumps({
                 "title": title,
                 "requires_gpu": requires_gpu,

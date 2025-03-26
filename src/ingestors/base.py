@@ -39,7 +39,7 @@ class BaseIngestor(ABC):
                  max_retries: int = 3,
                  unique_id_column: Optional[str] = None,
                  label_column: Optional[str] = None,
-                 intent_column: Optional[str] = None,
+                 intent: Optional[str] = None,
                  annotation_column: Optional[str] = None,
                  category: Optional[str] = None
                  ):
@@ -55,7 +55,7 @@ class BaseIngestor(ABC):
             max_retries: Maximum number of retry attempts
             unique_id_column: Name of the column to use as unique identifier
             label_column: Name of the column to use as label
-            intent_column: Name of the column to use as intent
+            intent: Is the data for training or testing
             annotation_column: Name of the column to use as annotation
             category: Category of the data
         Raises:
@@ -79,7 +79,7 @@ class BaseIngestor(ABC):
         self.max_retries = max_retries
         self.unique_id_column = unique_id_column
         self.label_column = label_column
-        self.intent_column = intent_column
+        self.intent = intent
         self.annotation_column = annotation_column
         self.category = category
         # Ensure table exists
@@ -99,7 +99,7 @@ class BaseIngestor(ABC):
         """
 
         # Validate label_column exists if specified
-        columns_to_validate = [(self.label_column, "label_column"), (self.intent_column, "intent_column"), (self.annotation_column, "annotation_column")]
+        columns_to_validate = [(self.label_column, "label_column"), (self.intent, "intent_column"), (self.annotation_column, "annotation_column")]
         columns_not_found = False
         for column, column_name in columns_to_validate:
             if column and column not in record:
@@ -112,8 +112,8 @@ class BaseIngestor(ABC):
         if self.label_column:
             cleaned_record['label'] = record.get(self.label_column)
 
-        if self.intent_column:
-            cleaned_record['data_intent'] = record.get(self.intent_column)
+        if self.intent:
+            cleaned_record['data_intent'] = self.intent
 
         if self.annotation_column:
             cleaned_record['annotation'] = record.get(self.annotation_column)
@@ -278,10 +278,10 @@ class BaseIngestor(ABC):
 
 
                 # Prepare dataset
-                self.api_client.prepare_dataset(self.category, self.ingestor_id)
+                # self.api_client.prepare_dataset(self.category, self.ingestor_id)
 
                 # create dataset
-                self.api_client.create_dataset(category=self.category, ingestor_id=self.ingestor_id)
+                # self.api_client.create_dataset(category=self.category, ingestor_id=self.ingestor_id)
 
                 # Create and log summary
                 summary = IngestionSummary(**stats)

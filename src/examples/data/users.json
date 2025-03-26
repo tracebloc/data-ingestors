@@ -5,7 +5,6 @@
         "age": 30,
         "active": true,
         "unique_id": 1,
-        "data_intent": "train",
         "annotation": "annotation_1",
         "label": "label_1"
     },
@@ -15,7 +14,6 @@
         "age": 30,
         "active": true,
         "unique_id": 7,
-        "data_intent": "train",
         "annotation": "annotation_2",
         "label": "label_2"
     },
@@ -25,7 +23,6 @@
         "age": 30,
         "active": true,
         "unique_id": 6,
-        "data_intent": "train",
         "annotation": "annotation_2",
         "label": "label_2"
     },
@@ -35,7 +32,6 @@
         "age": 25,
         "active": true,
         "unique_id": 2,
-        "data_intent": "train",
         "annotation": "annotation_3",
         "label": "label_3"
     },
@@ -45,7 +41,6 @@
         "age": 45,
         "active": false,
         "unique_id": 3,
-        "data_intent": "train",
         "annotation": "annotation_4",
         "label": "label_4"
     },
@@ -55,7 +50,6 @@
         "age": 28,
         "active": true,
         "unique_id": 4,
-        "data_intent": "test",
         "annotation": "annotation_5",
         "label": "label_5"
     },
@@ -65,7 +59,6 @@
         "age": 35,
         "active": true,
         "unique_id": 5,
-        "data_intent": "test",
         "annotation": "annotation_6",
         "label": "label_6"
     },
@@ -75,7 +68,6 @@
         "age": 31,
         "active": true,
         "unique_id": 8,
-        "data_intent": "train",
         "annotation": "annotation_7",
         "label": "label_7"
     },
@@ -85,7 +77,6 @@
         "age": 29,
         "active": true,
         "unique_id": 9,
-        "data_intent": "train",
         "annotation": "annotation_8",
         "label": "label_8"
     },
@@ -95,7 +86,6 @@
         "age": 33,
         "active": false,
         "unique_id": 10,
-        "data_intent": "test",
         "annotation": "annotation_9",
         "label": "label_9"
     },
@@ -105,7 +95,6 @@
         "age": 42,
         "active": true,
         "unique_id": 105,
-        "data_intent": "train",
         "annotation": "annotation_105",
         "label": "label_105"
     },
@@ -115,7 +104,6 @@
         "age": 27,
         "active": true,
         "unique_id": 106,
-        "data_intent": "test",
         "annotation": "annotation_106",
         "label": "label_106"
     },
@@ -125,7 +113,6 @@
         "age": 39,
         "active": false,
         "unique_id": 107,
-        "data_intent": "train",
         "annotation": "annotation_107",
         "label": "label_107"
     },
@@ -135,7 +122,6 @@
         "age": 39,
         "active": false,
         "unique_id": 108,
-        "data_intent": "train",
         "annotation": "annotation_108",
         "label": "label_108"
     },
@@ -145,7 +131,6 @@
         "age": 39,
         "active": false,
         "unique_id": 109,
-        "data_intent": "train",
         "annotation": "annotation_109",
         "label": "label_109"
     },
@@ -155,7 +140,6 @@
         "age": 39,
         "active": false,
         "unique_id": 110,
-        "data_intent": "train",
         "annotation": "annotation_110",
         "label": "label_110"
     },
@@ -165,7 +149,6 @@
         "age": 39,
         "active": false,
         "unique_id": 111,
-        "data_intent": "train",
         "annotation": "annotation_111",
         "label": "label_111"
     }

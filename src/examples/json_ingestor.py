@@ -11,7 +11,7 @@ from src.processors.base import BaseProcessor
 from src.config import Config
 from src.utils.logging import setup_logging
 import logging
-from src.utils.constants import DataCategory
+from src.utils.constants import DataCategory, Intent
 
 # Initialize config and configure logging
 config = Config()
@@ -54,14 +54,14 @@ def main():
         api_client=api_client,
         table_name="users",
         schema=schema,
-        category=DataCategory.GENERIC_CLASSIFICATION,
+        category=DataCategory.TABULAR_CLASSIFICATION,
         processors=[DataNormalizer()],
         json_options={
             "encoding": "utf-8"
         },
         unique_id_column="unique_id",
         label_column="label",
-        intent_column="data_intent",
+        intent=Intent.TRAIN, # Is the data for training or testing
         annotation_column="annotation"
 
     )
