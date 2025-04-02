@@ -35,12 +35,21 @@ schema = {
     "notes": "TEXT"
 }
 
-# Image specific options
+# Image specific options including CSV options
 image_options = {
+    # Image processing options
     "target_size": (224, 224),  # Resize images to this dimension
     "normalize": True,          # Normalize pixel values
     "formats": ["jpg", "jpeg", "png"],  # Supported image formats
     "recursive": True,          # Search subdirectories
+    
+    # CSV options for metadata file
+    "csv_options": {
+        "chunk_size": 1000,
+        "delimiter": ",",
+        "quotechar": '"',
+        "escapechar": "\\"
+    }
 }
 
 
@@ -71,7 +80,7 @@ ingestor = ImageIngestor(
     table_name=config.IMAGE_TABLE_NAME,
     schema=schema,
     category=DataCategory.IMAGE_CLASSIFICATION,
-    image_options=image_options,
+    image_options=image_options,  # Now includes both image and CSV options
     processors=[image_processor],
     label_column="label",
     intent=Intent.TRAIN,  # Is the data for training or testing
