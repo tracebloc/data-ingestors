@@ -23,7 +23,7 @@ class DataCategory:
     OBJECT_DETECTION = "object_detection"
     KEYPOINT_DETECTION = "keypoint_detection"
     TEXT_CLASSIFICATION = "text_classification"
-    TABULAR_CLASSIFICATION = "generic_classification"
+    TABULAR_CLASSIFICATION = "tabular_classification"
 
     @classmethod
     def get_all_categories(cls) -> list[str]:
