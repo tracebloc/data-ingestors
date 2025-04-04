@@ -118,16 +118,13 @@ class APIClient:
 
             logger.info(f"Global metadata to send: {(payload)}")
             
-            
             headers = {
                 "Authorization": f"TOKEN {self.token}",
                 "Content-Type": "application/json"
             }
 
-            logger.info(f"Sending global metadata to API: {headers}")
-            return True
             response = self.session.post(
-                f"{self.config.API_ENDPOINT}/global_metadata/",
+                f"{self.config.API_ENDPOINT}/global_meta/global_metadata/",
                 data=payload,
                 headers=headers,
                 timeout=API_TIMEOUT

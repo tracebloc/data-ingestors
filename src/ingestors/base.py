@@ -143,6 +143,9 @@ class BaseIngestor(ABC):
             
             # Map unique ID if specified
             cleaned_record = self._map_unique_id(record, cleaned_record)
+
+            logger.info(f"Cleaned record: {cleaned_record}")
+            
             if cleaned_record is None:
                 return None
                 
