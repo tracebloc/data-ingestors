@@ -28,14 +28,14 @@ class Config:
     CLIENT_PASSWORD: str = os.getenv("EDGE_PASSWORD", "")
     
     STORAGE_PATH: str = os.getenv("STORAGE_PATH", "/data/shared")
-    SRC_PATH: str = os.getenv("SRC_PATH", "/data/shared")
-    DEST_PATH: str = os.getenv("DEST_PATH", "/data/shared/txt/")
-    LABEL_FILE: str = os.getenv("LABEL_FILE", "src/examples/data/sample.csv")
-    COMPANY: str = os.getenv("COMPANY", "TB_INGESTOR")
+    SRC_PATH: str = os.getenv("SRC_PATH", "") # path to the source data
+    DEST_PATH: str = os.path.join(os.getenv("DEST_PATH", ""), os.getenv("TABLE_NAME", "")) # path to the destination data with table name
+    LABEL_FILE: str = os.getenv("LABEL_FILE", "")
+    COMPANY: str = os.getenv("COMPANY", "")
     TABLE_NAME: str = os.getenv("TABLE_NAME", "")
-    TITLE: str = os.getenv("TITLE", None)
+    TITLE: str = os.getenv("TITLE", "")
     
     # Logging configuration
-    LOG_LEVEL: int = int(os.getenv("LOG_LEVEL", str(logging.WARNING)))
+    LOG_LEVEL: int = int(os.getenv("LOG_LEVEL", str(logging.INFO)))
     LOG_FORMAT: Optional[str] = os.getenv("LOG_FORMAT", None)
     LOG_DATE_FORMAT: Optional[str] = os.getenv("LOG_DATE_FORMAT", None)

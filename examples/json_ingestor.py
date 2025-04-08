@@ -2,7 +2,7 @@ import sys
 import os
 
 # Add the src directory to the PYTHONPATH
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 from src.ingestors.json_ingestor import JSONIngestor
 from src.database import Database
@@ -69,7 +69,7 @@ def main():
     try:
         # Ingest JSON file
         failed_records = ingestor.ingest(
-            file_path="src/examples/data/users.json",
+            file_path="examples/data/users.json",
             batch_size=config.BATCH_SIZE
         )
         

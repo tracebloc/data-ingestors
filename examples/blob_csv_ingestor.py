@@ -7,7 +7,7 @@ from pathlib import Path
 import logging
 
 # Add the src directory to the PYTHONPATH
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 from src.config import Config
 from src.database import Database
@@ -138,7 +138,7 @@ if __name__ == "__main__":
     # Ingest data
     try:
         failed_records = ingestor.ingest(
-            "src/examples/data/documents.csv",
+            "examples/data/documents.csv",
             batch_size=25  # Smaller batch size due to larger data
         )
         

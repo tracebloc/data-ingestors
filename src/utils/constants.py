@@ -13,6 +13,13 @@ class Intent:
     TEST = "test"
     TRAIN = "train"
     
+    @classmethod
+    def get_all_intents(cls) -> list[str]:
+        """
+        Returns a list of all available intent values.
+        """
+        return [cls.TEST, cls.TRAIN]
+        
 
 # Data Categories
 class DataCategory:

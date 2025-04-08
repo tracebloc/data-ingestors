@@ -10,7 +10,7 @@ RUN apt-get update && apt-get install -y netcat-traditional
 # Copy the source code and requirements
 COPY src/requirements.txt requirements.txt
 COPY src/ src/
-
+COPY examples/ examples/
 # Install Python dependencies
 RUN --mount=type=cache,target=/root/.cache/pip pip install -r requirements.txt
 # Create necessary directories

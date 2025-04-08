@@ -12,7 +12,7 @@ from ..processors.base import BaseProcessor
 from ..api.client import APIClient
 from ..utils.logging import setup_logging
 from ..config import Config
-from ..utils.constants import DataCategory
+from ..utils.constants import DataCategory, Intent
 import uuid
 
 # Configure unified logging with config
@@ -98,8 +98,13 @@ class BaseIngestor(ABC):
             Updated cleaned record if valid, None if invalid unique ID
         """
 
+        # validate intent is valid
+        if not self.intent or self.intent not in Intent.get_all_intents():
+            logger.warning(f"Invalid intent: {self.intent}. Must be one of: {Intent.get_all_intents()}")
+            return None
+
         # Validate label_column exists if specified
-        columns_to_validate = [(self.label_column, "label_column"), (self.intent, "intent_column"), (self.annotation_column, "annotation_column")]
+        columns_to_validate = [(self.label_column, "label_column"), (self.annotation_column, "annotation_column")]
         columns_not_found = False
         for column, column_name in columns_to_validate:
             if column and column not in record:

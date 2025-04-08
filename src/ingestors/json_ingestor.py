@@ -67,23 +67,24 @@ class JSONIngestor(BaseIngestor):
         Raises:
             ValueError: If validation fails
         """
-        # Check for required fields
+        # Only validate fields that exist in both schema and record
         schema_fields = set(self.schema.keys())
         record_fields = set(record.keys())
         
+        # Log which schema fields are not in the record (for information only)
         missing_fields = schema_fields - record_fields
         if missing_fields:
-            raise ValueError(
-                f"Missing required fields in JSON record: {', '.join(missing_fields)}"
-            )
+            logger.warning(f"Schema fields not present in JSON record: {', '.join(missing_fields)}")
             
         # Validate unique_id_column exists if specified
         if self.unique_id_column and self.unique_id_column not in record:
             raise ValueError(f"Specified unique_id_column '{self.unique_id_column}' not found in record")
 
-        # Basic data type validation
-        for field, dtype in self.schema.items():
+        # Basic data type validation - only for fields that exist in the record
+        common_fields = schema_fields & record_fields
+        for field in common_fields:
             value = record[field]
+            dtype = self.schema[field]
             try:
                 if 'INT' in dtype.upper():
                     int(value) if value != '' else None

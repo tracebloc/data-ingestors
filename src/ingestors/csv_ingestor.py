@@ -67,13 +67,17 @@ class CSVIngestor(BaseIngestor):
         Raises:
             ValueError: If validation fails
         """
-        # Check for required columns using pandas operations
+        # Only validate columns that exist in both schema and CSV
+        common_columns = set(self.schema.keys()) & set(df.columns)
+        
+        # Log which schema columns are not in the CSV (for information only)
         missing_columns = set(self.schema.keys()) - set(df.columns)
         if missing_columns:
-            raise ValueError(f"Missing required columns in CSV: {', '.join(missing_columns)}")
+            logger.warning(f"Schema columns not present in CSV: {', '.join(missing_columns)}")
             
-        # Type validation using pandas dtypes
-        for column, dtype in self.schema.items():
+        # Type validation using pandas dtypes - only for columns that exist in the CSV
+        for column in common_columns:
+            dtype = self.schema[column]
             try:
                 if 'INT' in dtype.upper():
                     df[column] = pd.to_numeric(df[column], downcast='integer')

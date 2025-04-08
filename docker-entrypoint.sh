@@ -8,4 +8,4 @@ done
 echo "MySQL is ready!"
 
 # Run the CSV ingestor
-python src/examples/csv_ingestor.py "$@" 
+python examples/csv_ingestor.py "$@" 
