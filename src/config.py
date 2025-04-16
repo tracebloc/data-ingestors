@@ -24,16 +24,16 @@ class Config:
     EDGE_ENV: str = os.getenv("EDGE_ENV", "dev")
     API_ENDPOINT: str = API_ENDPOINTS.get(EDGE_ENV, API_ENDPOINTS["dev"])
     
-    CLIENT_USERNAME: str = os.getenv("EDGE_USERNAME", "")
-    CLIENT_PASSWORD: str = os.getenv("EDGE_PASSWORD", "")
+    CLIENT_USERNAME: str = os.getenv("EDGE_USERNAME", "edge_asad@tracebloc.io")
+    CLIENT_PASSWORD: str = os.getenv("EDGE_PASSWORD", "&6edg*D9e")
     
     STORAGE_PATH: str = os.getenv("STORAGE_PATH", "/data/shared")
-    SRC_PATH: str = os.getenv("SRC_PATH", "") # path to the source data
-    DEST_PATH: str = os.path.join(os.getenv("DEST_PATH", ""), os.getenv("TABLE_NAME", "")) # path to the destination data with table name
-    LABEL_FILE: str = os.getenv("LABEL_FILE", "")
-    COMPANY: str = os.getenv("COMPANY", "")
-    TABLE_NAME: str = os.getenv("TABLE_NAME", "")
-    TITLE: str = os.getenv("TITLE", "")
+    SRC_PATH: str = os.getenv("SRC_PATH", "examples/data/images/source") # path to the source data
+    DEST_PATH: str = os.path.join(os.getenv("DEST_PATH", "examples/data/images/destination"), os.getenv("TABLE_NAME", "image_ingestor_train")) # path to the destination data with table name
+    LABEL_FILE: str = os.getenv("LABEL_FILE", "examples/data/images/image_meta.csv")
+    COMPANY: str = os.getenv("COMPANY", "TB_INGESTOR")
+    TABLE_NAME: str = os.getenv("TABLE_NAME", "image_ingestor_train")
+    TITLE: str = os.getenv("TITLE", "Image training data")
     
     # Logging configuration
     LOG_LEVEL: int = int(os.getenv("LOG_LEVEL", str(logging.INFO)))
