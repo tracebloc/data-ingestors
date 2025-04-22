@@ -28,7 +28,7 @@ A robust data ingestion framework for machine learning pipelines. This repositor
 
 
 ## 📜 License
-This project is licensed under the MIT License - see the [LICENSE.txt](LICENSE.txt) file for details.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ## 📞 Support
 For additional support or questions, please refer to our documentation or contact the Tracebloc support team at `support@tracebloc.io`.
