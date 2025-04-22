@@ -1,4 +1,5 @@
 # Data Ingestors
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ## 📄 Description
 A robust data ingestion framework for machine learning pipelines. This repository provides tools and utilities for managing, processing, and validating training/test datasets. It supports various data sources, formats, and processing pipelines, making it easier to create and maintain ML datasets.
@@ -27,7 +28,7 @@ A robust data ingestion framework for machine learning pipelines. This repositor
 
 
 ## 📜 License
-[Add license information here]
+This project is licensed under the MIT License - see the [LICENSE.txt](LICENSE.txt) file for details.
 
 ## 📞 Support
 For additional support or questions, please refer to our documentation or contact the Tracebloc support team at `support@tracebloc.io`.
