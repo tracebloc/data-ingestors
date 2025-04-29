@@ -1,7 +1,15 @@
+"""JSON Data Ingestor Module.
+
+This module provides a specialized ingestor for handling JSON files, with support for
+both single-object and array-of-objects formats. It includes validation and type
+conversion capabilities.
+"""
+
 from typing import Dict, Any, Generator, Optional, List
 import json
 import logging
 from pathlib import Path
+
 from .base import BaseIngestor
 from ..database import Database
 from ..api.client import APIClient
@@ -9,7 +17,19 @@ from ..processors.base import BaseProcessor
 
 logger = logging.getLogger(__name__)
 
+__all__ = ['JSONIngestor']
+
 class JSONIngestor(BaseIngestor):
+    """A specialized ingestor for JSON files.
+    
+    This ingestor extends the BaseIngestor to provide JSON file handling capabilities.
+    It supports both single JSON objects and arrays of objects, with validation and
+    type conversion according to the specified schema.
+    
+    Attributes:
+        json_options: Additional options for JSON processing
+    """
+    
     def __init__(
         self,
         database: Database,
@@ -25,15 +45,14 @@ class JSONIngestor(BaseIngestor):
         annotation_column: Optional[str] = None,
         category: Optional[str] = None
     ):
-        """
-        Initialize JSON Ingestor
+        """Initialize JSON Ingestor.
         
         Args:
-            database: Database instance
-            api_client: API client instance
+            database: Database instance for data storage
+            api_client: API client instance for data transmission
             table_name: Name of the target table
             schema: Database schema definition
-            processors: List of data processors
+            processors: List of data processors to apply
             max_retries: Maximum number of retry attempts
             json_options: Additional options for JSON processing
             unique_id_column: Name of the column to use as unique identifier
@@ -58,14 +77,17 @@ class JSONIngestor(BaseIngestor):
         self.json_options = json_options or {}
         
     def _validate_record(self, record: Dict[str, Any]) -> None:
-        """
-        Validate JSON record against schema
+        """Validate JSON record against schema.
+        
+        This method performs type validation for the JSON record according to the
+        specified schema. It handles common data types including integers, floats,
+        and booleans.
         
         Args:
-            record: JSON record
+            record: JSON record to validate
             
         Raises:
-            ValueError: If validation fails
+            ValueError: If validation fails for any field
         """
         # Only validate fields that exist in both schema and record
         schema_fields = set(self.schema.keys())
@@ -99,14 +121,22 @@ class JSONIngestor(BaseIngestor):
                 )
 
     def read_data(self, file_path: str) -> Generator[Dict[str, Any], None, None]:
-        """
-        Read and validate JSON file
+        """Read and validate JSON file.
+        
+        This method reads the JSON file and handles both single-object and
+        array-of-objects formats. It performs validation according to the schema
+        and yields records one at a time.
         
         Args:
             file_path: Path to the JSON file
             
         Yields:
             Dict containing record data
+            
+        Raises:
+            FileNotFoundError: If the JSON file doesn't exist
+            ValueError: If the JSON data is not in the expected format
+            json.JSONDecodeError: If there's an error parsing the JSON
         """
         file_path = Path(file_path)
         if not file_path.exists():
@@ -145,8 +175,10 @@ class JSONIngestor(BaseIngestor):
             raise
 
     def _count_records(self, file_path: str) -> Optional[int]:
-        """
-        Count total records in JSON file efficiently
+        """Count total records in JSON file efficiently.
+        
+        This method provides an optimized way to count records in a JSON file
+        by loading the file once and checking its structure.
         
         Args:
             file_path: Path to the JSON file
@@ -167,15 +199,20 @@ class JSONIngestor(BaseIngestor):
             return None
 
     def ingest(self, file_path: str, batch_size: int = 50) -> List[Dict[str, Any]]:
-        """
-        Ingest JSON file with progress tracking
+        """Ingest JSON file with progress tracking.
+        
+        This method extends the base ingest method to add JSON-specific logging
+        and error handling.
         
         Args:
             file_path: Path to the JSON file
-            batch_size: Size of each batch
+            batch_size: Size of each batch for processing
             
         Returns:
             List of failed records
+            
+        Raises:
+            Exception: If ingestion fails
         """
         logger.info(f"Starting JSON ingestion from {file_path}")
         

@@ -143,4 +143,7 @@ cython_debug/
 
 .idea
 .DS_Store
+build
+dist
+tracebloc_ingestor.egg-info
 

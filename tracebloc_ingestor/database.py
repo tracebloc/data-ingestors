@@ -24,7 +24,7 @@ class Database:
     def _create_engine(self) -> Engine:
         # First create database if it doesn't exist
         base_connection_string = (
-            f"mysql+mysqldb://{self.config.DB_USER}:{quote(self.config.DB_PASSWORD)}"
+            f"mysql+mysqlconnector://{self.config.DB_USER}:{quote(self.config.DB_PASSWORD)}"
             f"@{self.config.DB_HOST}:{self.config.DB_PORT}"
         )
         engine = create_engine(base_connection_string, pool_pre_ping=True)
