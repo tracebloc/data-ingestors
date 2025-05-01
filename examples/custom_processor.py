@@ -21,12 +21,14 @@ logger = logging.getLogger(__name__)
 class UpperCaseProcessor(BaseProcessor):
     """Processor that converts specified column values to uppercase."""
     
-    def __init__(self, column_name: str):
+    def __init__(self, config: Config, column_name: str):
         """Initialize the processor.
         
         Args:
+            config: Configuration object
             column_name: Name of the column to process
         """
+        super().__init__(config)
         self.column_name = column_name
 
     def process(self, record: Dict[str, Any]) -> Dict[str, Any]:
@@ -45,6 +47,14 @@ class UpperCaseProcessor(BaseProcessor):
 class EmailDomainProcessor(BaseProcessor):
     """Processor that extracts domain from email addresses."""
     
+    def __init__(self, config: Config):
+        """Initialize the processor.
+        
+        Args:
+            config: Configuration object
+        """
+        super().__init__(config)
+    
     def process(self, record: Dict[str, Any]) -> Dict[str, Any]:
         """Process a record by extracting email domain.
         
@@ -53,13 +63,18 @@ class EmailDomainProcessor(BaseProcessor):
             
         Returns:
             The processed record with added 'email_domain' field
+            
+        Raises:
+            ValueError: If email format is invalid
         """
         if 'email' in record and isinstance(record['email'], str):
             try:
                 domain = record['email'].split('@')[1]
+                if not domain:  # Check if domain is empty
+                    raise ValueError("Empty domain in email")
                 record['email_domain'] = domain
             except IndexError:
-                logger.warning(f"Invalid email format: {record['email']}")
+                raise ValueError(f"Invalid email format: {record['email']}")
         return record
 
 def main():
@@ -69,19 +84,19 @@ def main():
         database = Database(config)
         api_client = APIClient(config)
 
-        # Schema definition
+        # Schema definition with constraints
         schema = {
-            "name": "VARCHAR(255)",
-            "email": "VARCHAR(255)",
+            "name": "VARCHAR(255) NOT NULL",
+            "email": "VARCHAR(255) UNIQUE",
             "email_domain": "VARCHAR(255)",  # Added for the EmailDomainProcessor
-            "age": "INT",
+            "age": "INT CHECK (age >= 0 AND age <= 150)",
             "description": "VARCHAR(255)"
         }
 
         # Create processors
         processors = [
-            UpperCaseProcessor(column_name="name"),
-            EmailDomainProcessor()
+            UpperCaseProcessor(config=config, column_name="name"),
+            EmailDomainProcessor(config=config)
         ]
 
         # Create ingestor with processors

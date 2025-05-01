@@ -26,9 +26,13 @@ class DataNormalizer(BaseProcessor):
     normalizes data during ingestion.
     """
     
-    def __init__(self):
-        """Initialize the processor."""
-        super().__init__()
+    def __init__(self, config: Config):
+        """Initialize the processor.
+        
+        Args:
+            config: Configuration object
+        """
+        super().__init__(config)
         
     def process(self, record: Dict[str, Any]) -> Dict[str, Any]:
         """Process the record by normalizing data types and formats.
@@ -38,16 +42,58 @@ class DataNormalizer(BaseProcessor):
             
         Returns:
             Processed record with normalized data
+            
+        Raises:
+            ValueError: If data normalization fails
         """
         try:
+            # Normalize string fields
             if 'email' in record:
+                if not isinstance(record['email'], str):
+                    raise ValueError("email must be a string")
                 record['email'] = record['email'].lower().strip()
+                if not record['email']:
+                    raise ValueError("email cannot be empty")
+                
+            if 'name' in record:
+                if not isinstance(record['name'], str):
+                    raise ValueError("name must be a string")
+                record['name'] = record['name'].strip()
+                if not record['name']:
+                    raise ValueError("name cannot be empty")
+                
+            # Normalize numeric fields
             if 'age' in record:
-                record['age'] = int(record['age'])
+                try:
+                    record['age'] = int(record['age'])
+                    if record['age'] < 0 or record['age'] > 150:
+                        raise ValueError("age must be between 0 and 150")
+                except (ValueError, TypeError):
+                    raise ValueError("age must be a valid integer")
+                
+            # Normalize boolean fields
             if 'is_active' in record:
-                record['is_active'] = bool(record['is_active'])
+                if isinstance(record['is_active'], str):
+                    record['is_active'] = record['is_active'].lower() in ('true', '1', 'yes')
+                else:
+                    record['is_active'] = bool(record['is_active'])
+                
+            # Normalize date fields
+            if 'created_at' in record:
+                if not isinstance(record['created_at'], str):
+                    raise ValueError("created_at must be a string")
+                record['created_at'] = record['created_at'].strip()
+                
+            # Normalize metadata
+            if 'metadata' in record:
+                if isinstance(record['metadata'], dict):
+                    import json
+                    record['metadata'] = json.dumps(record['metadata'])
+                elif not isinstance(record['metadata'], str):
+                    raise ValueError("metadata must be a string or dict")
+                
             return record
-        except (ValueError, TypeError) as e:
+        except Exception as e:
             raise ValueError(f"Error normalizing data: {str(e)}")
             
     def cleanup(self):
@@ -61,27 +107,30 @@ def main():
         database = Database(config)
         api_client = APIClient(config)
 
-        # Schema definition
+        # Schema definition with constraints
         schema = {
             "id": "VARCHAR(255)",
             "name": "VARCHAR(255)",
             "email": "VARCHAR(255)",
             "age": "INT",
-            "is_active": "BOOL",
+            "is_active": "BOOL DEFAULT FALSE",
             "created_at": "DATE",
             "metadata": "TEXT"
         }
 
-        # JSON specific options
+        # JSON specific options with additional configurations
         json_options = {
             "encoding": "utf-8",
             "parse_float": float,
             "parse_int": int,
-            "parse_constant": None
+            "parse_constant": None,
+            "object_pairs_hook": None,
+            "strict": True,
+            "object_hook": None
         }
 
         # Create an instance of the processor
-        data_normalizer = DataNormalizer()
+        data_normalizer = DataNormalizer(config=config)
 
         # Create ingestor
         ingestor = JSONIngestor(

@@ -29,17 +29,20 @@ class ImageResizeProcessor(BaseProcessor):
     and extracts image metadata. It supports both binary data and file-based processing.
     """
     
-    def __init__(self, target_size: tuple = (800, 800), storage_path: Optional[str] = None):
+    def __init__(self, config: Config, target_size: tuple = (800, 800), storage_path: Optional[str] = None):
         """Initialize the image processor.
         
         Args:
+            config: Configuration object
             target_size: Target size for resized images (width, height)
             storage_path: Optional path for storing processed images
         """
+        super().__init__(config)
         self.target_size = target_size
         self.storage_path = Path(storage_path) if storage_path else None
         if self.storage_path:
             self.storage_path.mkdir(parents=True, exist_ok=True)
+        self._processed_files = set()  # Track processed files for cleanup
         
     def process(self, record: Dict[str, Any]) -> Dict[str, Any]:
         """Process image data in the record.
@@ -57,12 +60,16 @@ class ImageResizeProcessor(BaseProcessor):
             # Try to get image data from binary field first
             image_data = record.get('image_data')
             if image_data:
+                if not isinstance(image_data, bytes):
+                    raise ValueError("image_data must be bytes")
                 # Process binary image data
                 return self._process_binary_image(record, image_data)
             
             # Try to get image from file path
             filename = record.get('filename')
             if filename:
+                if not isinstance(filename, str):
+                    raise ValueError("filename must be a string")
                 # Process file-based image
                 return self._process_file_image(record, filename)
             
@@ -80,32 +87,38 @@ class ImageResizeProcessor(BaseProcessor):
             
         Returns:
             Processed record with resized image and metadata
+            
+        Raises:
+            ValueError: If image processing fails
         """
-        # Open image from binary data
-        image = Image.open(io.BytesIO(image_data))
-        
-        # Extract original dimensions
-        original_width, original_height = image.size
-        
-        # Resize image while maintaining aspect ratio
-        image.thumbnail(self.target_size, Image.Resampling.LANCZOS)
-        
-        # Get new dimensions
-        new_width, new_height = image.size
-        
-        # Convert back to binary data
-        output = io.BytesIO()
-        image.save(output, format=image.format)
-        record['image_data'] = output.getvalue()
-        
-        # Update metadata
-        record['original_width'] = original_width
-        record['original_height'] = original_height
-        record['width'] = new_width
-        record['height'] = new_height
-        record['format'] = image.format.lower()
-        
-        return record
+        try:
+            # Open image from binary data
+            image = Image.open(io.BytesIO(image_data))
+            
+            # Extract original dimensions
+            original_width, original_height = image.size
+            
+            # Resize image while maintaining aspect ratio
+            image.thumbnail(self.target_size, Image.Resampling.LANCZOS)
+            
+            # Get new dimensions
+            new_width, new_height = image.size
+            
+            # Convert back to binary data
+            output = io.BytesIO()
+            image.save(output, format=image.format)
+            record['image_data'] = output.getvalue()
+            
+            # Update metadata
+            record['original_width'] = original_width
+            record['original_height'] = original_height
+            record['width'] = new_width
+            record['height'] = new_height
+            record['format'] = image.format.lower()
+            
+            return record
+        except Exception as e:
+            raise ValueError(f"Error processing binary image: {str(e)}")
     
     def _process_file_image(self, record: Dict[str, Any], filename: str) -> Dict[str, Any]:
         """Process image from file path.
@@ -116,41 +129,54 @@ class ImageResizeProcessor(BaseProcessor):
             
         Returns:
             Processed record with resized image and metadata
+            
+        Raises:
+            ValueError: If image processing fails
         """
-        # Get the source image path
-        src_path = Path(filename)
-        if not src_path.exists():
-            raise ValueError(f"Source image not found: {src_path}")
-        
-        # Open and resize the image
-        with Image.open(src_path) as image:
-            # Extract original dimensions
-            original_width, original_height = image.size
+        try:
+            # Get the source image path
+            src_path = Path(filename)
+            if not src_path.exists():
+                raise ValueError(f"Source image not found: {src_path}")
             
-            # Resize image while maintaining aspect ratio
-            image.thumbnail(self.target_size, Image.Resampling.LANCZOS)
-            
-            # Get new dimensions
-            new_width, new_height = image.size
-            
-            # Save the resized image if storage path is provided
-            if self.storage_path:
-                dest_path = self.storage_path / src_path.name
-                image.save(dest_path, format=image.format)
-                record['processed_path'] = str(dest_path)
-            
-            # Update metadata
-            record['original_width'] = original_width
-            record['original_height'] = original_height
-            record['width'] = new_width
-            record['height'] = new_height
-            record['format'] = image.format.lower()
-            
-            return record
+            # Open and resize the image
+            with Image.open(src_path) as image:
+                # Extract original dimensions
+                original_width, original_height = image.size
+                
+                # Resize image while maintaining aspect ratio
+                image.thumbnail(self.target_size, Image.Resampling.LANCZOS)
+                
+                # Get new dimensions
+                new_width, new_height = image.size
+                
+                # Save the resized image if storage path is provided
+                if self.storage_path:
+                    dest_path = self.storage_path / src_path.name
+                    image.save(dest_path, format=image.format)
+                    record['processed_path'] = str(dest_path)
+                    self._processed_files.add(str(dest_path))
+                
+                # Update metadata
+                record['original_width'] = original_width
+                record['original_height'] = original_height
+                record['width'] = new_width
+                record['height'] = new_height
+                record['format'] = image.format.lower()
+                
+                return record
+        except Exception as e:
+            raise ValueError(f"Error processing file image: {str(e)}")
     
     def cleanup(self):
         """Cleanup any temporary files if needed."""
-        pass
+        if self.storage_path:
+            for file_path in self._processed_files:
+                try:
+                    Path(file_path).unlink(missing_ok=True)
+                except Exception as e:
+                    logger.warning(f"Failed to delete temporary file {file_path}: {str(e)}")
+            self._processed_files.clear()
 
 def main():
     """Run the image ingestion example."""
@@ -159,15 +185,15 @@ def main():
         database = Database(config)
         api_client = APIClient(config)
 
-        # Schema definition for image data
+        # Schema definition for image data with constraints
         schema = {
-            "filename": "VARCHAR(255)",
+            "filename": "VARCHAR(255) NOT NULL",
             "image_data": "LONGBLOB",
-            "width": "INT",
-            "height": "INT",
-            "original_width": "INT",
-            "original_height": "INT",
-            "format": "VARCHAR(10)",
+            "width": "INT NOT NULL",
+            "height": "INT NOT NULL",
+            "original_width": "INT NOT NULL",
+            "original_height": "INT NOT NULL",
+            "format": "VARCHAR(10) NOT NULL",
             "processed_path": "VARCHAR(512)",
             "notes": "TEXT"
         }
@@ -178,11 +204,13 @@ def main():
             "delimiter": ",",
             "quotechar": '"',
             "escapechar": "\\",
-            "on_bad_lines": 'warn'
+            "on_bad_lines": 'warn',
+            "encoding": "utf-8"
         }
 
         # Create image processor with storage path
         image_processor = ImageResizeProcessor(
+            config=config,
             target_size=(800, 800),
             storage_path=config.STORAGE_PATH
         )

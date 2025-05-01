@@ -26,12 +26,14 @@ class UpperCaseProcessor(BaseProcessor):
     transforms data during ingestion.
     """
     
-    def __init__(self, column_name: str):
+    def __init__(self, config: Config, column_name: str):
         """Initialize the processor.
         
         Args:
+            config: Configuration object
             column_name: Name of the column to convert to uppercase
         """
+        super().__init__(config)
         self.column_name = column_name
         
     def process(self, record: Dict[str, Any]) -> Dict[str, Any]:
@@ -58,26 +60,30 @@ def main():
         database = Database(config)
         api_client = APIClient(config)
 
-        # Schema definition
+        # Schema definition with constraints
         schema = {
-            "name": "VARCHAR(255)",
-            "age": "INT",
-            "email": "VARCHAR(255)",
+            "name": "VARCHAR(255) NOT NULL",
+            "age": "INT CHECK (age >= 0 AND age <= 150)",
+            "email": "VARCHAR(255) UNIQUE",
             "description": "VARCHAR(255)",
             "profile_image_url": "VARCHAR(512)",
             "notes": "TEXT"
         }
 
-        # CSV specific options
+        # CSV specific options with additional configurations
         csv_options = {
             "chunk_size": 1000,
             "delimiter": ",",
             "quotechar": '"',
             "escapechar": "\\",
+            "encoding": "utf-8",
+            "on_bad_lines": "warn",
+            "skip_blank_lines": True,
+            "na_values": ["", "NA", "NULL", "None"]
         }
 
         # Create an instance of the processor
-        upper_case_processor = UpperCaseProcessor(column_name="name")
+        upper_case_processor = UpperCaseProcessor(config=config, column_name="name")
 
         # Create ingestor with unique_id_column specified
         ingestor = CSVIngestor(

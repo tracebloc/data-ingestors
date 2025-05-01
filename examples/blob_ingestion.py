@@ -28,12 +28,14 @@ class BlobDataProcessor(BaseProcessor):
     and ensures proper formatting of metadata.
     """
     
-    def __init__(self, storage_path: str):
+    def __init__(self, config: Config, storage_path: str):
         """Initialize the blob data processor.
         
         Args:
+            config: Configuration object
             storage_path: Path to store temporary files if needed
         """
+        super().__init__(config)
         self.storage_path = Path(storage_path)
         self.storage_path.mkdir(parents=True, exist_ok=True)
         
@@ -59,6 +61,8 @@ class BlobDataProcessor(BaseProcessor):
             # Handle document data (assuming base64 encoded in CSV)
             if record['document_data']:
                 try:
+                    if not isinstance(record['document_data'], str):
+                        raise ValueError("document_data must be a string")
                     # Remove any whitespace or newlines that might have been added
                     clean_data = record['document_data'].strip()
                     record['document_data'] = base64.b64decode(clean_data)
@@ -68,6 +72,8 @@ class BlobDataProcessor(BaseProcessor):
             # Handle thumbnail (assuming base64 encoded in CSV)
             if record.get('thumbnail'):
                 try:
+                    if not isinstance(record['thumbnail'], str):
+                        raise ValueError("thumbnail must be a string")
                     # Remove any whitespace or newlines that might have been added
                     clean_thumb = record['thumbnail'].strip()
                     record['thumbnail'] = base64.b64decode(clean_thumb)
@@ -81,8 +87,12 @@ class BlobDataProcessor(BaseProcessor):
                 try:
                     # Ensure metadata is valid JSON
                     if isinstance(record['metadata'], str):
-                        record['metadata'] = json.loads(record['metadata'])
-                    record['metadata'] = json.dumps(record['metadata'])
+                        metadata_dict = json.loads(record['metadata'])
+                    elif isinstance(record['metadata'], dict):
+                        metadata_dict = record['metadata']
+                    else:
+                        raise ValueError("metadata must be either a JSON string or a dictionary")
+                    record['metadata'] = json.dumps(metadata_dict)
                 except json.JSONDecodeError as e:
                     raise ValueError(f"Invalid JSON metadata: {str(e)}")
             else:
@@ -128,7 +138,7 @@ def main():
         }
 
         # Create blob data processor
-        blob_processor = BlobDataProcessor(storage_path=config.STORAGE_PATH)
+        blob_processor = BlobDataProcessor(config=config, storage_path=config.STORAGE_PATH)
 
         # Create ingestor with blob processor
         ingestor = CSVIngestor(
