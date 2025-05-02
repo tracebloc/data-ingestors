@@ -10,7 +10,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 from src.config import Config
 from src.database import Database
 from src.api.client import APIClient
-from src.ingestors.image_ingestor import CSVIngestor
+from src.ingestors.csv_ingestor import CSVIngestor
 from src.processors.base import BaseProcessor
 from src.utils.logging import setup_logging
 from src.utils.constants import DataCategory, Intent
