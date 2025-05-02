@@ -31,7 +31,7 @@ cd tracebloc_ingestor/examples
 
 3. Run an example:
 ```bash
-python csv_ingestion.py
+python csv_ingestor.py
 ```
 
 ## Example Data
