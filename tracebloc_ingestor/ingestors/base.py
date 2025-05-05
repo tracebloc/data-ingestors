@@ -7,13 +7,14 @@ from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_excep
 import logging
 from tqdm import tqdm
 import os
+import uuid
+
 from ..database import Database
 from ..processors.base import BaseProcessor
 from ..api.client import APIClient
 from ..utils.logging import setup_logging
 from ..config import Config
 from ..utils.constants import DataCategory, Intent
-import uuid
 
 # Configure unified logging with config
 config = Config()
@@ -21,8 +22,18 @@ setup_logging(config)
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
+__all__ = ['BaseIngestor', 'IngestionSummary']
+
 class IngestionSummary(NamedTuple):
-    """Data class to hold ingestion summary statistics"""
+    """Data class to hold ingestion summary statistics.
+    
+    Attributes:
+        total_records: Total number of records processed
+        processed_records: Number of records successfully processed
+        inserted_records: Number of records inserted into database
+        api_sent_records: Number of records sent to API
+        failed_records: Number of records that failed processing
+    """
     total_records: int
     processed_records: int
     inserted_records: int
@@ -30,6 +41,27 @@ class IngestionSummary(NamedTuple):
     failed_records: int
 
 class BaseIngestor(ABC):
+    """Base class for all data ingestors.
+    
+    This abstract base class provides the core functionality for ingesting data from various sources
+    into a database and optionally sending it to an API. It handles batching, retries, and progress tracking.
+    
+    Attributes:
+        ingestor_id: Unique identifier for this ingestor instance
+        database: Database instance for data storage
+        engine: SQLAlchemy engine instance
+        api_client: API client for sending data
+        table_name: Name of the target database table
+        schema: Database schema definition
+        processors: List of data processors to apply
+        max_retries: Maximum number of retry attempts
+        unique_id_column: Column name for unique identifiers
+        label_column: Column name for labels
+        intent: Data intent (training/testing)
+        annotation_column: Column name for annotations
+        category: Data category
+    """
+    
     def __init__(self, 
                  database: Database, 
                  api_client: APIClient,
@@ -43,15 +75,14 @@ class BaseIngestor(ABC):
                  annotation_column: Optional[str] = None,
                  category: Optional[str] = None
                  ):
-        """
-        Initialize the base ingestor
+        """Initialize the base ingestor.
         
         Args:
-            database: Database instance
-            api_client: API client instance
+            database: Database instance for data storage
+            api_client: API client instance for data transmission
             table_name: Name of the target table
             schema: Database schema definition
-            processors: List of data processors
+            processors: List of data processors to apply
             max_retries: Maximum number of retry attempts
             unique_id_column: Name of the column to use as unique identifier
             label_column: Name of the column to use as label
@@ -61,15 +92,7 @@ class BaseIngestor(ABC):
         Raises:
             ValueError: If unique_id_column is not provided
         """
-        # TODO: Remove this once we have a way to handle unique_id_column
-        # if not unique_id_column:
-        #     raise ValueError(
-        #         "unique_id_column must be specified. This column will be used to map records "
-        #         "to their unique data_id in the database. Please provide the name of the column "
-        #         "that contains unique identifiers in your data source."
-        #     )
-            
-        self.ingestor_id = str(uuid.uuid4())  # Generate unique ID for this ingestor instance
+        self.ingestor_id = str(uuid.uuid4())
         self.database = database
         self.engine: Engine = database.engine
         self.api_client = api_client
@@ -82,6 +105,7 @@ class BaseIngestor(ABC):
         self.intent = intent
         self.annotation_column = annotation_column
         self.category = category
+        
         # Ensure table exists
         self.table = self.database.create_table(table_name, schema)
        

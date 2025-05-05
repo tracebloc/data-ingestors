@@ -1,7 +1,14 @@
+"""CSV Data Ingestor Module.
+
+This module provides a specialized ingestor for handling CSV files, with optimized
+pandas-based reading and validation capabilities.
+"""
+
 from typing import Dict, Any, Generator, Optional, List
 import pandas as pd
 import logging
 from pathlib import Path
+
 from .base import BaseIngestor
 from ..database import Database
 from ..api.client import APIClient
@@ -9,7 +16,19 @@ from ..processors.base import BaseProcessor
 
 logger = logging.getLogger(__name__)
 
+__all__ = ['CSVIngestor']
+
 class CSVIngestor(BaseIngestor):
+    """A specialized ingestor for CSV files.
+    
+    This ingestor extends the BaseIngestor to provide optimized CSV file handling
+    using pandas. It includes features for efficient chunked reading, data validation,
+    and type conversion.
+    
+    Attributes:
+        csv_options: Additional options for pandas read_csv
+    """
+    
     def __init__(
         self,
         database: Database,
@@ -25,15 +44,14 @@ class CSVIngestor(BaseIngestor):
         annotation_column: Optional[str] = None,
         category: Optional[str] = None
     ):
-        """
-        Initialize CSV Ingestor
+        """Initialize CSV Ingestor.
         
         Args:
-            database: Database instance
-            api_client: API client instance
+            database: Database instance for data storage
+            api_client: API client instance for data transmission
             table_name: Name of the target table
             schema: Database schema definition
-            processors: List of data processors
+            processors: List of data processors to apply
             max_retries: Maximum number of retry attempts
             csv_options: Additional options for pandas read_csv
             unique_id_column: Name of the column to use as unique identifier
@@ -58,14 +76,17 @@ class CSVIngestor(BaseIngestor):
         self.csv_options = csv_options or {}
         
     def _validate_csv(self, df: pd.DataFrame) -> None:
-        """
-        Validate CSV data against schema using pandas functionality
+        """Validate CSV data against schema using pandas functionality.
+        
+        This method performs type validation and conversion for the CSV data
+        according to the specified schema. It handles common data types including
+        integers, floats, booleans, dates, and strings.
         
         Args:
-            df: Pandas DataFrame
+            df: Pandas DataFrame to validate
             
         Raises:
-            ValueError: If validation fails
+            ValueError: If validation fails for any column
         """
         # Only validate columns that exist in both schema and CSV
         common_columns = set(self.schema.keys()) & set(df.columns)
@@ -93,14 +114,22 @@ class CSVIngestor(BaseIngestor):
                 raise ValueError(f"Data type validation failed for column {column}: {str(e)}")
 
     def read_data(self, file_path: str) -> Generator[Dict[str, Any], None, None]:
-        """
-        Read and validate CSV file using pandas optimizations
+        """Read and validate CSV file using pandas optimizations.
+        
+        This method reads the CSV file in chunks for memory efficiency and performs
+        validation according to the schema. It uses pandas' optimized C engine for
+        better performance.
         
         Args:
             file_path: Path to the CSV file
             
         Yields:
             Dict containing record data
+            
+        Raises:
+            FileNotFoundError: If the CSV file doesn't exist
+            ValueError: If the unique_id_column is not found in the CSV
+            pd.errors.ParserError: If there's an error parsing the CSV
         """
         file_path = Path(file_path)
         if not file_path.exists():
@@ -145,15 +174,20 @@ class CSVIngestor(BaseIngestor):
             raise
 
     def ingest(self, file_path: str, batch_size: int = 50) -> List[Dict[str, Any]]:
-        """
-        Ingest CSV file with progress tracking
+        """Ingest CSV file with progress tracking.
+        
+        This method extends the base ingest method to add CSV-specific logging
+        and error handling.
         
         Args:
             file_path: Path to the CSV file
-            batch_size: Size of each batch
+            batch_size: Size of each batch for processing
             
         Returns:
             List of failed records
+            
+        Raises:
+            Exception: If ingestion fails
         """
         logger.info(f"Starting CSV ingestion from {file_path}")
         
@@ -172,8 +206,10 @@ class CSVIngestor(BaseIngestor):
             raise 
 
     def _count_records(self, file_path: str) -> Optional[int]:
-        """
-        Count total records in CSV file efficiently using pandas
+        """Count total records in CSV file efficiently using pandas.
+        
+        This method provides an optimized way to count records in a CSV file
+        using pandas' efficient reading capabilities.
         
         Args:
             file_path: Path to the CSV file
