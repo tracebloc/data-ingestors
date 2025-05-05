@@ -1,6 +1,9 @@
 from setuptools import setup, find_packages
+import os
 
-with open("Readme.md", "r", encoding="utf-8") as fh:
+# Get the long description from the README file
+here = os.path.abspath(os.path.dirname(__file__))
+with open(os.path.join(here, "Readme.md"), "r", encoding="utf-8") as fh:
     long_description = fh.read()
 
 with open("requirements.txt", "r") as f:
@@ -16,6 +19,10 @@ setup(
     long_description_content_type="text/markdown",
     url="https://github.com/tracebloc/data-ingestors",
     packages=find_packages(),
+    package_data={
+        "": ["Readme.md"],
+    },
+    include_package_data=True,
     classifiers=[
         "Programming Language :: Python :: 3",
         "License :: OSI Approved :: MIT License",
