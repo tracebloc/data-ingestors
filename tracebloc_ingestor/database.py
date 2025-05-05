@@ -27,6 +27,7 @@ class Database:
             f"mysql+mysqlconnector://{self.config.DB_USER}:{quote(self.config.DB_PASSWORD)}"
             f"@{self.config.DB_HOST}:{self.config.DB_PORT}"
         )
+        print(base_connection_string)
         engine = create_engine(base_connection_string, pool_pre_ping=True)
         
         with engine.connect() as connection:
