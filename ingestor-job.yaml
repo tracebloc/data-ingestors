@@ -13,14 +13,16 @@ spec:
           - name: shared-volume
             mountPath: <path_to_shared_data_folder>
         env:
-        - name: EDGE_ENV
+        - name: CLIENT_ENV
           value: "prod"
-        - name: EDGE_USERNAME
+        - name: CLIENT_ID
           value: "edgeuser"
-        - name: EDGE_PASSWORD
+        - name: CLIENT_PASSWORD
           value: ""
-        - name: EDGE_PVC
+        - name: CLIENT_PVC
           value: "shared-pvc"
+        - name: MYSQL_PORT
+          value: "3306"
         - name: MYSQL_HOST
           value: "mysql"
         - name: MYSQL_USER
