@@ -219,7 +219,7 @@ def main():
         ingestor = CSVIngestor(
             database=database,
             api_client=api_client,
-            table_name="images",
+            table_name=config.TABLE_NAME,
             schema=schema,
             category=DataCategory.TABULAR_CLASSIFICATION,
             intent=Intent.TRAIN,
@@ -228,7 +228,7 @@ def main():
         )
 
         # Get the example data path
-        data_path = Path(__file__).parent / "data" / "images.csv"
+        data_path = Path(__file__).parent / "data" / "labels_file_sample.csv"
         
         # Ingest data
         with ingestor:

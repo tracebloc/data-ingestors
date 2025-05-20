@@ -28,9 +28,9 @@ class Config:
     CLIENT_PASSWORD: str = os.getenv("CLIENT_PASSWORD", "&6edg*D9e")
     
     STORAGE_PATH: str = os.getenv("STORAGE_PATH", "/data/shared")
-    SRC_PATH: str = os.getenv("SRC_PATH", "examples/data/images/source") # path to the source data
-    DEST_PATH: str = os.path.join(os.getenv("DEST_PATH", "examples/data/images/destination"), os.getenv("TABLE_NAME", "image_ingestor_train")) # path to the destination data with table name
-    LABEL_FILE: str = os.getenv("LABEL_FILE", "examples/data/images/image_meta.csv")
+    SRC_PATH: str = os.getenv("SRC_PATH", "") # path to the source data
+    DEST_PATH: str = os.path.join(os.getenv("DEST_PATH", ""), os.getenv("TABLE_NAME", "")) # path to the destination data with table name
+    LABEL_FILE: str = os.getenv("LABEL_FILE", "")
     COMPANY: str = os.getenv("COMPANY", "TB_INGESTOR")
     TABLE_NAME: str = os.getenv("TABLE_NAME", "image_ingestor_train")
     TITLE: str = os.getenv("TITLE", "Image training data")

@@ -148,7 +148,7 @@ def main():
         )
 
         # Get the example data path
-        data_path = Path(__file__).parent / "data" / "users.json"
+        data_path = Path(__file__).parent / "data" / "tabular_classification_sample_in_json_format.json"
         
         # Ingest data
         with ingestor:

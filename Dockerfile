@@ -10,6 +10,9 @@ RUN apt-get update && apt-get install -y netcat-traditional
 # Copy the source code and requirements
 COPY requirements.txt requirements.txt
 COPY examples/ examples/
+MKDIR data
+# copy data (images, text, csv, json) inside data ingestion pod to start ingestion
+# COPY <data> data/  uncomment and change data name
 # Install Python dependencies
 RUN --mount=type=cache,target=/root/.cache/pip pip install -r requirements.txt
 # Create necessary directories

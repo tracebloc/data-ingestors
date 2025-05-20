@@ -30,9 +30,15 @@ spec:
         - name: MYSQL_PASSWORD
           value: <mysql_password>
         - name: MYSQL_DATABASE
+<<<<<<< HEAD
           value: "xraymetadata" # a ticket was created to remove the fixed name. It should be same name as in the values.yaml file.
         - name: SRC_PATH # path to file containing the actual data
           value: <path_to_client_data_folder>
+=======
+          value: "xraymetadata"
+        - name: SRC_PATH
+          value: "/data/shared/"
+>>>>>>> develop
         - name: DEST_PATH
           value: <path_to_client_data_folder>
         - name: LABEL_FILE
