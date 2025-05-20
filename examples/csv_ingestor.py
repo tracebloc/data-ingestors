@@ -100,7 +100,7 @@ def main():
         )
 
         # Get the example data path
-        data_path = Path(__file__).parent / "data" / "sample.csv"
+        data_path = Path(__file__).parent / "data" / "tabular_classification_sample_in_csv_format.csv"
         
         # Ingest data
         with ingestor:

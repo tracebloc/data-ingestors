@@ -31,8 +31,6 @@ spec:
           value: ""
         - name: MYSQL_DATABASE
           value: "xraymetadata"
-        - name: MYSQL_PORT
-          value: "3306"
         - name: SRC_PATH
           value: "/data/shared/"
         - name: DEST_PATH
