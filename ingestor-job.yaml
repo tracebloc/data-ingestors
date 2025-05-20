@@ -7,7 +7,7 @@ spec:
     spec:
       containers:
       - name: api
-        image: <docker_registry_name>/<docker_image_name>:<docker_image_tag>
+        image: # <docker_registry_name>/<docker_image_name>:<docker_image_tag>. moritz000 = registry name, docker_image_name is anything I gave it, tag is also anything.
         imagePullPolicy: Always
         volumeMounts:
           - name: shared-volume
@@ -16,36 +16,34 @@ spec:
         - name: CLIENT_ENV
           value: "prod"
         - name: CLIENT_ID
-          value: "edgeuser"
+          value: <client_id>
         - name: CLIENT_PASSWORD
-          value: ""
+          value: <client_password>
         - name: CLIENT_PVC
-          value: "shared-pvc"
+          value: "shared-pvc" # fixed name for shared data PVC
         - name: MYSQL_PORT
           value: "3306"
         - name: MYSQL_HOST
           value: "mysql"
         - name: MYSQL_USER
-          value: "edgeuser"
+          value: <mysql_user>
         - name: MYSQL_PASSWORD
-          value: ""
+          value: <mysql_password>
         - name: MYSQL_DATABASE
-          value: "xraymetadata"
-        - name: MYSQL_PORT
-          value: "3306"
-        - name: SRC_PATH
-          value: "/data/shared/"
+          value: "xraymetadata" # a ticket was created to remove the fixed name. It should be same name as in the values.yaml file.
+        - name: SRC_PATH # path to file containing the actual data
+          value: <path_to_client_data_folder>
         - name: DEST_PATH
-          value: "/data/shared/"
+          value: <path_to_client_data_folder>
         - name: LABEL_FILE
-          value: "/data/shared/sample.csv"
-        - name: COMPANY
+          value: "/data/shared/sample.csv" # path to file containing the labels
+        - name: COMPANY # 
           value: "ABC_MC"
         - name: TABLE_NAME
-          value: "table_name"
+          value: "table_name" # can be anything, it is created. This table is created in the client and mecomes the metadata name in my new view. Same as database name.
         - name: TITLE
-          value: "dataset title" # Optional: provide a title for the dataset
-      imagePullSecrets:
+          value: "dataset title" # Optional: provide a title for the dataset - choose a name that is descriptive
+      imagePullSecrets: # they are fixed.
       - name: regcred
       volumes:
         - name: shared-volume
