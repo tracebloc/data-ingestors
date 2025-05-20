@@ -7,11 +7,11 @@ spec:
     spec:
       containers:
       - name: api
-        image: company/your_image_name:latest
+        image: <docker_registry_name>/<docker_image_name>:<docker_image_tag>
         imagePullPolicy: Always
         volumeMounts:
           - name: shared-volume
-            mountPath: "/data/shared"
+            mountPath: <path_to_shared_data_folder>
         env:
         - name: EDGE_ENV
           value: "prod"
