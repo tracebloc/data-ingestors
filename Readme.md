@@ -20,7 +20,7 @@ Also, it sends the following data to tracebloc:
 1. Clone the repository
 2. Install dependencies:
    ```bash
-   pip install -r src/requirements.txt
+   pip install -r requirements.txt
    ```
 3. Configure your environment
 4. Follow the documentation guide to [Create Your Training/Test Dataset](https://traceblocdocsdev.azureedge.net/environment-setup/create-your-dataset)
@@ -32,7 +32,6 @@ Also, it sends the following data to tracebloc:
 - API endpoints for data management
 - Containerized deployment
 - Kubernetes support
-
 
 ## 📜 License
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
