@@ -7,46 +7,47 @@ spec:
     spec:
       containers:
       - name: api
-        image: # <docker_registry_name>/<docker_image_name>:<docker_image_tag>. moritz000 = registry name, docker_image_name is anything I gave it, tag is also anything.
-        imagePullPolicy: Always
+        image: moritz000/csv_ingestor:latest
+        imagePullPolicy: IfNotPresent
         volumeMounts:
           - name: shared-volume
-            mountPath: <path_to_shared_data_folder>
+            mountPath: "/Users/moritzberthold/Desktop/dev/data"
         env:
         - name: CLIENT_ENV
           value: "prod"
         - name: CLIENT_ID
-          value: <client_id>
+          value: "2d3e6a3f-1a4b-4928-80d8-1d8eb56a1073"
         - name: CLIENT_PASSWORD
-          value: <client_password>
+          value: "2unfcsowu4fh!8Uxz23fj"
         - name: CLIENT_PVC
-          value: "shared-pvc" # fixed name for shared data PVC
+          value: "shared-pvc-16" # fixed name for shared data PVC. Needs to match the name in the values.yaml file.
         - name: MYSQL_PORT
           value: "3306"
         - name: MYSQL_HOST
-          value: "mysql"
+          value: "mysql-16" # needs to match with values.yaml file.
         - name: MYSQL_USER
-          value: <mysql_user>
+          value: "edgeuser"
         - name: MYSQL_PASSWORD
-          value: <mysql_password>
+          value: "Edg9@Tr@ce"
         - name: MYSQL_DATABASE
           value: "xraymetadata" # a ticket was created to remove the fixed name. It should be same name as in the values.yaml file.
         - name: SRC_PATH # path to file containing the actual data
-          value: <path_to_client_data_folder>
+          value: "/Users/moritzberthold/Desktop/dev/data"
         - name: DEST_PATH
-          value: <path_to_client_data_folder>
+          value: "/Users/moritzberthold/Desktop/dev/data"
         - name: LABEL_FILE
-          value: "/data/shared/sample.csv" # path to file containing the labels
+          value: "/Users/moritzberthold/Desktop/dev/data-ingestors/examples/data/text_classification_sample.csv"
         - name: COMPANY # 
           value: "ABC_MC"
         - name: TABLE_NAME
-          value: "table_name" # can be anything, it is created. This table is created in the client and mecomes the metadata name in my new view. Same as database name.
+          value: "moritz_table_name" # can be anything, it is created. This table is created in the client and mecomes the metadata name in my new view. Same as database name.
         - name: TITLE
-          value: "dataset title" # Optional: provide a title for the dataset - choose a name that is descriptive
+          value: "moritz_dataset_title" # Optional: provide a title for the dataset - choose a name that is descriptive
       imagePullSecrets: # they are fixed.
       - name: regcred
       volumes:
         - name: shared-volume
           persistentVolumeClaim:
-            claimName: shared-pvc
+            claimName: shared-pvc-16 # fixed name for shared data PVC. Needs to match the name in the values.yaml file.
+        - name: MYSQL_PORT
       restartPolicy: Never

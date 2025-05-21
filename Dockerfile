@@ -10,7 +10,8 @@ RUN apt-get update && apt-get install -y netcat-traditional
 # Copy the source code and requirements
 COPY requirements.txt requirements.txt
 COPY examples/ examples/
-MKDIR data
+COPY tracebloc_ingestor/ tracebloc_ingestor/
+RUN mkdir data
 # copy data (images, text, csv, json) inside data ingestion pod to start ingestion
 # COPY <data> data/  uncomment and change data name
 # Install Python dependencies
