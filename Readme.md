@@ -3,8 +3,14 @@
 
 ## 📄 Description
 A robust data ingestion framework for machine learning pipelines. This repository provides tools and utilities for managing, processing, and validating training/test datasets. It supports various data sources, formats, and processing pipelines, making it easier to create and maintain ML datasets.
-Also, it sends meta information like xyz, and labels of the data to the tracebloc backend. See details [here](https://github.com/tracebloc/data-ingestors/blob/87dbc6ed19f5439a8ce42a58eb7b34492838545e/tracebloc_ingestor/api/client.py#L64).
-
+Also, it sends the following data to tracebloc:
+- a dataset id (created for the entire dataset)
+- list of unique ids per data row (samples)
+- list of all raw labels
+- registered organisation name 
+- intent e.g. training or testing
+- example data points that will be shared to the user 
+                  
 ## 🛠️ Tech Stack
 - Python 3.x
 - Docker (for containerization)
