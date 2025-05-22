@@ -68,7 +68,7 @@ class APIClient:
                     "data_intent": record_data.get("data_intent", "train"),
                     "label": record_data.get("label", ""),
                     "is_sample": False,
-                    "is_active": True,
+                    #"is_active": True,
                     "injestor_id": ingestor_id,
                     # "data": record_data
                 }

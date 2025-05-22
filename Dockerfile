@@ -1,5 +1,5 @@
-# Use Python 3.9 as base image
-FROM --platform=linux/amd64 python:3.9
+# Use Python 3.11 as base image
+FROM --platform=linux/amd64 python:3.11
 
 
 # Set working directory
@@ -7,17 +7,15 @@ WORKDIR /app
 
 RUN apt-get update && apt-get install -y netcat-traditional
 
-# Copy the source code and requirements
-COPY src/requirements.txt requirements.txt
-COPY src/ src/
-COPY examples/ examples/
-MKDIR data
-# copy data (images, text, csv, json) inside data ingestion pod to start ingestion
-# COPY <data> data/  uncomment and change data name
-# Install Python dependencies
-RUN --mount=type=cache,target=/root/.cache/pip pip install -r requirements.txt
+# Install data ingestor package
+<for dev: RUN pip install git+https://<user-token>:x-oauth-basic@github.com/tracebloc/data-ingestors.git@develop#egg=tracebloc_ingestor>
+<for prod: RUN pip install tracebloc_ingestor>
+
 # Create necessary directories
-RUN mkdir -p storage/text_files storage/images
+RUN mkdir -p <directories>
+
+# Copy the source code and requirements
+<commands for copying all neccessary files and folder
 
 # Set environment variables
 ENV PYTHONPATH=/app
