@@ -21,16 +21,8 @@ spec:
           value: ""
         - name: CLIENT_PVC
           value: "shared-pvc"
-        - name: MYSQL_PORT
-          value: "3306"
         - name: MYSQL_HOST
           value: "mysql"
-        - name: MYSQL_USER
-          value: "edgeuser"
-        - name: MYSQL_PASSWORD
-          value: ""
-        - name: MYSQL_DATABASE
-          value: "xraymetadata"
         - name: SRC_PATH
           value: "/data/shared/"
         - name: DEST_PATH

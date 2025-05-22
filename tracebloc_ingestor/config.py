@@ -6,10 +6,10 @@ import logging
 @dataclass
 class Config:
     DB_HOST: str = os.getenv("MYSQL_HOST", "localhost")
-    DB_PORT: int = int(os.getenv("MYSQL_PORT", "3306"))
-    DB_USER: str = os.getenv("MYSQL_USER", "root")
-    DB_PASSWORD: str = os.getenv("MYSQL_PASSWORD", "")
-    DB_NAME: str = os.getenv("MYSQL_DATABASE", "ingestor_db")
+    DB_PORT: int = 3306
+    DB_USER: str = "edgeuser"
+    DB_PASSWORD: str = "Edg9@Tr@ce"
+    DB_NAME: str = "xraymetadata"
     
     BATCH_SIZE: int = int(os.getenv("BATCH_SIZE", "10"))
     
