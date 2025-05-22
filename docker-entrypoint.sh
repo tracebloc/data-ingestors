@@ -2,7 +2,7 @@
 
 # Wait for MySQL to be ready
 echo "Waiting for MySQL to be ready..."
-while ! nc -z $MYSQL_HOST $MYSQL_PORT; do
+while ! nc -z $MYSQL_HOST 3306; do
   sleep 1
 done
 echo "MySQL is ready!"
