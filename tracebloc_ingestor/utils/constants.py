@@ -31,6 +31,8 @@ class DataCategory:
     KEYPOINT_DETECTION = "keypoint_detection"
     TEXT_CLASSIFICATION = "text_classification"
     TABULAR_CLASSIFICATION = "tabular_classification"
+    SEMANTIC_SEGMENTATION = "semantic_segmentation"
+    INSTANCE_SEGMENTATION = "instance_segmentation"
 
     @classmethod
     def get_all_categories(cls) -> list[str]:
