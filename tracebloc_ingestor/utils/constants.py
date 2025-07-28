@@ -47,7 +47,9 @@ class DataCategory:
             cls.OBJECT_DETECTION,
             cls.KEYPOINT_DETECTION,
             cls.TEXT_CLASSIFICATION,
-            cls.TABULAR_CLASSIFICATION
+            cls.TABULAR_CLASSIFICATION,
+            cls.SEMANTIC_SEGMENTATION,
+            cls.INSTANCE_SEGMENTATION,
         ]
 
     @classmethod
