@@ -303,24 +303,26 @@ class BaseIngestor(ABC):
 
 
                 # Send edge label metadata
-                self.api_client.send_generate_edge_label_meta(self.table_name, self.ingestor_id)
+                if self.api_client.send_generate_edge_label_meta(self.table_name, self.ingestor_id):
 
-                # schema dict
-                schema_dict = self.database.get_table_schema(self.table_name)
-                # Send global metadata
-                self.api_client.send_global_meta_meta(self.table_name, schema_dict)
+                    # schema dict
+                    schema_dict = self.database.get_table_schema(self.table_name)
+                    # Send global metadata
+                    if self.api_client.send_global_meta_meta(self.table_name, schema_dict):
 
+                        # Prepare dataset
+                        if self.api_client.prepare_dataset(self.category, self.ingestor_id, self.data_format):
 
-                # Prepare dataset
-                self.api_client.prepare_dataset(self.category, self.ingestor_id, self.data_format)
+                            # Create and log summary
+                            summary = IngestionSummary(**stats)
 
-                # create dataset
-                self.api_client.create_dataset(category=self.category, ingestor_id=self.ingestor_id)
-
-                # Create and log summary
-                summary = IngestionSummary(**stats)
-
-                self._log_summary(summary)
+                            self._log_summary(summary)
+                        else:
+                            raise Exception("Prepare Failed")
+                    else:
+                        raise Exception("Send Failed")
+                else:
+                    raise Exception("Generate Edge Meta Failed")
                 
             except Exception as e:
                 session.rollback()

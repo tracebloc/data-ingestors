@@ -182,6 +182,7 @@ class APIClient:
             bool: True if successful, False otherwise
         """
         if not DataCategory.is_valid_category(category):
+            print(f"return {DataCategory.is_valid_category(category)} for input : {category}")
             logger.error(f"Invalid category: {category}")
             return False
             
