@@ -73,7 +73,8 @@ class BaseIngestor(ABC):
                  label_column: Optional[str] = None,
                  intent: Optional[str] = None,
                  annotation_column: Optional[str] = None,
-                 category: Optional[str] = None
+                 category: Optional[str] = None,
+                 data_format: Optional[str] = None
                  ):
         """Initialize the base ingestor.
         
@@ -89,6 +90,7 @@ class BaseIngestor(ABC):
             intent: Is the data for training or testing
             annotation_column: Name of the column to use as annotation
             category: Category of the data
+            data_format: Format of the data
         Raises:
             ValueError: If unique_id_column is not provided
         """
@@ -105,7 +107,7 @@ class BaseIngestor(ABC):
         self.intent = intent
         self.annotation_column = annotation_column
         self.category = category
-        
+        self.data_format = data_format
         # Ensure table exists
         self.table = self.database.create_table(table_name, schema)
        
@@ -310,7 +312,7 @@ class BaseIngestor(ABC):
 
 
                 # Prepare dataset
-                self.api_client.prepare_dataset(self.category, self.ingestor_id)
+                self.api_client.prepare_dataset(self.category, self.ingestor_id, self.data_format)
 
                 # create dataset
                 self.api_client.create_dataset(category=self.category, ingestor_id=self.ingestor_id)

@@ -60,3 +60,27 @@ class DataCategory:
             bool: True if category is valid, False otherwise
         """
         return category in cls.get_all_categories() 
+    
+class DataFormat:
+    """
+    Enumeration of supported data formats for model training and classification.
+    """
+    IMAGE = "image"
+    VIDEO = "video"
+    AUDIO = "audio"
+    TEXT = "text"
+    TABULAR = "tabular"
+
+    @classmethod
+    def get_all_formats(cls) -> list[str]:
+        """
+        Returns a list of all available format values.
+        """
+        return [cls.IMAGE, cls.VIDEO, cls.AUDIO, cls.TEXT, cls.TABULAR]
+    
+    @classmethod
+    def is_valid_format(cls, format: str) -> bool:
+        """
+        Check if a given format is valid.
+        """
+        return format in cls.get_all_formats()
