@@ -310,15 +310,18 @@ class BaseIngestor(ABC):
 
 
                 # Prepare dataset
-                self.api_client.prepare_dataset(self.category, self.ingestor_id)
+                status_prepare = self.api_client.prepare_dataset(self.category, self.ingestor_id)
 
                 # create dataset
-                self.api_client.create_dataset(category=self.category, ingestor_id=self.ingestor_id)
+                if status_prepare:
+                    self.api_client.create_dataset(category=self.category, ingestor_id=self.ingestor_id)
 
-                # Create and log summary
-                summary = IngestionSummary(**stats)
+                    # Create and log summary
+                    summary = IngestionSummary(**stats)
 
-                self._log_summary(summary)
+                    self._log_summary(summary)
+                else:
+                    raise Exception("Prepare Failed")
                 
             except Exception as e:
                 session.rollback()
