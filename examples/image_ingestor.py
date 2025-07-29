@@ -105,7 +105,6 @@ def main():
             schema=schema,
             category=DataCategory.IMAGE_CLASSIFICATION,
             data_format=DataFormat.IMAGE,
-            intent=Intent.TRAIN,
             csv_options=csv_options,
             processors=[image_processor],
             label_column="label",
