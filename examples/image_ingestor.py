@@ -13,7 +13,7 @@ from PIL import Image
 from tracebloc_ingestor import Config, Database, APIClient, CSVIngestor
 from tracebloc_ingestor.processors.base import BaseProcessor
 from tracebloc_ingestor.utils.logging import setup_logging
-from tracebloc_ingestor.utils.constants import DataCategory, Intent
+from tracebloc_ingestor.utils.constants import DataCategory, Intent, DataFormat
 
 # Initialize config and configure logging
 config = Config()
@@ -104,6 +104,8 @@ def main():
             table_name=config.TABLE_NAME,
             schema=schema,
             category=DataCategory.IMAGE_CLASSIFICATION,
+            data_format=DataFormat.IMAGE,
+            intent=Intent.TRAIN,
             csv_options=csv_options,
             processors=[image_processor],
             label_column="label",

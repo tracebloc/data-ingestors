@@ -43,7 +43,8 @@ class JSONIngestor(BaseIngestor):
         label_column: Optional[str] = None,
         intent: Optional[str] = None,
         annotation_column: Optional[str] = None,
-        category: Optional[str] = None
+        category: Optional[str] = None,
+        data_format: Optional[str] = None
     ):
         """Initialize JSON Ingestor.
         
@@ -60,6 +61,7 @@ class JSONIngestor(BaseIngestor):
             intent: Is the data for training or testing
             annotation_column: Name of the column to use as annotation
             category: Category of the data
+            data_format: Format of the data
         """
         super().__init__(
             database, 
@@ -72,7 +74,8 @@ class JSONIngestor(BaseIngestor):
             label_column,
             intent,
             annotation_column,
-            category
+            category,
+            data_format
         )
         self.json_options = json_options or {}
         

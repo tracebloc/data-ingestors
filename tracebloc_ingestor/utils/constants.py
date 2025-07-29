@@ -31,6 +31,8 @@ class DataCategory:
     KEYPOINT_DETECTION = "keypoint_detection"
     TEXT_CLASSIFICATION = "text_classification"
     TABULAR_CLASSIFICATION = "tabular_classification"
+    SEMANTIC_SEGMENTATION = "semantic_segmentation"
+    INSTANCE_SEGMENTATION = "instance_segmentation"
 
     @classmethod
     def get_all_categories(cls) -> list[str]:
@@ -45,7 +47,9 @@ class DataCategory:
             cls.OBJECT_DETECTION,
             cls.KEYPOINT_DETECTION,
             cls.TEXT_CLASSIFICATION,
-            cls.TABULAR_CLASSIFICATION
+            cls.TABULAR_CLASSIFICATION,
+            cls.SEMANTIC_SEGMENTATION,
+            cls.INSTANCE_SEGMENTATION,
         ]
 
     @classmethod
@@ -60,3 +64,27 @@ class DataCategory:
             bool: True if category is valid, False otherwise
         """
         return category in cls.get_all_categories() 
+    
+class DataFormat:
+    """
+    Enumeration of supported data formats for model training and classification.
+    """
+    IMAGE = "image"
+    VIDEO = "video"
+    AUDIO = "audio"
+    TEXT = "text"
+    TABULAR = "tabular"
+
+    @classmethod
+    def get_all_formats(cls) -> list[str]:
+        """
+        Returns a list of all available format values.
+        """
+        return [cls.IMAGE, cls.VIDEO, cls.AUDIO, cls.TEXT, cls.TABULAR]
+    
+    @classmethod
+    def is_valid_format(cls, format: str) -> bool:
+        """
+        Check if a given format is valid.
+        """
+        return format in cls.get_all_formats()

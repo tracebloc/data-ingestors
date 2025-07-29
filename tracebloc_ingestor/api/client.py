@@ -169,28 +169,30 @@ class APIClient:
                 logger.error(f"Error response: {e.response.text}")
             return False
 
-    def prepare_dataset(self, category: str, ingestor_id: str) -> bool:
+    def prepare_dataset(self, category: str, ingestor_id: str, data_format: str) -> bool:
         """
         Prepare data for a specific category and ingestor.
         
         Args:
             category: The category of data (must be one of DataCategory values)
             injester_id: The unique identifier for the injester
+            data_format: The format of the data
             
         Returns:
             bool: True if successful, False otherwise
         """
         if not DataCategory.is_valid_category(category):
+            print(f"return {DataCategory.is_valid_category(category)} for input : {category}")
             logger.error(f"Invalid category: {category}")
             return False
             
         try:
-            url = f"{self.config.API_ENDPOINT}/global_meta/prepare/?category={category}&injestor_id={ingestor_id}"
+            url = f"{self.config.API_ENDPOINT}/global_meta/prepare/?category={category}&injestor_id={ingestor_id}&data_format={data_format}"
             headers = {
                 "Authorization": f"TOKEN {self.token}"
             }
             
-            logger.info(f"Sending prepare request for category: {category}, injester_id: {ingestor_id}")
+            logger.info(f"Sending prepare request for category: {category}, injester_id: {ingestor_id}, data_format: {data_format}")
             response = self.session.get(url, headers=headers, timeout=API_TIMEOUT)
             
             response.raise_for_status()
