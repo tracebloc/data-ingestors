@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+import time
 from typing import Dict, Any, Generator, List, Optional, Callable, NamedTuple
 from sqlalchemy.orm import Session
 from sqlalchemy.engine import Engine
@@ -308,6 +309,7 @@ class BaseIngestor(ABC):
                     # schema dict
                     schema_dict = self.database.get_table_schema(self.table_name)
                     # Send global metadata
+                    time.sleep(120)
                     if self.api_client.send_global_meta_meta(self.table_name, schema_dict):
 
                         # Prepare dataset
