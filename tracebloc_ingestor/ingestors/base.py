@@ -315,6 +315,8 @@ class BaseIngestor(ABC):
                         # Prepare dataset
                         if self.api_client.prepare_dataset(self.category, self.ingestor_id, self.data_format):
 
+                            self.api_client.create_dataset(category=self.category, ingestor_id=self.ingestor_id)
+
                             # Create and log summary
                             summary = IngestionSummary(**stats)
 
