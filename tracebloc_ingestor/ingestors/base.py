@@ -317,12 +317,6 @@ class BaseIngestor(ABC):
                             summary = IngestionSummary(**stats)
 
                             self._log_summary(summary)
-                        else:
-                            raise Exception("Prepare Failed")
-                    else:
-                        raise Exception("Send Failed")
-                else:
-                    raise Exception("Generate Edge Meta Failed")
                 
             except Exception as e:
                 session.rollback()
