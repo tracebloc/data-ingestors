@@ -304,7 +304,7 @@ class BaseIngestor(ABC):
 
 
                 # Send edge label metadata
-                if self.api_client.send_generate_edge_label_meta(self.table_name, self.ingestor_id):
+                if self.api_client.send_generate_edge_label_meta(self.table_name, self.ingestor_id, self.intent):
 
                     # schema dict
                     schema_dict = self.database.get_table_schema(self.table_name)

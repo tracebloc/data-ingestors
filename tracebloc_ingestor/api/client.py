@@ -5,7 +5,7 @@ from requests.adapters import HTTPAdapter
 from requests.packages.urllib3.util.retry import Retry
 from ..config import Config
 from ..utils.logging import setup_logging
-from ..utils.constants import DataCategory, API_TIMEOUT
+from ..utils.constants import DataCategory, API_TIMEOUT, Intent
 
 # Configure unified logging with config
 config = Config()
@@ -140,7 +140,7 @@ class APIClient:
                 logger.error(f"Error response: {e.response.text}")
             return False
 
-    def send_generate_edge_label_meta(self, table_name: str, ingestor_id: str) -> bool:
+    def send_generate_edge_label_meta(self, table_name: str, ingestor_id: str, intent: str) -> bool:
         """
         Send a request to generate edge label metadata for the specified dataset type.
         
@@ -150,6 +150,9 @@ class APIClient:
         Returns:
             bool: True if successful, False otherwise
         """
+        if intent == Intent.TEST:
+            return True
+
         try:
             url = f"{self.config.API_ENDPOINT}/global_meta/generate-edge-labels-meta/?table_name={table_name}&injestor_id={ingestor_id}"
             headers = {
