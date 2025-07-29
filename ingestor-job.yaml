@@ -25,10 +25,8 @@ spec:
           value: "mysql"
         - name: SRC_PATH
           value: "/data/shared/"
-        - name: DEST_PATH
-          value: "/data/shared/"
         - name: LABEL_FILE
-          value: "/data/shared/sample.csv"
+          value: "/data/shared/sample.csv" # csv or json file path is mandatory
         - name: COMPANY
           value: "ABC_MC"
         - name: TABLE_NAME

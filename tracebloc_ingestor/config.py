@@ -29,7 +29,7 @@ class Config:
     
     STORAGE_PATH: str = os.getenv("STORAGE_PATH", "/data/shared")
     SRC_PATH: str = os.getenv("SRC_PATH", "") # path to the source data
-    DEST_PATH: str = os.path.join(os.getenv("DEST_PATH", ""), os.getenv("TABLE_NAME", "")) # path to the destination data with table name
+    DEST_PATH: str = os.path.join(STORAGE_PATH, os.getenv("TABLE_NAME", "")) # path to the destination data with table name
     LABEL_FILE: str = os.getenv("LABEL_FILE", "")
     COMPANY: str = os.getenv("COMPANY", "TB_INGESTOR")
     TABLE_NAME: str = os.getenv("TABLE_NAME", "image_ingestor_train")
