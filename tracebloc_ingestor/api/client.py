@@ -150,9 +150,7 @@ class APIClient:
         Returns:
             bool: True if successful, False otherwise
         """
-        if intent == Intent.TEST:
-            return True
-
+        
         try:
             url = f"{self.config.API_ENDPOINT}/global_meta/generate-edge-labels-meta/?table_name={table_name}&injestor_id={ingestor_id}"
             headers = {
