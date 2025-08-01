@@ -152,7 +152,7 @@ class APIClient:
         """
         
         try:
-            url = f"{self.config.API_ENDPOINT}/global_meta/generate-edge-labels-meta/?table_name={table_name}&injestor_id={ingestor_id}"
+            url = f"{self.config.API_ENDPOINT}/global_meta/generate-edge-labels-meta/?table_name={table_name}&injestor_id={ingestor_id}&data_intent={intent}"
             headers = {
                 "Authorization": f"TOKEN {self.token}"
             }
