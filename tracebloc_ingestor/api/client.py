@@ -170,7 +170,7 @@ class APIClient:
                 logger.error(f"Error response: {e.response.text}")
             return False
 
-    def prepare_dataset(self, category: str, ingestor_id: str, data_format: str) -> bool:
+    def prepare_dataset(self, category: str, ingestor_id: str, data_format: str, intent: str) -> bool:
         """
         Prepare data for a specific category and ingestor.
         
@@ -188,12 +188,12 @@ class APIClient:
             return False
             
         try:
-            url = f"{self.config.API_ENDPOINT}/global_meta/prepare/?category={category}&injestor_id={ingestor_id}&data_format={data_format}"
+            url = f"{self.config.API_ENDPOINT}/global_meta/prepare/?category={category}&injestor_id={ingestor_id}&data_format={data_format}&data_intent={intent}"
             headers = {
                 "Authorization": f"TOKEN {self.token}"
             }
             
-            logger.info(f"Sending prepare request for category: {category}, injester_id: {ingestor_id}, data_format: {data_format}")
+            logger.info(f"Sending prepare request for category: {category}, injester_id: {ingestor_id}, data_format: {data_format} , data_intent: {intent}")
             response = self.session.get(url, headers=headers, timeout=API_TIMEOUT)
             
             response.raise_for_status()

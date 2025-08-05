@@ -313,7 +313,7 @@ class BaseIngestor(ABC):
                     if self.api_client.send_global_meta_meta(self.table_name, schema_dict):
 
                         # Prepare dataset
-                        if self.api_client.prepare_dataset(self.category, self.ingestor_id, self.data_format):
+                        if self.api_client.prepare_dataset(self.category, self.ingestor_id, self.data_format, self.intent):
 
                             self.api_client.create_dataset(category=self.category, ingestor_id=self.ingestor_id)
 
