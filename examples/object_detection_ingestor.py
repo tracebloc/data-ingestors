@@ -489,9 +489,9 @@ def main():
             table_name=config.TABLE_NAME,
             schema=schema,
             category=DataCategory.OBJECT_DETECTION,
+            data_format=DataFormat.IMAGE,
             intent=Intent.TEST,
             processors=[object_detection_processor],
-            data_format=DataFormat.IMAGE,
         )
 
         # Ingest data

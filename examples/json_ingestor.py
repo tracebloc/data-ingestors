@@ -12,7 +12,7 @@ from typing import Dict, Any
 from tracebloc_ingestor import Config, Database, APIClient, JSONIngestor
 from tracebloc_ingestor.processors.base import BaseProcessor
 from tracebloc_ingestor.utils.logging import setup_logging
-from tracebloc_ingestor.utils.constants import DataCategory, Intent
+from tracebloc_ingestor.utils.constants import DataCategory, Intent, DataFormat
 
 # Initialize config and configure logging
 config = Config()
@@ -139,6 +139,7 @@ def main():
             table_name=config.TABLE_NAME,
             schema=schema,
             category=DataCategory.TABULAR_CLASSIFICATION,
+            data_format=DataFormat.IMAGE,
             json_options=json_options,
             processors=[data_normalizer],
             unique_id_column="id",
