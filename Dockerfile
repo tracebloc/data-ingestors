@@ -8,14 +8,15 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y netcat-traditional
 
 # Install data ingestor package
-<for dev: RUN pip install git+https://<user-token>:x-oauth-basic@github.com/tracebloc/data-ingestors.git@develop#egg=tracebloc_ingestor>
-<for prod: RUN pip install tracebloc_ingestor>
+RUN pip install git+https://<user-token>:x-oauth-basic@github.com/tracebloc/data-ingestors.git@develop#egg=tracebloc_ingestor> # for dev
+# <for prod: RUN pip install tracebloc_ingestor>
 
 # Create necessary directories
-RUN mkdir -p <directories>
+RUN mkdir -p /app/data
 
 # Copy the source code and requirements
-<commands for copying all neccessary files and folder
+COPY /data/X_train.csv /app/data/X_test.csv
+COPY /examples/csv_ingestor.py /app/csv_ingestor.py
 
 # Set environment variables
 ENV PYTHONPATH=/app
