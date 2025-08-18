@@ -2,12 +2,13 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: ingestor-job
+  namespace: <NAMESPACE>
 spec:
   template:
     spec:
       containers:
       - name: api
-        image: company/your_image_name:latest
+        image: <YOUR_DOCKER_USER>/<YOUR_IMAGE_NAME>:latest
         imagePullPolicy: Always
         volumeMounts:
           - name: shared-volume
@@ -20,17 +21,17 @@ spec:
         - name: CLIENT_PASSWORD
           value: ""
         - name: CLIENT_PVC
-          value: "shared-pvc"
+          value: "shared-pvc-16"
         - name: MYSQL_HOST
-          value: "mysql"
+          value: "mysql-16"
         - name: SRC_PATH
           value: "/data/shared/"
         - name: LABEL_FILE
-          value: "/data/shared/sample.csv" # csv or json file path is mandatory
+          value: "/data/shared/sample.csv" # path to local csv or json file
         - name: COMPANY
           value: "ABC_MC"
         - name: TABLE_NAME
-          value: "table_name"
+          value: "table_name" # unique table name
         - name: TITLE
           value: "dataset title" # Optional: provide a title for the dataset
       imagePullSecrets:
@@ -38,5 +39,5 @@ spec:
       volumes:
         - name: shared-volume
           persistentVolumeClaim:
-            claimName: shared-pvc
+            claimName: shared-pvc-16
       restartPolicy: Never
