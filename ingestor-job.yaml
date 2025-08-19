@@ -12,28 +12,28 @@ spec:
         imagePullPolicy: Always
         volumeMounts:
           - name: shared-volume
-            mountPath: "/data/shared"
+            mountPath: "/data/shared-data" # Storage path within the client cluster (not the ingestor path). The data ingestor will copy all images and text files to that location.
         env:
         - name: CLIENT_ENV
           value: "prod"
         - name: CLIENT_ID
-          value: "edgeuser"
+          value: <YOUR_CLIENT_ID>
         - name: CLIENT_PASSWORD
-          value: ""
+          value: <YOUR_CLIENT_PASSWORD>
         - name: CLIENT_PVC
           value: "shared-pvc-16"
         - name: MYSQL_HOST
           value: "mysql-16"
         - name: SRC_PATH
-          value: "/data/shared/"
+          value: "/data" # Source folder path whithin the data ingestor
         - name: LABEL_FILE
-          value: "/data/shared/sample.csv" # path to local csv or json file
+          value: <PATH_TO_LOCAL_LABEL_FILE>  # Example: "/data/labels.csv"
         - name: COMPANY
-          value: "ABC_MC"
+          value: <YOUR_COMPANY_OR_ORGANISATION_NAME>
         - name: TABLE_NAME
-          value: "table_name" # unique table name
+          value: <UNIQUE_TABLE_NAME> # provide a unique table name
         - name: TITLE
-          value: "dataset title" # Optional: provide a title for the dataset
+          value: <DATASET_TITLE> # Optional: provide a title for the dataset
       imagePullSecrets:
       - name: regcred
       volumes:
