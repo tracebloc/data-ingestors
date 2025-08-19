@@ -27,7 +27,7 @@ spec:
         - name: SRC_PATH
           value: "/data" # Source folder path whithin the data ingestor
         - name: LABEL_FILE
-          value: <PATH_TO_LOCAL_LABEL_FILE>  # Example: "/data/labels.csv"
+          value: <PATH_TO_LOCAL_DATASET_FILE>  # Example: "/data/examples.csv"
         - name: COMPANY
           value: <YOUR_COMPANY_OR_ORGANISATION_NAME>
         - name: TABLE_NAME
