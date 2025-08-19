@@ -12,11 +12,11 @@ RUN pip install git+https://<user-token>:x-oauth-basic@github.com/tracebloc/data
 # <for prod: RUN pip install tracebloc_ingestor>
 
 # Create necessary directories
-RUN mkdir -p /app/data
+RUN mkdir -p /app/data # Creates a data storage folder within the cluster where all the ingested data will be stored
 
 # Copy the source code and requirements
-COPY /data/X_train.csv /app/data/X_test.csv
-COPY /examples/csv_ingestor.py /app/csv_ingestor.py
+COPY /data/X_train.csv /app/data/X_train.csv # Copying the data from local to the cluster
+COPY /examples/csv_ingestor.py /app/csv_ingestor.py # Copying the ingestor script from local to the cluster
 
 # Set environment variables
 ENV PYTHONPATH=/app
