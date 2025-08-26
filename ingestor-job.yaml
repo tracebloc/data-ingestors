@@ -20,9 +20,9 @@ spec:
           value: <YOUR_CLIENT_ID>
         - name: CLIENT_PASSWORD
           value: <YOUR_CLIENT_PASSWORD>
-        - name: CLIENT_PVC # Source folder path whithin the data ingestor
+        - name: CLIENT_PVC # value has to match the shared data PVC name in the client values.yaml
           value: "shared-pvc"
-        - name: MYSQL_HOST # Name of the MYSQL_HOST in has to match the mysql deployment name in the client values.yaml.
+        - name: MYSQL_HOST # value has to match the mysql deployment name in the client values.yaml
           value: "mysql"
         - name: SRC_PATH
           value: "/data" # Source folder path whithin the data ingestor
@@ -39,5 +39,5 @@ spec:
       volumes:
         - name: shared-volume
           persistentVolumeClaim:
-            claimName: shared-pvc # Source folder path whithin the data ingestor
+            claimName: shared-pvc # value has to match the shared data PVC name in the client values.yaml
       restartPolicy: Never
