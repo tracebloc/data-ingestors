@@ -2,28 +2,32 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: ingestor-job
-  namespace: <NAMESPACE>
+  namespace: <NAMESPACE> # Use the same namespace as for the client.
 spec:
   template:
     spec:
       containers:
       - name: api
-        image: <YOUR_DOCKER_USER>/<YOUR_IMAGE_NAME>:latest
-        imagePullPolicy: Always
+        image: <YOUR_DOCKER_USER>/<YOUR_IMAGE_NAME>:latest # Your Docker image name and tag
+        imagePullPolicy: Always # Set "Always" for pulling the image from Dockerhub or "IfNotPresent" in case you are working locally.
         volumeMounts:
           - name: shared-volume
             mountPath: "/data/shared-data" # Storage path within the client cluster (not the ingestor path). The data ingestor will copy all images and text files to that location.
         env:
+        # Client credentials 
         - name: CLIENT_ENV
           value: "prod"
-        - name: CLIENT_ID
-          value: <YOUR_CLIENT_ID>
-        - name: CLIENT_PASSWORD
+        - name: CLIENT_ID # Client credentials from tracebloc dashboard
+          value: <YOUR_CLIENT_ID> 
+        - name: CLIENT_PASSWORD # Client credentials from tracebloc dashboard
           value: <YOUR_CLIENT_PASSWORD>
+        # Storage configuration
         - name: CLIENT_PVC # value has to match the shared data PVC name in the client values.yaml
           value: "shared-pvc"
+        # MySQL configuration
         - name: MYSQL_HOST # value has to match the mysql deployment name in the client values.yaml
           value: "mysql"
+        # Dataset information
         - name: SRC_PATH
           value: "/data" # Source folder path whithin the data ingestor
         - name: LABEL_FILE
