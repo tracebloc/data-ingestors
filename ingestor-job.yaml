@@ -22,8 +22,8 @@ spec:
           value: <YOUR_CLIENT_PASSWORD>
         - name: CLIENT_PVC
           value: "shared-pvc-16"
-        - name: MYSQL_HOST
-          value: "mysql-16"
+        - name: MYSQL_HOST # Name of the MYSQL_HOST in has to match the mysql deployment name in the client values.yaml.
+          value: "mysql-client"
         - name: SRC_PATH
           value: "/data" # Source folder path whithin the data ingestor
         - name: LABEL_FILE
