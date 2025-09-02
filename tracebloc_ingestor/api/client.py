@@ -90,7 +90,7 @@ class APIClient:
             )
             
             response.raise_for_status()
-            logger.info(f"Successfully sent batch. Response: {response.json()}")
+            # logger.info(f"Successfully sent batch. Response: {response.json()}")
             return True
             
         except requests.exceptions.RequestException as e:
