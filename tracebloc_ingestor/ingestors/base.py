@@ -357,7 +357,7 @@ class BaseIngestor(ABC):
         try:
             # Insert batch and get IDs
             ids, db_failures = self.database.insert_batch(self.table_name, batch)
-
+            api_success = False
             # Send to API with ingestor_id
             if ids:  # Only send to API if we have valid IDs
                 api_success = self.api_client.send_batch(
