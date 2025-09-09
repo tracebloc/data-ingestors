@@ -29,7 +29,7 @@ spec:
           value: "mysql"
         # Dataset information
         - name: SRC_PATH
-          value: "/data" # Source folder path whithin the data ingestor
+          value: "/data" # Source folder path whithin the data ingestor e.g. to images
         - name: LABEL_FILE
           value: <PATH_TO_LOCAL_DATASET_FILE>  # Example: "/data/examples.csv"
         - name: COMPANY
