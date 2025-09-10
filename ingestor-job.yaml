@@ -40,6 +40,8 @@ spec:
           value: <DATASET_TITLE> # Optional: provide a title for the dataset
       imagePullSecrets:
       - name: regcred
+      nodeSelector:
+        type: system
       volumes:
         - name: shared-volume
           persistentVolumeClaim:
