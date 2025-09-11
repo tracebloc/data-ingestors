@@ -13,7 +13,6 @@ from pathlib import Path
 from .base import BaseIngestor
 from ..database import Database
 from ..api.client import APIClient
-from ..processors.base import BaseProcessor
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +35,6 @@ class JSONIngestor(BaseIngestor):
         api_client: APIClient,
         table_name: str,
         schema: Dict[str, str],
-        processors: Optional[List[BaseProcessor]] = None,
         max_retries: int = 3,
         json_options: Optional[Dict[str, Any]] = None,
         unique_id_column: Optional[str] = None,
@@ -53,7 +51,6 @@ class JSONIngestor(BaseIngestor):
             api_client: API client instance for data transmission
             table_name: Name of the target table
             schema: Database schema definition
-            processors: List of data processors to apply
             max_retries: Maximum number of retry attempts
             json_options: Additional options for JSON processing
             unique_id_column: Name of the column to use as unique identifier
@@ -68,7 +65,6 @@ class JSONIngestor(BaseIngestor):
             api_client, 
             table_name, 
             schema, 
-            processors, 
             max_retries,
             unique_id_column,
             label_column,

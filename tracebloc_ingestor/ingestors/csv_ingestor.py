@@ -12,7 +12,6 @@ from pathlib import Path
 from .base import BaseIngestor
 from ..database import Database
 from ..api.client import APIClient
-from ..processors.base import BaseProcessor
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +34,6 @@ class CSVIngestor(BaseIngestor):
         api_client: APIClient,
         table_name: str,
         schema: Dict[str, str],
-        processors: Optional[List[BaseProcessor]] = None,
         max_retries: int = 3,
         csv_options: Optional[Dict[str, Any]] = None,
         unique_id_column: Optional[str] = None,
@@ -52,7 +50,6 @@ class CSVIngestor(BaseIngestor):
             api_client: API client instance for data transmission
             table_name: Name of the target table
             schema: Database schema definition
-            processors: List of data processors to apply
             max_retries: Maximum number of retry attempts
             csv_options: Additional options for pandas read_csv
             unique_id_column: Name of the column to use as unique identifier
@@ -67,7 +64,6 @@ class CSVIngestor(BaseIngestor):
             api_client, 
             table_name, 
             schema, 
-            processors, 
             max_retries,
             unique_id_column,
             label_column,

@@ -11,7 +11,6 @@ import os
 import uuid
 
 from ..database import Database
-from ..processors.base import BaseProcessor
 from ..api.client import APIClient
 from ..utils.logging import setup_logging
 from ..config import Config
@@ -56,7 +55,6 @@ class BaseIngestor(ABC):
         api_client: API client for sending data
         table_name: Name of the target database table
         schema: Database schema definition
-        processors: List of data processors to apply
         max_retries: Maximum number of retry attempts
         unique_id_column: Column name for unique identifiers
         label_column: Column name for labels
@@ -70,7 +68,6 @@ class BaseIngestor(ABC):
                  api_client: APIClient,
                  table_name: str,
                  schema: Dict[str, str],
-                 processors: List[BaseProcessor] = None,
                  max_retries: int = 3,
                  unique_id_column: Optional[str] = None,
                  label_column: Optional[str] = None,
@@ -86,7 +83,6 @@ class BaseIngestor(ABC):
             api_client: API client instance for data transmission
             table_name: Name of the target table
             schema: Database schema definition
-            processors: List of data processors to apply
             max_retries: Maximum number of retry attempts
             unique_id_column: Name of the column to use as unique identifier
             label_column: Name of the column to use as label
@@ -103,7 +99,6 @@ class BaseIngestor(ABC):
         self.api_client = api_client
         self.table_name = table_name
         self.schema = schema
-        self.processors = processors or []
         self.max_retries = max_retries
         self.unique_id_column = unique_id_column
         self.label_column = label_column
@@ -167,7 +162,7 @@ class BaseIngestor(ABC):
             return None
 
     def process_record(self, record: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Process a single record through all processors"""
+        """Process a single record"""
         try:
             # Clean data according to schema
             cleaned_record = {
@@ -183,10 +178,6 @@ class BaseIngestor(ABC):
             
             if cleaned_record is None:
                 return None
-                
-            # Apply all processors
-            for processor in self.processors:
-                cleaned_record = processor.process(cleaned_record)
             
             # Add ingestor_id to the record
             cleaned_record['ingestor_id'] = self.ingestor_id
@@ -346,11 +337,7 @@ class BaseIngestor(ABC):
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Cleanup when used as context manager"""
-        for processor in self.processors:
-            try:
-                processor.cleanup()
-            except Exception as e:
-                logger.error(f"Error during processor cleanup: {str(e)}") 
+        pass 
 
     def _process_batch(self, batch: List[Dict[str, Any]], session: Session) -> List[int]:
         """
