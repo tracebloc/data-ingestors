@@ -5,10 +5,9 @@ and optionally send it to an API. It handles base64 encoded binary data and incl
 validation and processing of binary content.
 """
 
-import base64
+import os
 import json
 import logging
-from pathlib import Path
 from typing import Dict, Any
 
 from tracebloc_ingestor import Config, Database, APIClient, CSVIngestor
@@ -28,16 +27,16 @@ class BlobDataProcessor(BaseProcessor):
     and ensures proper formatting of metadata.
     """
     
-    def __init__(self, config: Config, storage_path: str):
+    def __init__(self, config: Config):
         """Initialize the blob data processor.
         
         Args:
             config: Configuration object
-            storage_path: Path to store temporary files if needed
         """
         super().__init__(config)
-        self.storage_path = Path(storage_path)
-        self.storage_path.mkdir(parents=True, exist_ok=True)
+        self.config = config
+        # Create destination directory if it doesn't exist
+        os.makedirs(self.config.DEST_PATH, exist_ok=True)
         
     def process(self, record: Dict[str, Any]) -> Dict[str, Any]:
         """Process blob data in the record.
@@ -63,9 +62,6 @@ class BlobDataProcessor(BaseProcessor):
                 try:
                     if not isinstance(record['document_data'], str):
                         raise ValueError("document_data must be a string")
-                    # Remove any whitespace or newlines that might have been added
-                    clean_data = record['document_data'].strip()
-                    record['document_data'] = base64.b64decode(clean_data)
                 except Exception as e:
                     raise ValueError(f"Invalid base64 data for document: {str(e)}")
             
@@ -74,9 +70,6 @@ class BlobDataProcessor(BaseProcessor):
                 try:
                     if not isinstance(record['thumbnail'], str):
                         raise ValueError("thumbnail must be a string")
-                    # Remove any whitespace or newlines that might have been added
-                    clean_thumb = record['thumbnail'].strip()
-                    record['thumbnail'] = base64.b64decode(clean_thumb)
                 except Exception as e:
                     raise ValueError(f"Invalid base64 data for thumbnail: {str(e)}")
             else:
@@ -138,7 +131,7 @@ def main():
         }
 
         # Create blob data processor
-        blob_processor = BlobDataProcessor(config=config, storage_path=config.STORAGE_PATH)
+        blob_processor = BlobDataProcessor(config=config)
 
         # Create ingestor with blob processor
         ingestor = CSVIngestor(
@@ -153,14 +146,13 @@ def main():
             processors=[blob_processor]
         )
 
-        # Get the example data path
-        data_path = Path(__file__).parent / "data" / "text_classification_sample.csv"
-        
+        # use example file: "examples/data/text_classification_sample.csv"
+
         # Ingest data
         with ingestor:
             failed_records = ingestor.ingest(
-                str(data_path),
-                batch_size=25  # Smaller batch size due to larger data
+                config.LABEL_FILE,
+                batch_size=config.BATCH_SIZE  # Smaller batch size due to larger data
             )
             
             if failed_records:

@@ -18,6 +18,10 @@ config = Config()
 setup_logging(config)
 logger = logging.getLogger(__name__)
 
+# Initialize components
+database = Database(config)
+api_client = APIClient(config)
+
 class UpperCaseProcessor(BaseProcessor):
     """Processor that converts specified column values to uppercase."""
     
@@ -80,9 +84,6 @@ class EmailDomainProcessor(BaseProcessor):
 def main():
     """Run the custom processor example."""
     try:
-        # Initialize components
-        database = Database(config)
-        api_client = APIClient(config)
 
         # Schema definition with constraints
         schema = {
@@ -112,12 +113,11 @@ def main():
             intent=Intent.TRAIN
         )
 
-        # Get the example data path
-        data_path = Path(__file__).parent / "data" / "tabular_classification_sample_in_csv_format.csv"
+        # use example file: "examples/data/tabular_classification_sample_in_csv_format.csv"
         
         # Ingest data
         with ingestor:
-            failed_records = ingestor.ingest(str(data_path), batch_size=config.BATCH_SIZE)
+            failed_records = ingestor.ingest(config.LABEL_FILE, batch_size=config.BATCH_SIZE)
             if failed_records:
                 logger.warning(f"Failed to process {len(failed_records)} records")
             else:

@@ -6,7 +6,6 @@ that normalizes data types and formats.
 """
 
 import logging
-from pathlib import Path
 from typing import Dict, Any
 
 from tracebloc_ingestor import Config, Database, APIClient, JSONIngestor
@@ -18,6 +17,10 @@ from tracebloc_ingestor.utils.constants import DataCategory, Intent, DataFormat
 config = Config()
 setup_logging(config)
 logger = logging.getLogger(__name__)
+
+# Initialize components
+database = Database(config)
+api_client = APIClient(config)
 
 class DataNormalizer(BaseProcessor):
     """Processor that normalizes data types and formats.
@@ -47,22 +50,14 @@ class DataNormalizer(BaseProcessor):
             ValueError: If data normalization fails
         """
         try:
-            # Normalize string fields
             if 'email' in record:
-                if not isinstance(record['email'], str):
-                    raise ValueError("email must be a string")
-                record['email'] = record['email'].lower().strip()
-                if not record['email']:
-                    raise ValueError("email cannot be empty")
+                if record['email'] == "" or not isinstance(record['email'], str):
+                    raise ValueError("email cannot be empty and must be a string")
                 
             if 'name' in record:
-                if not isinstance(record['name'], str):
-                    raise ValueError("name must be a string")
-                record['name'] = record['name'].strip()
-                if not record['name']:
-                    raise ValueError("name cannot be empty")
+                if record['name'] == "" or not isinstance(record['name'], str):
+                    raise ValueError("name cannot be empty and must be a string")
                 
-            # Normalize numeric fields
             if 'age' in record:
                 try:
                     record['age'] = int(record['age'])
@@ -71,19 +66,11 @@ class DataNormalizer(BaseProcessor):
                 except (ValueError, TypeError):
                     raise ValueError("age must be a valid integer")
                 
-            # Normalize boolean fields
-            if 'is_active' in record:
-                if isinstance(record['is_active'], str):
-                    record['is_active'] = record['is_active'].lower() in ('true', '1', 'yes')
-                else:
-                    record['is_active'] = bool(record['is_active'])
-                
             # Normalize date fields
             if 'created_at' in record:
                 if not isinstance(record['created_at'], str):
                     raise ValueError("created_at must be a string")
-                record['created_at'] = record['created_at'].strip()
-                
+
             # Normalize metadata
             if 'metadata' in record:
                 if isinstance(record['metadata'], dict):
@@ -95,10 +82,6 @@ class DataNormalizer(BaseProcessor):
             return record
         except Exception as e:
             raise ValueError(f"Error normalizing data: {str(e)}")
-            
-    def cleanup(self):
-        """Cleanup any temporary files if needed."""
-        pass
 
 def main():
     """Run the JSON ingestion example."""
@@ -148,12 +131,11 @@ def main():
             annotation_column="metadata"
         )
 
-        # Get the example data path
-        data_path = Path(__file__).parent / "data" / "tabular_classification_sample_in_json_format.json"
+        # use example file: "examples/data/tabular_classification_sample_in_json_format.json"
         
         # Ingest data
         with ingestor:
-            failed_records = ingestor.ingest(str(data_path), batch_size=config.BATCH_SIZE)
+            failed_records = ingestor.ingest(config.LABEL_FILE, batch_size=config.BATCH_SIZE)
             if failed_records:
                 logger.warning(f"Failed to process {len(failed_records)} records")
                 for record in failed_records:

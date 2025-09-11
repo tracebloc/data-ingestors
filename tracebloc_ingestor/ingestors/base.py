@@ -15,7 +15,7 @@ from ..processors.base import BaseProcessor
 from ..api.client import APIClient
 from ..utils.logging import setup_logging
 from ..config import Config
-from ..utils.constants import DataCategory, Intent
+from ..utils.constants import TaskCategory, Intent
 
 # Configure unified logging with config
 config = Config()
@@ -34,12 +34,14 @@ class IngestionSummary(NamedTuple):
         inserted_records: Number of records inserted into database
         api_sent_records: Number of records sent to API
         failed_records: Number of records that failed processing
+        skipped_records: Number of records that were skipped
     """
     total_records: int
     processed_records: int
     inserted_records: int
     api_sent_records: int
     failed_records: int
+    skipped_records: int
 
 class BaseIngestor(ABC):
     """Base class for all data ingestors.
@@ -109,6 +111,7 @@ class BaseIngestor(ABC):
         self.annotation_column = annotation_column
         self.category = category
         self.data_format = data_format
+        
         # Ensure table exists
         self.table = self.database.create_table(table_name, schema)
        
@@ -151,7 +154,7 @@ class BaseIngestor(ABC):
             cleaned_record['annotation'] = record.get(self.annotation_column)
 
         if not self.unique_id_column:
-            logger.warning("No unique ID column specified, generating unique ID mapping")
+            # logger.warning("No unique ID column specified, generating unique ID mapping")
             cleaned_record['data_id'] = str(uuid.uuid4())
             return cleaned_record
             
@@ -236,7 +239,8 @@ class BaseIngestor(ABC):
             'processed_records': 0,
             'inserted_records': 0,
             'api_sent_records': 0,
-            'failed_records': 0
+            'failed_records': 0,
+            'skipped_records': 0
         }
         
         # Try to get total count for progress bar
@@ -256,32 +260,41 @@ class BaseIngestor(ABC):
                 )
                 
                 for record in self.read_data(source):
-                    stats['total_records'] += 0 if total else 1  # Increment if total wasn't pre-counted
+                    stats['total_records'] += 0 if total else 1
                     
-                    processed_record = self.process_record(record)
-                    if processed_record:
-                        stats['processed_records'] += 1
-                        batch.append(processed_record)
-                        
-                        if len(batch) >= batch_size:
-                            try:
-                                inserted_ids, api_success, db_failures = self._process_batch(batch, session)
-                                # Only count records that were successfully inserted
-                                if inserted_ids:
-                                    stats['inserted_records'] += len(inserted_ids)
-                                if api_success:
-                                    stats['api_sent_records'] += len(inserted_ids)
-                                if db_failures:
-                                    stats['failed_records'] += len(db_failures)
-                                    failed_records.extend(db_failures)
-                            except Exception as e:
-                                logger.error(f"Batch processing failed: {str(e)}")
-                            finally:
-                                pbar.update(len(batch))
-                                batch = []
-                    else:
-                        stats['skipped_records'] += 1
-                        pbar.update(1)  # Update progress bar for skipped records
+                    try:
+                        processed_record = self.process_record(record)
+                        if processed_record:
+                            stats['processed_records'] += 1
+                            batch.append(processed_record)
+                            
+                            if len(batch) >= batch_size:
+                                try:
+                                    inserted_ids, api_success, db_failures = self._process_batch(batch, session)
+                                    # Only count records that were successfully inserted
+                                    if inserted_ids:
+                                        stats['inserted_records'] += len(inserted_ids)
+                                    if api_success:
+                                        stats['api_sent_records'] += len(inserted_ids)
+                                    if db_failures:
+                                        stats['failed_records'] += len(db_failures)
+                                        failed_records.extend(db_failures)
+                                except Exception as e:
+                                    logger.error(f"Batch processing failed: {str(e)}")
+                                finally:
+                                    pbar.update(len(batch))
+                                    batch = []
+                        else:
+                            stats['skipped_records'] += 1
+                            pbar.update(1)  # Update progress bar for skipped records
+                    except Exception as e:
+                        # Count processing errors (including missing columns) as failed records
+                        stats['failed_records'] += 1
+                        failed_records.append({
+                            'record': record,
+                            'error': str(e)
+                        })
+                        pbar.update(1)
                 
                 # Process remaining records
                 if batch:
@@ -309,7 +322,6 @@ class BaseIngestor(ABC):
                     # schema dict
                     schema_dict = self.database.get_table_schema(self.table_name)
                     # Send global metadata
-                    time.sleep(120)
                     if self.api_client.send_global_meta_meta(self.table_name, schema_dict):
 
                         # Prepare dataset
@@ -382,6 +394,7 @@ class BaseIngestor(ABC):
         logger.info(f"Inserted to Database:    {summary.inserted_records:,}")
         logger.info(f"Sent to API:            {summary.api_sent_records:,}")
         logger.info(f"Failed Records:          {summary.failed_records:,}")
+        logger.info(f"Skipped Records:          {summary.skipped_records:,}")
         logger.info("="*50)
         
         # Calculate success rate

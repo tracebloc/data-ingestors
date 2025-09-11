@@ -16,7 +16,7 @@ from ..processors.base import BaseProcessor
 
 logger = logging.getLogger(__name__)
 
-__all__ = ['CSVIngestor']
+__all__ = ['Ingestor']
 
 class CSVIngestor(BaseIngestor):
     """A specialized ingestor for CSV files.

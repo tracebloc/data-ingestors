@@ -100,7 +100,7 @@ class JSONIngestor(BaseIngestor):
         missing_fields = schema_fields - record_fields
         if missing_fields:
             logger.warning(f"Schema fields not present in JSON record: {', '.join(missing_fields)}")
-            
+        
         # Validate unique_id_column exists if specified
         if self.unique_id_column and self.unique_id_column not in record:
             raise ValueError(f"Specified unique_id_column '{self.unique_id_column}' not found in record")

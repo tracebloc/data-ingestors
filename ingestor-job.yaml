@@ -1,43 +1,40 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: ingestor-job
-  namespace: <NAMESPACE> # Use the same namespace as for the client.
+  name: ingestor-job-train-data # train/test switch
+  namespace: tracebloc-templates
 spec:
   template:
     spec:
       containers:
       - name: api
-        image: <YOUR_DOCKER_USER>/<YOUR_IMAGE_NAME>:latest # Your Docker image name and tag
-        imagePullPolicy: Always # Set "Always" for pulling the image from Dockerhub or "IfNotPresent" in case you are working locally.
+        image: moritz000/csv-templates-ingestor-claims-train:latest # train/test switch
+        imagePullPolicy: Always
         volumeMounts:
           - name: shared-volume
-            mountPath: "/data/shared-data" # Storage path within the client cluster (not the ingestor path). The data ingestor will copy all images and text files to that location.
+            mountPath: "/data/shared/" # Storage path within the client cluster (not the ingestor path). The data ingestor will copy all images and text files to that location.
         env:
         # Client credentials 
         - name: CLIENT_ENV
-          value: "prod"
-        - name: CLIENT_ID # Client credentials from tracebloc dashboard
-          value: <YOUR_CLIENT_ID> 
-        - name: CLIENT_PASSWORD # Client credentials from tracebloc dashboard
-          value: <YOUR_CLIENT_PASSWORD>
-        # Storage configuration
-        - name: CLIENT_PVC # value has to match the shared data PVC name in the client values.yaml
+          value: "dev"
+        - name: CLIENT_ID
+          value: "08ec78b9-871c-4fe1-8414-6a0ab3d268e3"
+        - name: CLIENT_PASSWORD
+          value: "2unfcsowu4fh!8Uxz23fj"
+        - name: CLIENT_PVC
           value: "shared-pvc"
-        # MySQL configuration
-        - name: MYSQL_HOST # value has to match the mysql deployment name in the client values.yaml
+        - name: MYSQL_HOST
           value: "mysql"
-        # Dataset information
         - name: SRC_PATH
-          value: "/data" # Source folder path whithin the data ingestor e.g. to images
+          value: "/data" # Source folder path whithin the data ingestor
         - name: LABEL_FILE
-          value: <PATH_TO_LOCAL_DATASET_FILE>  # Example: "/data/examples.csv"
+          value: "/app/data/shared/Xy_train.csv" # train/test switch
         - name: COMPANY
-          value: <YOUR_COMPANY_OR_ORGANISATION_NAME>
+          value: "Template-Use-Cases"
         - name: TABLE_NAME
-          value: <UNIQUE_TABLE_NAME> # provide a unique table name
+          value: "claims_table_train_v2" # train/test switch
         - name: TITLE
-          value: <DATASET_TITLE> # Optional: provide a title for the dataset
+          value: "Insurance Claims" # Optional: provide a title for the dataset
       imagePullSecrets:
       - name: regcred
       nodeSelector:

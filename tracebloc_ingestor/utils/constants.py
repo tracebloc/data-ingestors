@@ -22,7 +22,7 @@ class Intent:
         
 
 # Data Categories
-class DataCategory:
+class TaskCategory:
     """
     Enumeration of supported data categories for model training and classification.
     """

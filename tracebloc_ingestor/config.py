@@ -11,13 +11,14 @@ class Config:
     DB_PASSWORD: str = "Edg9@Tr@ce"
     DB_NAME: str = "xraymetadata"
     
-    BATCH_SIZE: int = int(os.getenv("BATCH_SIZE", "10"))
+    BATCH_SIZE: int = int(os.getenv("BATCH_SIZE", "100"))
     
     # Define API endpoints for different environments
     API_ENDPOINTS = {
         "dev": "https://dev-api.tracebloc.io",
         "stg": "https://stg-api.tracebloc.io",
-        "prod": "https://api.tracebloc.io"
+        "prod": "https://api.tracebloc.io",
+        "local": "http://localhost:8000"  # Add local endpoint
     }
     
     # Get environment and set appropriate API endpoint, default to dev

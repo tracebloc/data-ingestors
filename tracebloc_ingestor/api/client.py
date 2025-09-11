@@ -5,7 +5,7 @@ from requests.adapters import HTTPAdapter
 from requests.packages.urllib3.util.retry import Retry
 from ..config import Config
 from ..utils.logging import setup_logging
-from ..utils.constants import DataCategory, API_TIMEOUT, Intent
+from ..utils.constants import TaskCategory, API_TIMEOUT, Intent
 
 # Configure unified logging with config
 config = Config()
@@ -16,7 +16,12 @@ class APIClient:
     def __init__(self, config: Config):
         self.config = config
         self.session = self._create_session()
-        self.token = self.authenticate()
+        # Only authenticate if not in local mode
+        if config.EDGE_ENV != "local":
+            self.token = self.authenticate()
+        else:
+            self.token = "mock_token"
+            logger.info("Skipping API authentication for local mode")
 
     def _create_session(self) -> requests.Session:
         session = requests.Session()
@@ -60,6 +65,11 @@ class APIClient:
         Returns:
             bool: True if successful, False otherwise
         """
+        # Skip API calls in local mode
+        if self.config.EDGE_ENV == "local":
+            logger.info(f"Mock: Would send {len(records)} records to API")
+            return True
+            
         try:
             payload = json.dumps([
                 {
@@ -68,9 +78,7 @@ class APIClient:
                     "data_intent": record_data.get("data_intent", "train"),
                     "label": record_data.get("label", ""),
                     "is_sample": False,
-                    #"is_active": True,
                     "injestor_id": ingestor_id,
-                    # "data": record_data
                 }
                 for _, record_data in records
             ])
@@ -90,7 +98,6 @@ class APIClient:
             )
             
             response.raise_for_status()
-            # logger.info(f"Successfully sent batch. Response: {response.json()}")
             return True
             
         except requests.exceptions.RequestException as e:
@@ -110,6 +117,11 @@ class APIClient:
         Returns:
             bool: True if successful, False otherwise
         """
+        # Skip API calls in local mode
+        if self.config.EDGE_ENV == "local":
+            logger.info(f"Mock: Would send schema for {table_name}")
+            return True
+            
         try:
             payload = json.dumps({
                 "table_name": table_name,
@@ -150,7 +162,11 @@ class APIClient:
         Returns:
             bool: True if successful, False otherwise
         """
-        
+        # Skip API calls in local mode
+        if self.config.EDGE_ENV == "local":
+            logger.info(f"Mock: Would generate edge labels for {table_name}")
+            return True
+            
         try:
             url = f"{self.config.API_ENDPOINT}/global_meta/generate-edge-labels-meta/?table_name={table_name}&injestor_id={ingestor_id}&data_intent={intent}"
             headers = {
@@ -175,15 +191,20 @@ class APIClient:
         Prepare data for a specific category and ingestor.
         
         Args:
-            category: The category of data (must be one of DataCategory values)
+            category: The category of data (must be one of TaskCategory values)
             injester_id: The unique identifier for the injester
             data_format: The format of the data
             
         Returns:
             bool: True if successful, False otherwise
         """
-        if not DataCategory.is_valid_category(category):
-            print(f"return {DataCategory.is_valid_category(category)} for input : {category}")
+        # Skip API calls in local mode
+        if self.config.EDGE_ENV == "local":
+            logger.info(f"Mock: Would prepare dataset {category}")
+            return True
+            
+        if not TaskCategory.is_valid_category(category):
+            print(f"return {TaskCategory.is_valid_category(category)} for input : {category}")
             logger.error(f"Invalid category: {category}")
             return False
             
@@ -222,6 +243,11 @@ class APIClient:
         Raises:
             requests.exceptions.RequestException: If the API request fails
         """
+        # Skip API calls in local mode
+        if self.config.EDGE_ENV == "local":
+            logger.info(f"Mock: Would create dataset {category}")
+            return {"id": "mock_dataset_id", "title": "Mock Dataset"}
+            
         try:
             # Generate title from category and ingestor_id if not provided
             if config.TITLE is None:
@@ -229,7 +255,7 @@ class APIClient:
             else:
                 title = config.TITLE  # Fallback to config title if no ingestor_id
 
-            if category == DataCategory.TABULAR_CLASSIFICATION:
+            if category == TaskCategory.TABULAR_CLASSIFICATION:
                 allow_feature_modification = True
             else:
                 allow_feature_modification = False

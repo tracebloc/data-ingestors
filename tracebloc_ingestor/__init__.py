@@ -8,7 +8,7 @@ ingestors and processors, along with built-in support for common data formats.
 from .config import Config
 from .database import Database
 from .api.client import APIClient
-from .ingestors import BaseIngestor, CSVIngestor, JSONIngestor
+from .ingestors import BaseIngestor,CSVIngestor, JSONIngestor
 from .processors.base import BaseProcessor
 
 __version__ = '0.1.0'
