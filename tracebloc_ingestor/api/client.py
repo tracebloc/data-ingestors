@@ -105,9 +105,10 @@ class APIClient:
             return True
             
         except requests.exceptions.RequestException as e:
-            logger.error(f"Error sending batch to API: {str(e)}")
             if hasattr(e.response, 'text'):
-                logger.error(f"{RED}Error response: {e.response.text}{RESET}")
+                raise ValueError(f"{RED}Error response: {e.response.text}{RESET}")
+            else:
+                raise ValueError(f"{RED}Error sending batch to API: {str(e)}{RESET}")
             return False
 
     def send_global_meta_meta(self, table_name: str, schema: Dict[str, str]) -> bool:
