@@ -25,8 +25,7 @@ database = Database(config)
 
 # Schema definition for segmentation data with constraints
 schema = {
-    "image_id": "VARCHAR(255) NOT NULL",
-    "image_label": "VARCHAR(50) NOT NULL",
+    "filename": "VARCHAR(255) NOT NULL"
 }
 
 # Image specific options including CSV options

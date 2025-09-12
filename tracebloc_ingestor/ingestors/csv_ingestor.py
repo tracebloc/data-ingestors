@@ -102,7 +102,7 @@ class CSVIngestor(BaseIngestor):
         # Log which schema columns are not in the CSV (for information only)
         missing_columns = set(self.schema.keys()) - set(df.columns)
         if missing_columns:
-            logger.warning(f"{YELLOW}Schema columns not present in CSV: {', '.join(missing_columns)}{RESET}")
+            raise ValueError(f"{RED}Schema columns not present in CSV: {', '.join(missing_columns)}{RESET}")
             
         # Type validation using pandas dtypes - only for columns that exist in the CSV
         for column in common_columns:
@@ -177,8 +177,7 @@ class CSVIngestor(BaseIngestor):
             logger.warning(f"{YELLOW}Empty CSV file: {file_path}{RESET}")
             return
             
-        except (pd.errors.ParserError, Exception) as e:
-            logger.error(f"{RED}Error reading CSV file: {str(e)}{RESET}")
+        except (pd.errors.ParserError, Exception):
             raise
 
     def ingest(self, file_path: str, batch_size: int = 50) -> List[Dict[str, Any]]:

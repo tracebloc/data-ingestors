@@ -16,6 +16,7 @@ from ..utils.logging import setup_logging
 from ..config import Config
 from ..utils.constants import Intent, RESET, BOLD, GREEN, RED, YELLOW, BLUE, CYAN
 from ..utils.validators_mapping import map_validators
+from ..file_transfer import map_file_transfer
 
 # Configure unified logging with config
 config = Config()
@@ -217,8 +218,6 @@ class BaseIngestor(ABC):
                 logger.info(f"{CYAN}Running validator: {validator.name}{RESET}")
                 result = validator.validate(source)
 
-                print(result)
-
                 if not result.is_valid:
                     all_valid = False
                     validation_errors.append(f"{BOLD}{validator.name} Validator failed: {RESET} \n {RED}")
@@ -324,6 +323,7 @@ class BaseIngestor(ABC):
                         processed_record = self.process_record(record)
                         if processed_record:
                             stats['processed_records'] += 1
+                            file_transfer = map_file_transfer(self.category, processed_record, self.file_options)
                             batch.append(processed_record)
                             
                             if len(batch) >= batch_size:
