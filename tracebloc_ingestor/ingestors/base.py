@@ -37,6 +37,7 @@ class IngestionSummary(NamedTuple):
         failed_records: Number of records that failed processing
         skipped_records: Number of records that were skipped
     """
+    ingestor_id: str
     total_records: int
     processed_records: int
     inserted_records: int
@@ -290,6 +291,7 @@ class BaseIngestor(ABC):
         
         # Statistics tracking
         stats = {
+            'ingestor_id': self.ingestor_id,
             'total_records': 0,
             'processed_records': 0,
             'inserted_records': 0,
@@ -451,27 +453,24 @@ class BaseIngestor(ABC):
         print(f"\n{CYAN}{'═'*60}{RESET}")
         print(f"{BOLD}{CYAN}📊 INGESTION SUMMARY 📊{RESET}")
         print(f"{CYAN}{'═'*60}{RESET}")
-        
+        print(f"{BOLD}Ingestor ID:{RESET}                {BLUE}{summary.ingestor_id}{RESET}")
         # Main statistics with icons and colors
         print(f"{BOLD}📈 Total Records Found:{RESET}     {BLUE}{summary.total_records:,}{RESET}")
         print(f"{BOLD}✅ Successfully Processed:{RESET}  {GREEN}{summary.processed_records:,}{RESET}")
         print(f"{BOLD}💾 Inserted to Database:{RESET}    {GREEN}{summary.inserted_records:,}{RESET}")
-        print(f"{BOLD}🚀 Sent to API:{RESET}            {GREEN}{summary.api_sent_records:,}{RESET}")
-        print(f"{BOLD}❌ Failed Records:{RESET}          {RED}{summary.failed_records:,}{RESET}")
-        print(f"{BOLD}⏭️  Skipped Records:{RESET}          {YELLOW}{summary.skipped_records:,}{RESET}")
-        
+        print(f"{BOLD}🚀 Sent to API:{RESET}             {GREEN}{summary.api_sent_records:,}{RESET}")
+        print(f"{BOLD}⏭️  Skipped Records:{RESET}        {YELLOW}{summary.skipped_records:,}{RESET}")
+        print(f"{BOLD}❌ Failed DB Insertion:{RESET}     {RED}{summary.failed_records:,}{RESET}")
+        print(f"{BOLD}❌ Failed to Send to API:{RESET}   {RED}{(summary.total_records - summary.api_sent_records):,}{RESET}")
         print(f"{CYAN}{'─'*60}{RESET}")
         
         # Success rate with visual indicator
         if summary.total_records > 0:
-            rate_emoji = "🎉" if success_rate >= 95 else "👍" if success_rate >= 80 else "⚠️" if success_rate >= 60 else "❌"
-            print(f"{BOLD}{rate_emoji} Success Rate:{RESET} {status_color}{success_rate:.2f}%{RESET}")
-            
             # Progress bar
             bar_length = 30
             filled_length = int(bar_length * success_rate / 100)
             bar = "█" * filled_length + "░" * (bar_length - filled_length)
-            print(f"{BOLD}📊 Progress:{RESET} [{status_color}{bar}{RESET}] {status_color}{success_rate:.1f}%{RESET}")
+            print(f"{BOLD}📊 Success Rate:{RESET} [{status_color}{bar}{RESET}] {status_color}{success_rate:.1f}%{RESET}")
         
         # Status message
         if success_rate >= 95:
