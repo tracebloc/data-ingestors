@@ -123,3 +123,28 @@ class ImageExtension:
         Check if a given extension is valid.
         """
         return extension in cls.get_all_extensions()
+
+
+class LogLevel:
+    """
+    Enumeration of supported log levels.
+    """
+    DEBUG = 10
+    INFO = 20
+    WARNING = 30
+    ERROR = 40
+    CRITICAL = 50
+
+    LEVEL_CODES = {
+        "DEBUG": DEBUG,
+        "INFO": INFO,
+        "WARNING": WARNING,
+        "ERROR": ERROR,
+        "CRITICAL": CRITICAL
+    }
+    @classmethod
+    def get_level_code(cls, level: str) -> int:
+        """
+        Get the level code for a given level.
+        """
+        return cls.LEVEL_CODES.get(level, cls.WARNING)

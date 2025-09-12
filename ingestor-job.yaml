@@ -35,6 +35,10 @@ spec:
           value: "claims_table_train_v2" # train/test switch
         - name: TITLE
           value: "Insurance Claims" # Optional: provide a title for the dataset
+        - name: BATCH_SIZE
+          value: "4000"
+        - name: LOG_LEVEL
+          value: "WARNING"
       imagePullSecrets:
       - name: regcred
       nodeSelector:

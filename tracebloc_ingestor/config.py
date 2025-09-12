@@ -1,7 +1,7 @@
 from typing import Dict, Any, Optional
 import os
 from dataclasses import dataclass
-import logging
+from .utils.constants import LogLevel
 
 @dataclass
 class Config:
@@ -37,6 +37,4 @@ class Config:
     TITLE: str = os.getenv("TITLE", "Image training data")
     
     # Logging configuration
-    LOG_LEVEL: int = int(os.getenv("LOG_LEVEL", str(logging.WARNING)))
-    LOG_FORMAT: Optional[str] = os.getenv("LOG_FORMAT", None)
-    LOG_DATE_FORMAT: Optional[str] = os.getenv("LOG_DATE_FORMAT", None)
+    LOG_LEVEL: int = LogLevel.get_level_code(os.getenv("LOG_LEVEL", "INFO"))
