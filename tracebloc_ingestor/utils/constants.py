@@ -88,3 +88,15 @@ class DataFormat:
         Check if a given format is valid.
         """
         return format in cls.get_all_formats()
+
+
+
+
+# ANSI color codes
+RESET = '\033[0m'
+BOLD = '\033[1m'
+GREEN = '\033[92m'
+RED = '\033[91m'
+YELLOW = '\033[93m'
+BLUE = '\033[94m'
+CYAN = '\033[96m'

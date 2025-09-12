@@ -96,13 +96,14 @@ def main():
             data_format=DataFormat.IMAGE,
             category=TaskCategory.IMAGE_CLASSIFICATION,
             csv_options=csv_options,
-            label_column="image_label",
+            label_column="label",
             intent=Intent.TEST,  # Is the data for training or testing
+            log_level=config.LOG_LEVEL,
         )
 
         # Ingest data
         with ingestor:
-            failed_records = ingestor.ingest(config.LABEL_FILE, batch_size=1000)
+            failed_records = ingestor.ingest(config.LABEL_FILE, batch_size=config.BATCH_SIZE)
             if failed_records:
                 logger.warning(f"Failed to process {len(failed_records)} records")
                 for record in failed_records:

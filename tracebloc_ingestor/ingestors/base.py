@@ -14,13 +14,12 @@ from ..database import Database
 from ..api.client import APIClient
 from ..utils.logging import setup_logging
 from ..config import Config
-from ..utils.constants import TaskCategory, Intent
+from ..utils.constants import Intent, RESET, BOLD, GREEN, RED, YELLOW, BLUE, CYAN
 
 # Configure unified logging with config
 config = Config()
 setup_logging(config)
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
 
 __all__ = ['BaseIngestor', 'IngestionSummary']
 
@@ -74,7 +73,8 @@ class BaseIngestor(ABC):
                  intent: Optional[str] = None,
                  annotation_column: Optional[str] = None,
                  category: Optional[str] = None,
-                 data_format: Optional[str] = None
+                 data_format: Optional[str] = None,
+                 log_level: Optional[int] = None
                  ):
         """Initialize the base ingestor.
         
@@ -90,6 +90,7 @@ class BaseIngestor(ABC):
             annotation_column: Name of the column to use as annotation
             category: Category of the data
             data_format: Format of the data
+            log_level: Level of the logger
         Raises:
             ValueError: If unique_id_column is not provided
         """
@@ -106,7 +107,7 @@ class BaseIngestor(ABC):
         self.annotation_column = annotation_column
         self.category = category
         self.data_format = data_format
-        
+        logger.setLevel(log_level)
         # Ensure table exists
         self.table = self.database.create_table(table_name, schema)
        
@@ -367,25 +368,57 @@ class BaseIngestor(ABC):
             return ids if ids else [], api_success, db_failures  # Ensure we always return a list
             
         except Exception as e:
-            logger.error(f"Error processing batch: {str(e)}")
+            logger.error(f"{RED}Error processing batch: {str(e)}{RESET}")
+            if hasattr(e.response, 'text'):
+                logger.error(f"{RED}Error response: {e.response.text}{RESET}")
             raise
 
     def _log_summary(self, summary: IngestionSummary):
-        """Log ingestion summary in a clear, formatted way"""
+        """Log ingestion summary in a clear, formatted way with enhanced visual appeal"""
 
-        logger.info("\n" + "="*50)
-        logger.info("INGESTION SUMMARY")
-        logger.info("="*50)
-        logger.info(f"Total Records Found:     {summary.total_records:,}")
-        logger.info(f"Successfully Processed:  {summary.processed_records:,}")
-        logger.info(f"Inserted to Database:    {summary.inserted_records:,}")
-        logger.info(f"Sent to API:            {summary.api_sent_records:,}")
-        logger.info(f"Failed Records:          {summary.failed_records:,}")
-        logger.info(f"Skipped Records:          {summary.skipped_records:,}")
-        logger.info("="*50)
-        
         # Calculate success rate
+        success_rate = 0
         if summary.total_records > 0:
             success_rate = (summary.inserted_records / summary.total_records) * 100
-            logger.info(f"Success Rate: {success_rate:.2f}%")
-        logger.info("="*50 + "\n") 
+        
+        # Determine overall status color
+        status_color = GREEN if success_rate >= 90 else YELLOW if success_rate >= 70 else RED
+        
+        print(f"\n{CYAN}{'═'*60}{RESET}")
+        print(f"{BOLD}{CYAN}📊 INGESTION SUMMARY 📊{RESET}")
+        print(f"{CYAN}{'═'*60}{RESET}")
+        
+        # Main statistics with icons and colors
+        print(f"{BOLD}📈 Total Records Found:{RESET}     {BLUE}{summary.total_records:,}{RESET}")
+        print(f"{BOLD}✅ Successfully Processed:{RESET}  {GREEN}{summary.processed_records:,}{RESET}")
+        print(f"{BOLD}💾 Inserted to Database:{RESET}    {GREEN}{summary.inserted_records:,}{RESET}")
+        print(f"{BOLD}🚀 Sent to API:{RESET}            {GREEN}{summary.api_sent_records:,}{RESET}")
+        print(f"{BOLD}❌ Failed Records:{RESET}          {RED}{summary.failed_records:,}{RESET}")
+        print(f"{BOLD}⏭️  Skipped Records:{RESET}          {YELLOW}{summary.skipped_records:,}{RESET}")
+        
+        print(f"{CYAN}{'─'*60}{RESET}")
+        
+        # Success rate with visual indicator
+        if summary.total_records > 0:
+            rate_emoji = "🎉" if success_rate >= 95 else "👍" if success_rate >= 80 else "⚠️" if success_rate >= 60 else "❌"
+            print(f"{BOLD}{rate_emoji} Success Rate:{RESET} {status_color}{success_rate:.2f}%{RESET}")
+            
+            # Progress bar
+            bar_length = 30
+            filled_length = int(bar_length * success_rate / 100)
+            bar = "█" * filled_length + "░" * (bar_length - filled_length)
+            print(f"{BOLD}📊 Progress:{RESET} [{status_color}{bar}{RESET}] {status_color}{success_rate:.1f}%{RESET}")
+        
+        # Status message
+        if success_rate >= 95:
+            status_msg = "🎉 Ingestion completed successfully!"
+        elif success_rate >= 80:
+            status_msg = "👍 Most records processed successfully."
+        elif success_rate >= 60:
+            status_msg = "⚠️  Some records failed to process."
+        else:
+            status_msg = "❌ Critical! Many records failed to process."
+        
+        print(f"{CYAN}{'─'*60}{RESET}")
+        print(f"{BOLD}{status_color}{status_msg}{RESET}")
+        print(f"{CYAN}{'═'*60}{RESET}\n") 

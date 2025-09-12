@@ -12,6 +12,8 @@ from pathlib import Path
 from .base import BaseIngestor
 from ..database import Database
 from ..api.client import APIClient
+from ..utils.constants import RESET, RED,YELLOW
+
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +43,8 @@ class CSVIngestor(BaseIngestor):
         intent: Optional[str] = None,
         annotation_column: Optional[str] = None,
         category: Optional[str] = None,
-        data_format: Optional[str] = None
+        data_format: Optional[str] = None,
+        log_level: Optional[int] = None,
     ):
         """Initialize CSV Ingestor.
         
@@ -58,6 +61,7 @@ class CSVIngestor(BaseIngestor):
             annotation_column: Name of the column to use as annotation
             category: Category of the data
             data_format: Format of the data
+            log_level: Level of the logger
         """
         super().__init__(
             database, 
@@ -70,9 +74,11 @@ class CSVIngestor(BaseIngestor):
             intent,
             annotation_column,
             category,
-            data_format
+            data_format,
+            log_level
         )
         self.csv_options = csv_options or {}
+        logger.setLevel(log_level)
         
     def _validate_csv(self, df: pd.DataFrame) -> None:
         """Validate CSV data against schema using pandas functionality.
@@ -93,7 +99,7 @@ class CSVIngestor(BaseIngestor):
         # Log which schema columns are not in the CSV (for information only)
         missing_columns = set(self.schema.keys()) - set(df.columns)
         if missing_columns:
-            logger.warning(f"Schema columns not present in CSV: {', '.join(missing_columns)}")
+            logger.warning(f"{YELLOW}Schema columns not present in CSV: {', '.join(missing_columns)}{RESET}")
             
         # Type validation using pandas dtypes - only for columns that exist in the CSV
         for column in common_columns:
@@ -110,7 +116,7 @@ class CSVIngestor(BaseIngestor):
                 elif 'STRING' in dtype.upper() or 'TEXT' in dtype.upper():
                     df[column] = df[column].astype('string')
             except Exception as e:
-                raise ValueError(f"Data type validation failed for column {column}: {str(e)}")
+                raise ValueError(f"{RED}Data type validation failed for column {column}: {str(e)}{RESET}")
 
     def read_data(self, file_path: str) -> Generator[Dict[str, Any], None, None]:
         """Read and validate CSV file using pandas optimizations.
@@ -132,7 +138,7 @@ class CSVIngestor(BaseIngestor):
         """
         file_path = Path(file_path)
         if not file_path.exists():
-            raise FileNotFoundError(f"CSV file not found: {file_path}")
+            raise FileNotFoundError(f"{RED}CSV file not found: {file_path}{RESET}")
             
         try:
             chunk_size = self.csv_options.pop('chunk_size', 1000)
@@ -156,7 +162,7 @@ class CSVIngestor(BaseIngestor):
                     chunk.columns = chunk.columns.str.strip()
                     self._validate_csv(chunk)
                     if self.unique_id_column and self.unique_id_column not in chunk.columns:
-                        raise ValueError(f"Specified unique_id_column '{self.unique_id_column}' not found in CSV")
+                        raise ValueError(f"{RED}Specified unique_id_column '{self.unique_id_column}' not found in CSV{RESET}")
                     first_chunk = False
                 
                 # Process each row efficiently using itertuples instead of iterrows
@@ -165,11 +171,11 @@ class CSVIngestor(BaseIngestor):
                     yield record
                     
         except pd.errors.EmptyDataError:
-            logger.warning(f"Empty CSV file: {file_path}")
+            logger.warning(f"{YELLOW}Empty CSV file: {file_path}{RESET}")
             return
             
         except (pd.errors.ParserError, Exception) as e:
-            logger.error(f"Error reading CSV file: {str(e)}")
+            logger.error(f"{RED}Error reading CSV file: {str(e)}{RESET}")
             raise
 
     def ingest(self, file_path: str, batch_size: int = 50) -> List[Dict[str, Any]]:
@@ -201,7 +207,7 @@ class CSVIngestor(BaseIngestor):
             return failed_records
             
         except Exception as e:
-            logger.error(f"CSV ingestion failed: {str(e)}")
+            logger.error(f"{RED}CSV ingestion failed: {str(e)}{RESET}")
             raise 
 
     def _count_records(self, file_path: str) -> Optional[int]:
@@ -220,5 +226,5 @@ class CSVIngestor(BaseIngestor):
             # Use pandas to count lines efficiently
             return pd.read_csv(file_path).shape[0]
         except Exception as e:
-            logger.debug(f"Unable to count CSV records using pandas: {str(e)}")
+            logger.debug(f"{YELLOW}Unable to count CSV records using pandas: {str(e)}{RESET}")
             return None 
