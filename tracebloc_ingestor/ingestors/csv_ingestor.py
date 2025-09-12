@@ -13,9 +13,12 @@ from .base import BaseIngestor
 from ..database import Database
 from ..api.client import APIClient
 from ..utils.constants import RESET, RED,YELLOW
+from ..config import Config
 
-
+config = Config()
 logger = logging.getLogger(__name__)
+logger.setLevel(config.LOG_LEVEL)
+
 
 __all__ = ['Ingestor']
 
@@ -44,8 +47,7 @@ class CSVIngestor(BaseIngestor):
         intent: Optional[str] = None,
         annotation_column: Optional[str] = None,
         category: Optional[str] = None,
-        data_format: Optional[str] = None,
-        log_level: Optional[int] = None,
+        data_format: Optional[str] = None
     ):
         """Initialize CSV Ingestor.
         
@@ -77,11 +79,9 @@ class CSVIngestor(BaseIngestor):
             annotation_column,
             category,
             data_format,
-            log_level,
             file_options
         )
         self.csv_options = csv_options or {}
-        logger.setLevel(log_level)
         self.file_options = file_options or {}
     def _validate_csv(self, df: pd.DataFrame) -> None:
         """Validate CSV data against schema using pandas functionality.

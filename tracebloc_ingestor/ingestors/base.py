@@ -22,6 +22,7 @@ from ..file_transfer import map_file_transfer
 config = Config()
 setup_logging(config)
 logger = logging.getLogger(__name__)
+logger.setLevel(config.LOG_LEVEL)
 
 __all__ = ['BaseIngestor', 'IngestionSummary']
 
@@ -76,7 +77,6 @@ class BaseIngestor(ABC):
                  annotation_column: Optional[str] = None,
                  category: Optional[str] = None,
                  data_format: Optional[str] = None,
-                 log_level: Optional[int] = None,
                  file_options: Optional[Dict[str, Any]] = None
                  ):
         """Initialize the base ingestor.
@@ -93,7 +93,6 @@ class BaseIngestor(ABC):
             annotation_column: Name of the column to use as annotation
             category: Category of the data
             data_format: Format of the data
-            log_level: Level of the logger
             file_options: File options to run before ingestion
         Raises:
             ValueError: If unique_id_column is not provided
@@ -113,7 +112,6 @@ class BaseIngestor(ABC):
         self.data_format = data_format
         self.file_options = file_options or {}
 
-        logger.setLevel(log_level)
         # Ensure table exists
         self.table = self.database.create_table(table_name, schema)
        

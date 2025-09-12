@@ -13,18 +13,18 @@ import shutil
 from tracebloc_ingestor import Config
 from tracebloc_ingestor.utils.logging import setup_logging
 from tracebloc_ingestor.utils.constants import TaskCategory
+from tracebloc_ingestor.utils.constants import RESET, GREEN, RED
 
 # Initialize config and configure logging
 config = Config()
 setup_logging(config)
 logger = logging.getLogger(__name__)
+logger.setLevel(config.LOG_LEVEL)
 
 
 def image_transfer(record: Dict[str, Any], options: Dict[str, Any]) -> Dict[str, Any]:
    # Create destination directory if it doesn't exist
     os.makedirs(config.DEST_PATH, exist_ok=True)
-
-    print(f"image_transfer record: {record}")
 
     try:
         # Get the filename from the record
@@ -32,13 +32,13 @@ def image_transfer(record: Dict[str, Any], options: Dict[str, Any]) -> Dict[str,
         data_id = record.get("data_id")
         extension = options.get("extension")
         if not filename:
-            logger.error("No filename found in record")
+            logger.error(f"{RED}No filename found in record{RESET}")
             return record
 
         # Process the image
         image_src_path = os.path.join(config.SRC_PATH, f"{filename}")
         if not os.path.exists(image_src_path):
-            logger.error(f"Source image not found: {image_src_path}")
+            logger.error(f"{RED}Source image not found: {image_src_path}{RESET}")
             return record
 
         # Save the resized image
@@ -46,18 +46,16 @@ def image_transfer(record: Dict[str, Any], options: Dict[str, Any]) -> Dict[str,
         # Copy file 
         shutil.copy(image_src_path, image_dest_path)
 
-        logger.info(f"Successfully copied image: {filename}")
+        logger.info(f"{GREEN}Successfully copied image: {filename}{RESET}")
         return record
 
     except Exception as e:
-        raise ValueError(f"Error processing binary image: {str(e)}")
+        raise ValueError(f"{RED}Error processing binary image: {str(e)}{RESET}")
 
 def map_file_transfer(task_category: TaskCategory, record: Dict[str, Any], options: Dict[str, Any]) -> Dict[str, Any]:
 
     if task_category == TaskCategory.IMAGE_CLASSIFICATION:
         result = image_transfer(record, options)
-        print(f"image_transfer result: {result}")
-        exit(1)
         return result
     else:
         return None
