@@ -13,7 +13,6 @@ from PIL import Image
 from tracebloc_ingestor import Config, Database, APIClient, CSVIngestor
 from tracebloc_ingestor.utils.logging import setup_logging
 from tracebloc_ingestor.utils.constants import TaskCategory, Intent, DataFormat, ImageExtension
-from tracebloc_ingestor import FileTypeValidator, ImageResolutionValidator
 
 # Initialize config and configure logging
 config = Config()
@@ -91,16 +90,7 @@ def main():
     try:
      
         api_client = APIClient(config)
-        # 1. File Type Validator - ensures all image files have consistent extensions
-        file_validator = FileTypeValidator(
-            allowed_extension=image_options["extension"]
-        )
-
-        # 2. Image Resolution Validator - ensures all images have uniform resolution
-        # This is crucial for image classification as models expect consistent input sizes
-        image_validator = ImageResolutionValidator(
-            expected_resolution=image_options["target_size"],  # Use the target size from config (256, 256)
-        )
+       
 
         # Create ingestor for image classification data with validators
         ingestor = CSVIngestor(
@@ -111,10 +101,10 @@ def main():
             data_format=DataFormat.IMAGE,
             category=TaskCategory.IMAGE_CLASSIFICATION,
             csv_options=csv_options,
+            file_options=image_options,
             label_column="label",
             intent=Intent.TEST,  # Is the data for training or testing
-            log_level=config.LOG_LEVEL,
-            validators=[ file_validator, image_validator]  # Add validators here
+            log_level=config.LOG_LEVEL
         )
 
         # Ingest data with validation

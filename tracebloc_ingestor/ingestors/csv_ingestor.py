@@ -13,7 +13,6 @@ from .base import BaseIngestor
 from ..database import Database
 from ..api.client import APIClient
 from ..utils.constants import RESET, RED,YELLOW
-from ..validators import BaseValidator
 
 
 logger = logging.getLogger(__name__)
@@ -39,6 +38,7 @@ class CSVIngestor(BaseIngestor):
         schema: Dict[str, str],
         max_retries: int = 3,
         csv_options: Optional[Dict[str, Any]] = None,
+        file_options: Optional[Dict[str, Any]] = None,
         unique_id_column: Optional[str] = None,
         label_column: Optional[str] = None,
         intent: Optional[str] = None,
@@ -46,7 +46,6 @@ class CSVIngestor(BaseIngestor):
         category: Optional[str] = None,
         data_format: Optional[str] = None,
         log_level: Optional[int] = None,
-        validators: Optional[List[BaseValidator]] = None,
     ):
         """Initialize CSV Ingestor.
         
@@ -57,6 +56,7 @@ class CSVIngestor(BaseIngestor):
             schema: Database schema definition
             max_retries: Maximum number of retry attempts
             csv_options: Additional options for pandas read_csv
+            file_options: Additional options for file processing
             unique_id_column: Name of the column to use as unique identifier
             label_column: Name of the column to use as label
             intent: Is the data for training or testing
@@ -64,7 +64,6 @@ class CSVIngestor(BaseIngestor):
             category: Category of the data
             data_format: Format of the data
             log_level: Level of the logger
-            validators: List of validators to run before ingestion
         """
         super().__init__(
             database, 
@@ -79,11 +78,11 @@ class CSVIngestor(BaseIngestor):
             category,
             data_format,
             log_level,
-            validators
+            file_options
         )
         self.csv_options = csv_options or {}
         logger.setLevel(log_level)
-        
+        self.file_options = file_options or {}
     def _validate_csv(self, df: pd.DataFrame) -> None:
         """Validate CSV data against schema using pandas functionality.
         

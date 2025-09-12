@@ -15,7 +15,7 @@ from ..api.client import APIClient
 from ..utils.logging import setup_logging
 from ..config import Config
 from ..utils.constants import Intent, RESET, BOLD, GREEN, RED, YELLOW, BLUE, CYAN
-from ..validators import BaseValidator, ValidationResult
+from ..utils.validators_mapping import map_validators
 
 # Configure unified logging with config
 config = Config()
@@ -76,7 +76,7 @@ class BaseIngestor(ABC):
                  category: Optional[str] = None,
                  data_format: Optional[str] = None,
                  log_level: Optional[int] = None,
-                 validators: Optional[List[BaseValidator]] = None
+                 file_options: Optional[Dict[str, Any]] = None
                  ):
         """Initialize the base ingestor.
         
@@ -93,7 +93,7 @@ class BaseIngestor(ABC):
             category: Category of the data
             data_format: Format of the data
             log_level: Level of the logger
-            validators: List of validators to run before ingestion
+            file_options: File options to run before ingestion
         Raises:
             ValueError: If unique_id_column is not provided
         """
@@ -110,7 +110,8 @@ class BaseIngestor(ABC):
         self.annotation_column = annotation_column
         self.category = category
         self.data_format = data_format
-        self.validators = validators or []
+        self.file_options = file_options or {}
+
         logger.setLevel(log_level)
         # Ensure table exists
         self.table = self.database.create_table(table_name, schema)
@@ -204,16 +205,14 @@ class BaseIngestor(ABC):
         Raises:
             ValueError: If validation fails
         """
-        if not self.validators:
-            logger.info("No validators configured, skipping validation")
-            return True
         
-        logger.info(f"Running {len(self.validators)} validator(s) on data source")
         
+        validators = map_validators(self.category, self.file_options)
+        logger.info(f"Running {len(validators)} validator(s) on data source")
         all_valid = True
         validation_errors = []
         
-        for validator in self.validators:
+        for validator in validators:
             try:
                 logger.info(f"{CYAN}Running validator: {validator.name}{RESET}")
                 result = validator.validate(source)
@@ -288,7 +287,7 @@ class BaseIngestor(ABC):
         
 
         exit(1)
-        
+
         batch = []
         failed_records = []
         
