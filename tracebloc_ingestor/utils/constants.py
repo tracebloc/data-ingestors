@@ -100,3 +100,5 @@ RED = '\033[91m'
 YELLOW = '\033[93m'
 BLUE = '\033[94m'
 CYAN = '\033[96m'
+
+ALLOWED_IMAGE_EXTENSIONS = {'jpeg': '.jpeg', 'jpg': '.jpg', 'png': '.png'}

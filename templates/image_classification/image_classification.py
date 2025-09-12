@@ -12,7 +12,7 @@ from PIL import Image
 
 from tracebloc_ingestor import Config, Database, APIClient, CSVIngestor
 from tracebloc_ingestor.utils.logging import setup_logging
-from tracebloc_ingestor.utils.constants import TaskCategory, Intent, DataFormat
+from tracebloc_ingestor.utils.constants import TaskCategory, Intent, DataFormat, ALLOWED_IMAGE_EXTENSIONS
 from tracebloc_ingestor import FileTypeValidator, ImageResolutionValidator
 
 # Initialize config and configure logging
@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 # Initialize components
 database = Database(config)
-api_client = APIClient(config)
+
 
 # Schema definition for segmentation data with constraints
 schema = {
@@ -34,7 +34,7 @@ schema = {
 image_options = {
     # Image processing options
     "target_size": (256, 256),  # Resize images to this dimension
-    "extension": {'.jpeg'},
+    "extension": ALLOWED_IMAGE_EXTENSIONS["jpeg"], # allowed extension for images: jpeg, jpg, png
 }
 
 # CSV specific options
@@ -90,9 +90,10 @@ def main():
     """Run the image classification data ingestion example."""
     try:
      
+        api_client = APIClient(config)
         # 1. File Type Validator - ensures all image files have consistent extensions
         file_validator = FileTypeValidator(
-            extension=image_options["extension"]
+            allowed_extension=image_options["extension"]
         )
 
         # 2. Image Resolution Validator - ensures all images have uniform resolution

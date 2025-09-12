@@ -279,7 +279,7 @@ class BaseIngestor(ABC):
         # Validate data before ingestion
         logger.info(f"{CYAN}Starting data validation before ingestion...{RESET}")
         try:
-            self.validate_data(f"{config.SRC_PATH}/images")
+            self.validate_data(f"{config.SRC_PATH}")
             logger.info(f"{GREEN}Data validation completed successfully{RESET}")
         except ValueError as e:
             raise e
@@ -287,8 +287,7 @@ class BaseIngestor(ABC):
             raise e
         
 
-
-        
+        exit(1)
         
         batch = []
         failed_records = []

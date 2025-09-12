@@ -10,6 +10,7 @@ from typing import Any, List, Set
 import logging
 
 from .base import BaseValidator, ValidationResult
+from ..utils.constants import ALLOWED_IMAGE_EXTENSIONS
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +26,7 @@ class FileTypeValidator(BaseValidator):
     """
     
     def __init__(self, 
-                 extension: str = ".jpeg",
+                 allowed_extension: str = ".jpeg",
                  name: str = "File Type Validator"):
         """Initialize the file type validator.
         
@@ -34,14 +35,13 @@ class FileTypeValidator(BaseValidator):
             name: Human-readable name of the validator
         """
         super().__init__(name)
-        self.allowed_extension = extension or set()
+        self.allowed_extension = allowed_extension
         self.strict_mode = True # Whether to enforce strict file type checking . we can later make this configurable
         
         # Normalize extensions to lowercase with leading dot
         if self.allowed_extension:
             self.allowed_extension = {
-                ext.lower() if ext.startswith('.') else f'.{ext.lower()}'
-                for ext in self.allowed_extension
+                self.allowed_extension.lower() if self.allowed_extension.startswith('.') else f'.{self.allowed_extension.lower()}'
             }
     
     def validate(self, data: Any, **kwargs) -> ValidationResult:
@@ -191,35 +191,3 @@ class FileTypeValidator(BaseValidator):
                 'allowed_extension': sorted(self.allowed_extension) if self.allowed_extension else None
             }
         )
-    
-    def set_allowed_extension(self, extensions: Set[str]):
-        """Update the allowed extensions for validation.
-        
-        Args:
-            extensions: Set of allowed file extensions
-        """
-        self.allowed_extension = {
-            ext.lower() if ext.startswith('.') else f'.{ext.lower()}'
-            for ext in extensions
-        }
-        logger.info(f"Updated allowed extensions: {sorted(self.allowed_extension)}")
-    
-    def add_allowed_extension(self, extension: str):
-        """Add a new allowed extension.
-        
-        Args:
-            extension: File extension to add (with or without leading dot)
-        """
-        normalized_ext = extension.lower() if extension.startswith('.') else f'.{extension.lower()}'
-        self.allowed_extension.add(normalized_ext)
-        logger.info(f"Added allowed extension: {normalized_ext}")
-    
-    def remove_allowed_extension(self, extension: str):
-        """Remove an allowed extension.
-        
-        Args:
-            extension: File extension to remove
-        """
-        normalized_ext = extension.lower() if extension.startswith('.') else f'.{extension.lower()}'
-        self.allowed_extension.discard(normalized_ext)
-        logger.info(f"Removed allowed extension: {normalized_ext}")

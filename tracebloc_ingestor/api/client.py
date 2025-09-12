@@ -51,12 +51,12 @@ class APIClient:
             response.raise_for_status()
             print(f"{BOLD}{GREEN}Authentication successful{RESET}")
             return response.json().get("token")
+
         except requests.exceptions.RequestException as e:
-            logger.error(f"Error during authentication: {str(e)}")
             if hasattr(e.response, 'text'):
-                logger.error(f"{RED}Error response: {e.response.text}{RESET}")
-                
-            raise Exception(f"{RED}Error response: {e.response.text}{RESET}")
+                raise ValueError(f"{RED}Authentication failed: {e.response.text}{RESET}")
+            else:
+                raise ValueError(f"{RED}Error response: {e}{RESET}")
 
     def send_batch(self, records: List[Tuple[int, Dict[str, Any]]], table_name: str, ingestor_id: str) -> bool:
         """
