@@ -286,7 +286,7 @@ class BaseIngestor(ABC):
             raise e
         
 
-        exit(1)
+        
 
         batch = []
         failed_records = []

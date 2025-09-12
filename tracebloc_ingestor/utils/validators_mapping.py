@@ -8,7 +8,6 @@ from tracebloc_ingestor.utils.constants import TaskCategory
 
 def map_validators(task_category: TaskCategory, options: Dict[str, Any]) -> List[BaseValidator]:
 
-
     if task_category == TaskCategory.IMAGE_CLASSIFICATION:
         return [
           FileTypeValidator(allowed_extension=options["extension"]),
