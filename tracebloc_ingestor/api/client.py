@@ -29,7 +29,7 @@ class APIClient:
         
         # Configure retry strategy
         retry_strategy = Retry(
-            total=3,
+            total=5,
             backoff_factor=1,
             status_forcelist=[500, 502, 503, 504]
         )
@@ -48,7 +48,9 @@ class APIClient:
                 json={"username": self.config.CLIENT_USERNAME, "password": self.config.CLIENT_PASSWORD},
                 timeout=API_TIMEOUT
             )
-            response.raise_for_status()
+            # Check status after retries are exhausted
+            if response.status_code >= 400:
+                raise requests.exceptions.HTTPError(f"HTTP {response.status_code}: {response.text}")
             print(f"{BOLD}{GREEN}Authentication successful{RESET}")
             return response.json().get("token")
 
@@ -101,14 +103,16 @@ class APIClient:
                 timeout=API_TIMEOUT
             )
             
-            response.raise_for_status()
+            # Check status after retries are exhausted
+            if response.status_code >= 400:
+                raise requests.exceptions.HTTPError(f"HTTP {response.status_code}: {response.text}")
             return True
             
         except requests.exceptions.RequestException as e:
             if hasattr(e.response, 'text'):
-                raise ValueError(f"{RED}Error response: {e.response.text}{RESET}")
+                logger.error(f"{RED}Error response: {e.response.text}{RESET}")
             else:
-                raise ValueError(f"{RED}Error sending batch to API: {str(e)}{RESET}")
+                logger.error(f"{RED}Error sending batch to API: {str(e)}{RESET}")
             return False
 
     def send_global_meta_meta(self, table_name: str, schema: Dict[str, str]) -> bool:
@@ -147,7 +151,9 @@ class APIClient:
                 timeout=API_TIMEOUT
             )
             
-            response.raise_for_status()
+            # Check status after retries are exhausted
+            if response.status_code >= 400:
+                raise requests.exceptions.HTTPError(f"HTTP {response.status_code}: {response.text}")
             logger.info(f"{GREEN}Successfully sent global metadata. Response: {response.json()}{RESET}")
             return True
             
@@ -181,7 +187,9 @@ class APIClient:
             logger.info(f"Sending request to generate edge label metadata for dataset type: {table_name}")
             response = self.session.get(url, headers=headers, timeout=API_TIMEOUT)
             
-            response.raise_for_status()
+            # Check status after retries are exhausted
+            if response.status_code >= 400:
+                raise requests.exceptions.HTTPError(f"HTTP {response.status_code}: {response.text}")
             logger.info(f"{GREEN}Successfully generated edge label metadata. Response{RESET}")
             return True
             
@@ -222,7 +230,9 @@ class APIClient:
             logger.info(f"Sending prepare request for category: {category}, injester_id: {ingestor_id}, data_format: {data_format} , data_intent: {intent}")
             response = self.session.get(url, headers=headers, timeout=API_TIMEOUT)
             
-            response.raise_for_status()
+            # Check status after retries are exhausted
+            if response.status_code >= 400:
+                raise requests.exceptions.HTTPError(f"HTTP {response.status_code}: {response.text}")
             logger.info(f"{GREEN}Successfully prepared data. Response: {response.json()}{RESET}")
             return True
             
@@ -285,7 +295,9 @@ class APIClient:
                 timeout=API_TIMEOUT
             )
             
-            response.raise_for_status()
+            # Check status after retries are exhausted
+            if response.status_code >= 400:
+                raise requests.exceptions.HTTPError(f"HTTP {response.status_code}: {response.text}")
             logger.info(f"{GREEN}Successfully created dataset. Response: {response.json()}{RESET}")
             return response.json()
             
