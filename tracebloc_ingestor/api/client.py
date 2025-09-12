@@ -55,7 +55,8 @@ class APIClient:
             logger.error(f"Error during authentication: {str(e)}")
             if hasattr(e.response, 'text'):
                 logger.error(f"{RED}Error response: {e.response.text}{RESET}")
-            raise
+                
+            raise Exception(f"{RED}Error response: {e.response.text}{RESET}")
 
     def send_batch(self, records: List[Tuple[int, Dict[str, Any]]], table_name: str, ingestor_id: str) -> bool:
         """

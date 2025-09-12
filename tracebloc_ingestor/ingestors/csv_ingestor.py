@@ -13,6 +13,7 @@ from .base import BaseIngestor
 from ..database import Database
 from ..api.client import APIClient
 from ..utils.constants import RESET, RED,YELLOW
+from ..validators import BaseValidator
 
 
 logger = logging.getLogger(__name__)
@@ -45,6 +46,7 @@ class CSVIngestor(BaseIngestor):
         category: Optional[str] = None,
         data_format: Optional[str] = None,
         log_level: Optional[int] = None,
+        validators: Optional[List[BaseValidator]] = None,
     ):
         """Initialize CSV Ingestor.
         
@@ -62,6 +64,7 @@ class CSVIngestor(BaseIngestor):
             category: Category of the data
             data_format: Format of the data
             log_level: Level of the logger
+            validators: List of validators to run before ingestion
         """
         super().__init__(
             database, 
@@ -75,7 +78,8 @@ class CSVIngestor(BaseIngestor):
             annotation_column,
             category,
             data_format,
-            log_level
+            log_level,
+            validators
         )
         self.csv_options = csv_options or {}
         logger.setLevel(log_level)
@@ -207,7 +211,6 @@ class CSVIngestor(BaseIngestor):
             return failed_records
             
         except Exception as e:
-            logger.error(f"{RED}CSV ingestion failed: {str(e)}{RESET}")
             raise 
 
     def _count_records(self, file_path: str) -> Optional[int]:

@@ -26,12 +26,12 @@ class Config:
     API_ENDPOINT: str = API_ENDPOINTS.get(EDGE_ENV, API_ENDPOINTS["dev"])
     
     CLIENT_USERNAME: str = os.getenv("CLIENT_ID", "testedge")
-    CLIENT_PASSWORD: str = os.getenv("CLIENT_PASSWORD", "&6edg*D9e16")
+    CLIENT_PASSWORD: str = os.getenv("CLIENT_PASSWORD", "&6edg*D9e16 ")
     
     STORAGE_PATH: str = os.getenv("STORAGE_PATH", "/data/shared")
-    SRC_PATH: str = os.getenv("SRC_PATH", "") # path to the source data
+    SRC_PATH: str = os.getenv("SRC_PATH", "templates/image_classification/data") # path to the source data
     DEST_PATH: str = os.path.join(STORAGE_PATH, os.getenv("TABLE_NAME", "")) # path to the destination data with table name
-    LABEL_FILE: str = os.getenv("LABEL_FILE", "templates/image_classification/example_data/labels_file_sample.csv")
+    LABEL_FILE: str = os.getenv("LABEL_FILE", "templates/image_classification/data/labels_file_sample.csv")
     COMPANY: str = os.getenv("COMPANY", "TB_INGESTOR")
     TABLE_NAME: str = os.getenv("TABLE_NAME", "image_ingestor_train")
     TITLE: str = os.getenv("TITLE", "Image training data")

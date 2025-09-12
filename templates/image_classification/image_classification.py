@@ -13,6 +13,7 @@ from PIL import Image
 from tracebloc_ingestor import Config, Database, APIClient, CSVIngestor
 from tracebloc_ingestor.utils.logging import setup_logging
 from tracebloc_ingestor.utils.constants import TaskCategory, Intent, DataFormat
+from tracebloc_ingestor import FileTypeValidator, ImageResolutionValidator
 
 # Initialize config and configure logging
 config = Config()
@@ -33,6 +34,7 @@ schema = {
 image_options = {
     # Image processing options
     "target_size": (256, 256),  # Resize images to this dimension
+    "extension": {'.jpeg'},
 }
 
 # CSV specific options
@@ -87,7 +89,19 @@ def process_image(image_id: str, target_size: tuple = (256, 256)) -> bool:
 def main():
     """Run the image classification data ingestion example."""
     try:
-        # Create ingestor for image classification data
+     
+        # 1. File Type Validator - ensures all image files have consistent extensions
+        file_validator = FileTypeValidator(
+            extension=image_options["extension"]
+        )
+
+        # 2. Image Resolution Validator - ensures all images have uniform resolution
+        # This is crucial for image classification as models expect consistent input sizes
+        image_validator = ImageResolutionValidator(
+            expected_resolution=image_options["target_size"],  # Use the target size from config (256, 256)
+        )
+
+        # Create ingestor for image classification data with validators
         ingestor = CSVIngestor(
             database=database,
             api_client=api_client,
@@ -99,9 +113,11 @@ def main():
             label_column="label",
             intent=Intent.TEST,  # Is the data for training or testing
             log_level=config.LOG_LEVEL,
+            validators=[ file_validator, image_validator]  # Add validators here
         )
 
-        # Ingest data
+        # Ingest data with validation
+        logger.info("Starting image classification ingestion with data validation...")
         with ingestor:
             failed_records = ingestor.ingest(config.LABEL_FILE, batch_size=config.BATCH_SIZE)
             if failed_records:
@@ -113,8 +129,7 @@ def main():
                 logger.info("All records processed successfully")
 
     except Exception as e:
-        logger.error(f"Ingestion failed: {str(e)}")
-        raise
+        logger.error(f"{str(e)}")
 
 if __name__ == "__main__":
     main() 

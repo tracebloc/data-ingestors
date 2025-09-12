@@ -15,6 +15,7 @@ from ..api.client import APIClient
 from ..utils.logging import setup_logging
 from ..config import Config
 from ..utils.constants import Intent, RESET, BOLD, GREEN, RED, YELLOW, BLUE, CYAN
+from ..validators import BaseValidator, ValidationResult
 
 # Configure unified logging with config
 config = Config()
@@ -74,7 +75,8 @@ class BaseIngestor(ABC):
                  annotation_column: Optional[str] = None,
                  category: Optional[str] = None,
                  data_format: Optional[str] = None,
-                 log_level: Optional[int] = None
+                 log_level: Optional[int] = None,
+                 validators: Optional[List[BaseValidator]] = None
                  ):
         """Initialize the base ingestor.
         
@@ -91,6 +93,7 @@ class BaseIngestor(ABC):
             category: Category of the data
             data_format: Format of the data
             log_level: Level of the logger
+            validators: List of validators to run before ingestion
         Raises:
             ValueError: If unique_id_column is not provided
         """
@@ -107,6 +110,7 @@ class BaseIngestor(ABC):
         self.annotation_column = annotation_column
         self.category = category
         self.data_format = data_format
+        self.validators = validators or []
         logger.setLevel(log_level)
         # Ensure table exists
         self.table = self.database.create_table(table_name, schema)
@@ -188,6 +192,56 @@ class BaseIngestor(ABC):
             logger.error(f"Error processing record: {str(e)}")
             return None
 
+    def validate_data(self, source: Any) -> bool:
+        """Validate data before ingestion using configured validators.
+        
+        Args:
+            source: The data source to validate
+            
+        Returns:
+            True if all validations pass, False otherwise
+            
+        Raises:
+            ValueError: If validation fails
+        """
+        if not self.validators:
+            logger.info("No validators configured, skipping validation")
+            return True
+        
+        logger.info(f"Running {len(self.validators)} validator(s) on data source")
+        
+        all_valid = True
+        validation_errors = []
+        
+        for validator in self.validators:
+            try:
+                logger.info(f"{CYAN}Running validator: {validator.name}{RESET}")
+                result = validator.validate(source)
+
+                print(result)
+
+                if not result.is_valid:
+                    all_valid = False
+                    validation_errors.append(f"{BOLD}{validator.name} Validator failed: {RESET} \n {RED}")
+                    validation_errors.extend(result.errors)
+                    validation_errors.append(f"{RESET}")
+
+                # Log warnings if any
+                for warning in result.warnings:
+                    logger.warning(f"{YELLOW}Validation warning - {validator.name}: {warning}{RESET}")
+                if result.is_valid:
+                    print(f"{GREEN}{validator.name} Validator successfully passed{RESET}")
+            except Exception as e:
+                all_valid = False
+                validation_errors.append(f"Validator {validator.name} error: {str(e)}")
+        
+        if not all_valid:
+            error_summary = "\n".join(validation_errors)
+            raise ValueError(f"{RED}{error_summary}{RESET}")
+        
+        print(f"{GREEN}All validations passed successfully{RESET}")
+        return True
+
     @abstractmethod
     def read_data(self, source: Any) -> Generator[Dict[str, Any], None, None]:
         """Read data from the input source"""
@@ -222,6 +276,20 @@ class BaseIngestor(ABC):
         Returns:
             List of failed records
         """
+        # Validate data before ingestion
+        logger.info(f"{CYAN}Starting data validation before ingestion...{RESET}")
+        try:
+            self.validate_data(f"{config.SRC_PATH}/images")
+            logger.info(f"{GREEN}Data validation completed successfully{RESET}")
+        except ValueError as e:
+            raise e
+        except Exception as e:
+            raise e
+        
+
+
+        
+        
         batch = []
         failed_records = []
         
@@ -329,7 +397,7 @@ class BaseIngestor(ABC):
             except Exception as e:
                 session.rollback()
                 logger.error(f"Error during ingestion: {str(e)}")
-                raise
+                raise e
                 
         return failed_records
 
