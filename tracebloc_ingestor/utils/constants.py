@@ -101,4 +101,25 @@ YELLOW = '\033[93m'
 BLUE = '\033[94m'
 CYAN = '\033[96m'
 
-ALLOWED_IMAGE_EXTENSIONS = {'jpeg': '.jpeg', 'jpg': '.jpg', 'png': '.png'}
+
+class ImageExtension:
+    """
+    Enumeration of supported image extensions.
+    """
+    JPEG = '.jpeg'
+    JPG = '.jpg'
+    PNG = '.png'
+
+    @classmethod
+    def get_all_extensions(cls) -> list[str]:
+        """
+        Returns a list of all available extension values.
+        """
+        return [cls.JPEG, cls.JPG, cls.PNG]
+    
+    @classmethod
+    def is_valid_extension(cls, extension: str) -> bool:
+        """
+        Check if a given extension is valid.
+        """
+        return extension in cls.get_all_extensions()

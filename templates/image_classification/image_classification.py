@@ -12,7 +12,7 @@ from PIL import Image
 
 from tracebloc_ingestor import Config, Database, APIClient, CSVIngestor
 from tracebloc_ingestor.utils.logging import setup_logging
-from tracebloc_ingestor.utils.constants import TaskCategory, Intent, DataFormat, ALLOWED_IMAGE_EXTENSIONS
+from tracebloc_ingestor.utils.constants import TaskCategory, Intent, DataFormat, ImageExtension
 from tracebloc_ingestor import FileTypeValidator, ImageResolutionValidator
 
 # Initialize config and configure logging
@@ -34,7 +34,7 @@ schema = {
 image_options = {
     # Image processing options
     "target_size": (256, 256),  # Resize images to this dimension
-    "extension": ALLOWED_IMAGE_EXTENSIONS["jpeg"], # allowed extension for images: jpeg, jpg, png
+    "extension": ImageExtension.JPEG, # allowed extension for images: jpeg, jpg, png
 }
 
 # CSV specific options

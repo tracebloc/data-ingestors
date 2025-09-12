@@ -10,7 +10,7 @@ from typing import Any, List, Set
 import logging
 
 from .base import BaseValidator, ValidationResult
-from ..utils.constants import ALLOWED_IMAGE_EXTENSIONS
+from ..utils.constants import ImageExtension, RED, RESET
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +37,11 @@ class FileTypeValidator(BaseValidator):
         super().__init__(name)
         self.allowed_extension = allowed_extension
         self.strict_mode = True # Whether to enforce strict file type checking . we can later make this configurable
-        
+
+         # Check if extension is allowed (if strict mode is enabled)
+        if not ImageExtension.is_valid_extension(self.allowed_extension):
+            raise ValueError(f"{RED}Invalid allowed extension: {self.allowed_extension}{RESET}")
+
         # Normalize extensions to lowercase with leading dot
         if self.allowed_extension:
             self.allowed_extension = {
