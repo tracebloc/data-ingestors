@@ -9,7 +9,7 @@ class Config:
     DB_PORT: int = 3306
     DB_USER: str = "edgeuser"
     DB_PASSWORD: str = "Edg9@Tr@ce"
-    DB_NAME: str = "xraymetadata"
+    DB_NAME: str = "training_test_datasets"
     
     BATCH_SIZE: int = int(os.getenv("BATCH_SIZE", "100"))
     
