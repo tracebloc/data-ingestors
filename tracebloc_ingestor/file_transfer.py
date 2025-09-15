@@ -35,8 +35,15 @@ def image_transfer(record: Dict[str, Any], options: Dict[str, Any]) -> Dict[str,
             logger.error(f"{RED}No filename found in record{RESET}")
             return record
 
+    
+        # Add extension to filename if it doesn't have one
+        if not os.path.splitext(filename)[1]:
+            filename_with_ext = f"{filename}{extension}"
+        else:
+            filename_with_ext = filename
+
         # Process the image
-        image_src_path = os.path.join(config.SRC_PATH, f"{filename}{extension}")
+        image_src_path = os.path.join(config.SRC_PATH, filename_with_ext)
         if not os.path.exists(image_src_path):
             logger.error(f"{RED}Source image not found: {image_src_path}{RESET}")
             return record
