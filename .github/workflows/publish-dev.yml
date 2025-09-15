@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - develop
+      - ingestor-v2
 
 jobs:
   publish:
