@@ -36,7 +36,7 @@ def image_transfer(record: Dict[str, Any], options: Dict[str, Any]) -> Dict[str,
             return record
 
         # Process the image
-        image_src_path = os.path.join(config.SRC_PATH, f"{filename}")
+        image_src_path = os.path.join(config.SRC_PATH, f"{filename}{extension}")
         if not os.path.exists(image_src_path):
             logger.error(f"{RED}Source image not found: {image_src_path}{RESET}")
             return record
