@@ -22,7 +22,7 @@ class Config:
     }
     
     # Get environment and set appropriate API endpoint, default to dev
-    EDGE_ENV: str = os.getenv("CLIENT_ENV", "local")
+    EDGE_ENV: str = os.getenv("CLIENT_ENV", "dev")
     API_ENDPOINT: str = API_ENDPOINTS.get(EDGE_ENV, API_ENDPOINTS["dev"])
     
     CLIENT_USERNAME: str = os.getenv("CLIENT_ID", "testedge")
