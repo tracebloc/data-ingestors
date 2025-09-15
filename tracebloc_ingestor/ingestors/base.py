@@ -304,16 +304,12 @@ class BaseIngestor(ABC):
         total = self._count_records(source)
         stats['total_records'] = total or 0
         
-        # Determine if we should show progress bar
-        disable_progress = not os.isatty(0) or os.getenv('DISABLE_PROGRESS_BAR')
-        
         with Session(self.engine) as session:
             try:
                 pbar = tqdm(
                     total=total,
                     desc="Ingesting records",
-                    unit="records",
-                    disable=disable_progress
+                    unit="records"
                 )
                 
                 for record in self.read_data(source):
