@@ -22,7 +22,7 @@ class Config:
     }
     
     # Get environment and set appropriate API endpoint, default to dev
-    EDGE_ENV: str = os.getenv("CLIENT_ENV", "dev")
+    EDGE_ENV: str = os.getenv("CLIENT_ENV", "local")
     API_ENDPOINT: str = API_ENDPOINTS.get(EDGE_ENV, API_ENDPOINTS["dev"])
     
     CLIENT_USERNAME: str = os.getenv("CLIENT_ID", "testedge")
@@ -37,4 +37,4 @@ class Config:
     TITLE: str = os.getenv("TITLE", "Image training data")
     
     # Logging configuration
-    LOG_LEVEL: int = LogLevel.get_level_code(os.getenv("LOG_LEVEL", "INFO"))
+    LOG_LEVEL: int = LogLevel.get_level_code(os.getenv("LOG_LEVEL", "WARNING"))

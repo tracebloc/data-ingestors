@@ -4,9 +4,8 @@ This module provides validation for image resolution uniformity to ensure all im
 in a dataset have the same dimensions before ingestion.
 """
 
-import os
 from pathlib import Path
-from typing import Dict, Any, List, Optional, Tuple, Set
+from typing import Any, List, Optional, Tuple
 import logging
 
 from tracebloc_ingestor.config import Config
@@ -216,21 +215,32 @@ class ImageResolutionValidator(BaseValidator):
         warnings = []
         resolutions_found = set()
         
-        for image_path in image_files:
-            try:
-                resolution = self._get_image_resolution(image_path)
-                if resolution is None:
-                    invalid_files.append(str(image_path))
-                    continue
-                
-                resolutions_found.add(resolution)
-                
-                # Check if resolution matches expected (with tolerance)
-                if not self._resolution_matches(resolution, self.expected_resolution):
-                    resolution_errors.append(f"{image_path}: {resolution} (expected: {self.expected_resolution})")
+        # Create progress bar
+        progress_bar = self._create_progress_bar(len(image_files), "Validating image resolutions")
+        
+        try:
+            for image_path in image_files:
+                try:
+                    resolution = self._get_image_resolution(image_path)
+                    if resolution is None:
+                        invalid_files.append(str(image_path))
+                        continue
                     
-            except Exception as e:
-                invalid_files.append(f"{image_path}: {str(e)}")
+                    resolutions_found.add(resolution)
+                    # Check if resolution matches expected (with tolerance)
+                    if not self._resolution_matches(resolution, self.expected_resolution):
+                        resolution_errors.append(f"{image_path}: {resolution} (expected: {self.expected_resolution})")
+                        
+                except Exception as e:
+                    invalid_files.append(f"{image_path}: {str(e)}")
+                
+                # Update progress bar
+                if progress_bar:
+                    progress_bar.update(1)
+        finally:
+            # Close progress bar
+            if progress_bar:
+                progress_bar.close()
         
         # Check for uniformity
         if len(resolutions_found) > 1:

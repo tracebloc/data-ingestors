@@ -4,15 +4,21 @@ This module provides validation for file types and extensions to ensure uniformi
 across the dataset before ingestion.
 """
 
-import os
+
 from pathlib import Path
-from typing import Any, List, Set
+from typing import Any, List
 import logging
 
 from .base import BaseValidator, ValidationResult
 from ..utils.constants import ImageExtension, RED, RESET
+from ..config import Config
+from ..utils.logging import setup_logging
 
+config = Config()
+setup_logging(config)
 logger = logging.getLogger(__name__)
+logger.setLevel(config.LOG_LEVEL)
+
 
 class FileTypeValidator(BaseValidator):
     """Validator for ensuring file type and extension uniformity.
@@ -148,14 +154,26 @@ class FileTypeValidator(BaseValidator):
         invalid_files = []
         warnings = []
         
-        for file_path in files:
-            extension = file_path.suffix.lower()
-            extensions.add(extension)
-            
-            # Check if extension is allowed (if strict mode is enabled)
-            if self.strict_mode and self.allowed_extension:
-                if extension not in self.allowed_extension:
-                    invalid_files.append(str(file_path))
+        # Create progress bar
+        progress_bar = self._create_progress_bar(len(files), "Checking file extensions")
+        
+        try:
+            for file_path in files:
+                extension = file_path.suffix.lower()
+                extensions.add(extension)
+                
+                # Check if extension is allowed (if strict mode is enabled)
+                if self.strict_mode and self.allowed_extension:
+                    if extension not in self.allowed_extension:
+                        invalid_files.append(str(file_path))
+                
+                # Update progress bar
+                if progress_bar:
+                    progress_bar.update(1)
+        finally:
+            # Close progress bar
+            if progress_bar:
+                progress_bar.close()
         
         # Check for uniformity
         if len(extensions) > 1:

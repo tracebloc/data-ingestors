@@ -5,11 +5,20 @@ for implementing data validation before ingestion.
 """
 
 from abc import ABC, abstractmethod
-from typing import Dict, Any, List, Optional, NamedTuple
+from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
 import logging
 
+from tqdm import tqdm
+
+from tracebloc_ingestor.config import Config
+from tracebloc_ingestor.utils.logging import setup_logging
+
+config = Config()
+setup_logging(config)
 logger = logging.getLogger(__name__)
+logger.setLevel(config.LOG_LEVEL)
+
 
 @dataclass
 class ValidationResult:
@@ -80,6 +89,28 @@ class BaseValidator(ABC):
             errors=errors or [],
             warnings=warnings or [],
             metadata=metadata or {}
+        )
+    
+    def _create_progress_bar(self, total: int, desc: str = None) -> tqdm:
+        """Create a progress bar for validation operations.
+        
+        Args:
+            total: Total number of items to process
+            desc: Description for the progress bar
+            
+        Returns:
+            tqdm progress bar instance
+        """
+        
+            
+        progress_desc = desc or f"{self.name} - Validating"
+        return tqdm(
+            total=total,
+            desc=progress_desc,
+            unit="files",
+            leave=False,
+            ncols=100,
+            bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]'
         )
     
     def __str__(self) -> str:
