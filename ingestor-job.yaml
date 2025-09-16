@@ -22,7 +22,7 @@ spec:
         - name: CLIENT_PASSWORD
           value: "2unfcsowu4fh!8Uxz23fj"
         - name: CLIENT_PVC
-          value: "shared-pvc"
+          value: "client-pvc"
         - name: MYSQL_HOST
           value: "mysql"
         - name: SRC_PATH
@@ -46,5 +46,5 @@ spec:
       volumes:
         - name: shared-volume
           persistentVolumeClaim:
-            claimName: shared-pvc # value has to match the shared data PVC name in the client values.yaml
+            claimName: client-pvc # value has to match the shared data PVC name in the client values.yaml
       restartPolicy: Never
