@@ -1,10 +1,11 @@
 from setuptools import setup, find_packages
 import os
 
-# Get the long description from the README file
-here = os.path.abspath(os.path.dirname(__file__))
-with open(os.path.join(here, "Readme.md"), "r", encoding="utf-8") as fh:
-    long_description = fh.read()
+# read the contents of your README file
+from pathlib import Path
+
+this_directory = Path(__file__).parent
+long_description = (this_directory / "Readme.md").read_text()
 
 with open("requirements.txt", "r") as f:
     requirements = f.read().splitlines()
@@ -30,4 +31,4 @@ setup(
     ],
     python_requires=">=3.8",
     install_requires=requirements,
-) 
+)
