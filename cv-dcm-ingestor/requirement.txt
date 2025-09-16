@@ -1,6 +1,0 @@
-requests
-mysql-connector-python
-pydicom
-Pillow
-numpy
-pandas
