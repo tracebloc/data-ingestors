@@ -8,4 +8,4 @@ done
 echo "MySQL is ready!"
 
 # Run the CSV ingestor
-python csv_ingestor.py "$@" # train/test switch
+python ingestor.py "$@" # train/test switch

@@ -15,7 +15,7 @@ RUN mkdir -p /data/shared
 
 # Copy the source code and requirements # train/test switch
 COPY templates/data/tabular_classification_sample_in_csv_format.csv /app/data/shared/tabular_classification_sample_in_csv_format.csv
-COPY templates/csv_ingestor.py /app/csv_ingestor.py
+COPY templates/csv_ingestor.py /app/ingestor.py
 
 
 # Set environment variables

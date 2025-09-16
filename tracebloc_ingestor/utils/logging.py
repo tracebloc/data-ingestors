@@ -15,8 +15,8 @@ def setup_logging(
     # Use config settings if provided, otherwise use defaults
     if config:
         level = config.LOG_LEVEL
-        log_format = config.LOG_FORMAT
-        date_format = config.LOG_DATE_FORMAT
+        log_format = None
+        date_format = None
     else:
         level = logging.INFO
         log_format = None

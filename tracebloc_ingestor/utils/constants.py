@@ -88,3 +88,63 @@ class DataFormat:
         Check if a given format is valid.
         """
         return format in cls.get_all_formats()
+
+
+
+
+# ANSI color codes
+RESET = '\033[0m'
+BOLD = '\033[1m'
+GREEN = '\033[92m'
+RED = '\033[91m'
+YELLOW = '\033[93m'
+BLUE = '\033[94m'
+CYAN = '\033[96m'
+
+
+class ImageExtension:
+    """
+    Enumeration of supported image extensions.
+    """
+    JPEG = '.jpeg'
+    JPG = '.jpg'
+    PNG = '.png'
+
+    @classmethod
+    def get_all_extensions(cls) -> list[str]:
+        """
+        Returns a list of all available extension values.
+        """
+        return [cls.JPEG, cls.JPG, cls.PNG]
+    
+    @classmethod
+    def is_valid_extension(cls, extension: str) -> bool:
+        """
+        Check if a given extension is valid.
+        """
+        return extension in cls.get_all_extensions()
+
+
+class LogLevel:
+    """
+    Enumeration of supported log levels.
+    """
+    DEBUG = 10
+    INFO = 20
+    WARNING = 30
+    ERROR = 40
+    CRITICAL = 50
+
+    LEVEL_CODES = {
+        "DEBUG": DEBUG,
+        "INFO": INFO,
+        "WARNING": WARNING,
+        "ERROR": ERROR,
+        "CRITICAL": CRITICAL
+    }
+    @classmethod
+    def get_level_code(cls, level: str) -> int:
+        """
+        Get the level code for a given level.
+        """
+        return cls.LEVEL_CODES.get(level, cls.WARNING)

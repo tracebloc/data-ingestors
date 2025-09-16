@@ -12,9 +12,13 @@ from pathlib import Path
 from .base import BaseIngestor
 from ..database import Database
 from ..api.client import APIClient
-from ..processors.base import BaseProcessor
+from ..utils.constants import RESET, RED,YELLOW
+from ..config import Config
 
+config = Config()
 logger = logging.getLogger(__name__)
+logger.setLevel(config.LOG_LEVEL)
+
 
 __all__ = ['Ingestor']
 
@@ -35,9 +39,9 @@ class CSVIngestor(BaseIngestor):
         api_client: APIClient,
         table_name: str,
         schema: Dict[str, str],
-        processors: Optional[List[BaseProcessor]] = None,
         max_retries: int = 3,
         csv_options: Optional[Dict[str, Any]] = None,
+        file_options: Optional[Dict[str, Any]] = None,
         unique_id_column: Optional[str] = None,
         label_column: Optional[str] = None,
         intent: Optional[str] = None,
@@ -52,32 +56,33 @@ class CSVIngestor(BaseIngestor):
             api_client: API client instance for data transmission
             table_name: Name of the target table
             schema: Database schema definition
-            processors: List of data processors to apply
             max_retries: Maximum number of retry attempts
             csv_options: Additional options for pandas read_csv
+            file_options: Additional options for file processing
             unique_id_column: Name of the column to use as unique identifier
             label_column: Name of the column to use as label
             intent: Is the data for training or testing
             annotation_column: Name of the column to use as annotation
             category: Category of the data
             data_format: Format of the data
+            log_level: Level of the logger
         """
         super().__init__(
             database, 
             api_client, 
             table_name, 
             schema, 
-            processors, 
             max_retries,
             unique_id_column,
             label_column,
             intent,
             annotation_column,
             category,
-            data_format
+            data_format,
+            file_options
         )
         self.csv_options = csv_options or {}
-        
+        self.file_options = file_options or {}
     def _validate_csv(self, df: pd.DataFrame) -> None:
         """Validate CSV data against schema using pandas functionality.
         
@@ -97,7 +102,7 @@ class CSVIngestor(BaseIngestor):
         # Log which schema columns are not in the CSV (for information only)
         missing_columns = set(self.schema.keys()) - set(df.columns)
         if missing_columns:
-            logger.warning(f"Schema columns not present in CSV: {', '.join(missing_columns)}")
+            raise ValueError(f"{RED}Schema columns not present in CSV: {', '.join(missing_columns)}{RESET}")
             
         # Type validation using pandas dtypes - only for columns that exist in the CSV
         for column in common_columns:
@@ -114,7 +119,7 @@ class CSVIngestor(BaseIngestor):
                 elif 'STRING' in dtype.upper() or 'TEXT' in dtype.upper():
                     df[column] = df[column].astype('string')
             except Exception as e:
-                raise ValueError(f"Data type validation failed for column {column}: {str(e)}")
+                raise ValueError(f"{RED}Data type validation failed for column {column}: {str(e)}{RESET}")
 
     def read_data(self, file_path: str) -> Generator[Dict[str, Any], None, None]:
         """Read and validate CSV file using pandas optimizations.
@@ -136,7 +141,7 @@ class CSVIngestor(BaseIngestor):
         """
         file_path = Path(file_path)
         if not file_path.exists():
-            raise FileNotFoundError(f"CSV file not found: {file_path}")
+            raise FileNotFoundError(f"{RED}CSV file not found: {file_path}{RESET}")
             
         try:
             chunk_size = self.csv_options.pop('chunk_size', 1000)
@@ -160,7 +165,7 @@ class CSVIngestor(BaseIngestor):
                     chunk.columns = chunk.columns.str.strip()
                     self._validate_csv(chunk)
                     if self.unique_id_column and self.unique_id_column not in chunk.columns:
-                        raise ValueError(f"Specified unique_id_column '{self.unique_id_column}' not found in CSV")
+                        raise ValueError(f"{RED}Specified unique_id_column '{self.unique_id_column}' not found in CSV{RESET}")
                     first_chunk = False
                 
                 # Process each row efficiently using itertuples instead of iterrows
@@ -169,11 +174,10 @@ class CSVIngestor(BaseIngestor):
                     yield record
                     
         except pd.errors.EmptyDataError:
-            logger.warning(f"Empty CSV file: {file_path}")
+            logger.warning(f"{YELLOW}Empty CSV file: {file_path}{RESET}")
             return
             
-        except (pd.errors.ParserError, Exception) as e:
-            logger.error(f"Error reading CSV file: {str(e)}")
+        except (pd.errors.ParserError, Exception):
             raise
 
     def ingest(self, file_path: str, batch_size: int = 50) -> List[Dict[str, Any]]:
@@ -205,7 +209,6 @@ class CSVIngestor(BaseIngestor):
             return failed_records
             
         except Exception as e:
-            logger.error(f"CSV ingestion failed: {str(e)}")
             raise 
 
     def _count_records(self, file_path: str) -> Optional[int]:
@@ -224,5 +227,5 @@ class CSVIngestor(BaseIngestor):
             # Use pandas to count lines efficiently
             return pd.read_csv(file_path).shape[0]
         except Exception as e:
-            logger.debug(f"Unable to count CSV records using pandas: {str(e)}")
+            logger.debug(f"{YELLOW}Unable to count CSV records using pandas: {str(e)}{RESET}")
             return None 

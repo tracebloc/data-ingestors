@@ -1,27 +1,24 @@
 from abc import ABC, abstractmethod
-import time
-from typing import Dict, Any, Generator, List, Optional, Callable, NamedTuple
+from typing import Dict, Any, Generator, List, Optional, NamedTuple
 from sqlalchemy.orm import Session
 from sqlalchemy.engine import Engine
-from sqlalchemy.exc import SQLAlchemyError
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 import logging
 from tqdm import tqdm
-import os
 import uuid
 
 from ..database import Database
-from ..processors.base import BaseProcessor
 from ..api.client import APIClient
 from ..utils.logging import setup_logging
 from ..config import Config
-from ..utils.constants import TaskCategory, Intent
+from ..utils.constants import Intent, RESET, BOLD, GREEN, RED, YELLOW, BLUE, CYAN
+from ..utils.validators_mapping import map_validators
+from ..file_transfer import map_file_transfer
 
 # Configure unified logging with config
 config = Config()
 setup_logging(config)
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
+logger.setLevel(config.LOG_LEVEL)
 
 __all__ = ['BaseIngestor', 'IngestionSummary']
 
@@ -36,6 +33,7 @@ class IngestionSummary(NamedTuple):
         failed_records: Number of records that failed processing
         skipped_records: Number of records that were skipped
     """
+    ingestor_id: str
     total_records: int
     processed_records: int
     inserted_records: int
@@ -56,7 +54,6 @@ class BaseIngestor(ABC):
         api_client: API client for sending data
         table_name: Name of the target database table
         schema: Database schema definition
-        processors: List of data processors to apply
         max_retries: Maximum number of retry attempts
         unique_id_column: Column name for unique identifiers
         label_column: Column name for labels
@@ -70,14 +67,14 @@ class BaseIngestor(ABC):
                  api_client: APIClient,
                  table_name: str,
                  schema: Dict[str, str],
-                 processors: List[BaseProcessor] = None,
                  max_retries: int = 3,
                  unique_id_column: Optional[str] = None,
                  label_column: Optional[str] = None,
                  intent: Optional[str] = None,
                  annotation_column: Optional[str] = None,
                  category: Optional[str] = None,
-                 data_format: Optional[str] = None
+                 data_format: Optional[str] = None,
+                 file_options: Optional[Dict[str, Any]] = None
                  ):
         """Initialize the base ingestor.
         
@@ -86,7 +83,6 @@ class BaseIngestor(ABC):
             api_client: API client instance for data transmission
             table_name: Name of the target table
             schema: Database schema definition
-            processors: List of data processors to apply
             max_retries: Maximum number of retry attempts
             unique_id_column: Name of the column to use as unique identifier
             label_column: Name of the column to use as label
@@ -94,6 +90,7 @@ class BaseIngestor(ABC):
             annotation_column: Name of the column to use as annotation
             category: Category of the data
             data_format: Format of the data
+            file_options: File options to run before ingestion
         Raises:
             ValueError: If unique_id_column is not provided
         """
@@ -103,7 +100,6 @@ class BaseIngestor(ABC):
         self.api_client = api_client
         self.table_name = table_name
         self.schema = schema
-        self.processors = processors or []
         self.max_retries = max_retries
         self.unique_id_column = unique_id_column
         self.label_column = label_column
@@ -111,7 +107,8 @@ class BaseIngestor(ABC):
         self.annotation_column = annotation_column
         self.category = category
         self.data_format = data_format
-        
+        self.file_options = file_options or {}
+
         # Ensure table exists
         self.table = self.database.create_table(table_name, schema)
        
@@ -167,7 +164,7 @@ class BaseIngestor(ABC):
             return None
 
     def process_record(self, record: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Process a single record through all processors"""
+        """Process a single record"""
         try:
             # Clean data according to schema
             cleaned_record = {
@@ -183,10 +180,6 @@ class BaseIngestor(ABC):
             
             if cleaned_record is None:
                 return None
-                
-            # Apply all processors
-            for processor in self.processors:
-                cleaned_record = processor.process(cleaned_record)
             
             # Add ingestor_id to the record
             cleaned_record['ingestor_id'] = self.ingestor_id
@@ -195,6 +188,52 @@ class BaseIngestor(ABC):
         except Exception as e:
             logger.error(f"Error processing record: {str(e)}")
             return None
+
+    def validate_data(self, source: Any) -> bool:
+        """Validate data before ingestion using configured validators.
+        
+        Args:
+            source: The data source to validate
+            
+        Returns:
+            True if all validations pass, False otherwise
+            
+        Raises:
+            ValueError: If validation fails
+        """
+        
+        
+        validators = map_validators(self.category, self.file_options)
+        logger.info(f"Running {len(validators)} validator(s) on data source")
+        all_valid = True
+        validation_errors = []
+        
+        for validator in validators:
+            try:
+                logger.info(f"{CYAN}Running validator: {validator.name}{RESET}")
+                result = validator.validate(source)
+
+                if not result.is_valid:
+                    all_valid = False
+                    validation_errors.append(f"{BOLD}{validator.name} Validator failed: {RESET} \n {RED}")
+                    validation_errors.extend(result.errors)
+                    validation_errors.append(f"{RESET}")
+
+                # Log warnings if any
+                for warning in result.warnings:
+                    logger.warning(f"{YELLOW}Validation warning - {validator.name}: {warning}{RESET}")
+                if result.is_valid:
+                    print(f"{GREEN}{validator.name} Validator successfully passed{RESET}")
+            except Exception as e:
+                all_valid = False
+                validation_errors.append(f"Validator {validator.name} error: {str(e)}")
+        
+        if not all_valid:
+            error_summary = "\n".join(validation_errors)
+            raise ValueError(f"{RED}{error_summary}{RESET}")
+        
+        print(f"{GREEN}All validations passed successfully{RESET}")
+        return True
 
     @abstractmethod
     def read_data(self, source: Any) -> Generator[Dict[str, Any], None, None]:
@@ -230,11 +269,25 @@ class BaseIngestor(ABC):
         Returns:
             List of failed records
         """
+        # Validate data before ingestion
+        logger.info(f"{CYAN}Starting data validation before ingestion...{RESET}")
+        try:
+            self.validate_data(f"{config.SRC_PATH}")
+            logger.info(f"{GREEN}Data validation completed successfully{RESET}")
+        except ValueError as e:
+            raise e
+        except Exception as e:
+            raise e
+        
+
+        
+
         batch = []
         failed_records = []
         
         # Statistics tracking
         stats = {
+            'ingestor_id': self.ingestor_id,
             'total_records': 0,
             'processed_records': 0,
             'inserted_records': 0,
@@ -247,16 +300,12 @@ class BaseIngestor(ABC):
         total = self._count_records(source)
         stats['total_records'] = total or 0
         
-        # Determine if we should show progress bar
-        disable_progress = not os.isatty(0) or os.getenv('DISABLE_PROGRESS_BAR')
-        
         with Session(self.engine) as session:
             try:
                 pbar = tqdm(
                     total=total,
                     desc="Ingesting records",
-                    unit="records",
-                    disable=disable_progress
+                    unit="records"
                 )
                 
                 for record in self.read_data(source):
@@ -266,6 +315,7 @@ class BaseIngestor(ABC):
                         processed_record = self.process_record(record)
                         if processed_record:
                             stats['processed_records'] += 1
+                            file_transfer = map_file_transfer(self.category, processed_record, self.file_options)
                             batch.append(processed_record)
                             
                             if len(batch) >= batch_size:
@@ -337,7 +387,7 @@ class BaseIngestor(ABC):
             except Exception as e:
                 session.rollback()
                 logger.error(f"Error during ingestion: {str(e)}")
-                raise
+                raise e
                 
         return failed_records
 
@@ -346,11 +396,7 @@ class BaseIngestor(ABC):
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Cleanup when used as context manager"""
-        for processor in self.processors:
-            try:
-                processor.cleanup()
-            except Exception as e:
-                logger.error(f"Error during processor cleanup: {str(e)}") 
+        pass 
 
     def _process_batch(self, batch: List[Dict[str, Any]], session: Session) -> List[int]:
         """
@@ -380,25 +426,54 @@ class BaseIngestor(ABC):
             return ids if ids else [], api_success, db_failures  # Ensure we always return a list
             
         except Exception as e:
-            logger.error(f"Error processing batch: {str(e)}")
+            logger.error(f"{RED}Error processing batch: {str(e)}{RESET}")
+            if hasattr(e.response, 'text'):
+                logger.error(f"{RED}Error response: {e.response.text}{RESET}")
             raise
 
     def _log_summary(self, summary: IngestionSummary):
-        """Log ingestion summary in a clear, formatted way"""
+        """Log ingestion summary in a clear, formatted way with enhanced visual appeal"""
 
-        logger.info("\n" + "="*50)
-        logger.info("INGESTION SUMMARY")
-        logger.info("="*50)
-        logger.info(f"Total Records Found:     {summary.total_records:,}")
-        logger.info(f"Successfully Processed:  {summary.processed_records:,}")
-        logger.info(f"Inserted to Database:    {summary.inserted_records:,}")
-        logger.info(f"Sent to API:            {summary.api_sent_records:,}")
-        logger.info(f"Failed Records:          {summary.failed_records:,}")
-        logger.info(f"Skipped Records:          {summary.skipped_records:,}")
-        logger.info("="*50)
-        
         # Calculate success rate
+        success_rate = 0
         if summary.total_records > 0:
             success_rate = (summary.inserted_records / summary.total_records) * 100
-            logger.info(f"Success Rate: {success_rate:.2f}%")
-        logger.info("="*50 + "\n") 
+        
+        # Determine overall status color
+        status_color = GREEN if success_rate >= 90 else YELLOW if success_rate >= 70 else RED
+        
+        print(f"\n{CYAN}{'═'*60}{RESET}")
+        print(f"{BOLD}{CYAN}📊 INGESTION SUMMARY 📊{RESET}")
+        print(f"{CYAN}{'═'*60}{RESET}")
+        print(f"{BOLD}Ingestor ID:{RESET}                {BLUE}{summary.ingestor_id}{RESET}")
+        # Main statistics with icons and colors
+        print(f"{BOLD}📈 Total Records Found:{RESET}     {BLUE}{summary.total_records:,}{RESET}")
+        print(f"{BOLD}✅ Successfully Processed:{RESET}  {GREEN}{summary.processed_records:,}{RESET}")
+        print(f"{BOLD}💾 Inserted to Database:{RESET}    {GREEN}{summary.inserted_records:,}{RESET}")
+        print(f"{BOLD}🚀 Sent to API:{RESET}             {GREEN}{summary.api_sent_records:,}{RESET}")
+        print(f"{BOLD}⏭️  Skipped Records:{RESET}        {YELLOW}{summary.skipped_records:,}{RESET}")
+        print(f"{BOLD}❌ Failed DB Insertion:{RESET}     {RED}{summary.failed_records:,}{RESET}")
+        print(f"{BOLD}❌ Failed to Send to API:{RESET}   {RED}{(summary.total_records - summary.api_sent_records):,}{RESET}")
+        print(f"{CYAN}{'─'*60}{RESET}")
+        
+        # Success rate with visual indicator
+        if summary.total_records > 0:
+            # Progress bar
+            bar_length = 30
+            filled_length = int(bar_length * success_rate / 100)
+            bar = "█" * filled_length + "░" * (bar_length - filled_length)
+            print(f"{BOLD}📊 Success Rate:{RESET} [{status_color}{bar}{RESET}] {status_color}{success_rate:.1f}%{RESET}")
+        
+        # Status message
+        if success_rate >= 95:
+            status_msg = "🎉 Ingestion completed successfully!"
+        elif success_rate >= 80:
+            status_msg = "👍 Most records processed successfully."
+        elif success_rate >= 60:
+            status_msg = "⚠️  Some records failed to process."
+        else:
+            status_msg = "❌ Critical! Many records failed to process."
+        
+        print(f"{CYAN}{'─'*60}{RESET}")
+        print(f"{BOLD}{status_color}{status_msg}{RESET}")
+        print(f"{CYAN}{'═'*60}{RESET}\n") 

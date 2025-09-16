@@ -5,12 +5,13 @@ from requests.adapters import HTTPAdapter
 from requests.packages.urllib3.util.retry import Retry
 from ..config import Config
 from ..utils.logging import setup_logging
-from ..utils.constants import TaskCategory, API_TIMEOUT, Intent
+from ..utils.constants import TaskCategory, API_TIMEOUT, RESET, BOLD, GREEN, RED, YELLOW, BLUE, CYAN
 
 # Configure unified logging with config
 config = Config()
 setup_logging(config)
 logger = logging.getLogger(__name__)
+logger.setLevel(config.LOG_LEVEL)
 
 class APIClient:
     def __init__(self, config: Config):
@@ -28,7 +29,7 @@ class APIClient:
         
         # Configure retry strategy
         retry_strategy = Retry(
-            total=3,
+            total=5,
             backoff_factor=1,
             status_forcelist=[500, 502, 503, 504]
         )
@@ -47,12 +48,17 @@ class APIClient:
                 json={"username": self.config.CLIENT_USERNAME, "password": self.config.CLIENT_PASSWORD},
                 timeout=API_TIMEOUT
             )
-            response.raise_for_status()
-            logger.info(f"Authentication response: {response.json()}")
+            # Check status after retries are exhausted
+            if response.status_code >= 400:
+                raise requests.exceptions.HTTPError(f"HTTP {response.status_code}: {response.text}")
+            print(f"{BOLD}{GREEN}Authentication successful{RESET}")
             return response.json().get("token")
+
         except requests.exceptions.RequestException as e:
-            logger.error(f"Error during authentication: {str(e)}")
-            raise
+            if hasattr(e.response, 'text'):
+                raise ValueError(f"{RED}Authentication failed: {e.response.text}{RESET}")
+            else:
+                raise ValueError(f"{RED}Error response: {e}{RESET}")
 
     def send_batch(self, records: List[Tuple[int, Dict[str, Any]]], table_name: str, ingestor_id: str) -> bool:
         """
@@ -97,13 +103,16 @@ class APIClient:
                 timeout=API_TIMEOUT
             )
             
-            response.raise_for_status()
+            # Check status after retries are exhausted
+            if response.status_code >= 400:
+                raise requests.exceptions.HTTPError(f"HTTP {response.status_code}: {response.text}")
             return True
             
         except requests.exceptions.RequestException as e:
-            logger.error(f"Error sending batch to API: {str(e)}")
             if hasattr(e.response, 'text'):
-                logger.error(f"Error response: {e.response.text}")
+                logger.error(f"{RED}Error response: {e.response.text}{RESET}")
+            else:
+                logger.error(f"{RED}Error sending batch to API: {str(e)}{RESET}")
             return False
 
     def send_global_meta_meta(self, table_name: str, schema: Dict[str, str]) -> bool:
@@ -142,14 +151,16 @@ class APIClient:
                 timeout=API_TIMEOUT
             )
             
-            response.raise_for_status()
-            logger.info(f"Successfully sent global metadata. Response: {response.json()}")
+            # Check status after retries are exhausted
+            if response.status_code >= 400:
+                raise requests.exceptions.HTTPError(f"HTTP {response.status_code}: {response.text}")
+            logger.info(f"{GREEN}Successfully sent global metadata. Response: {response.json()}{RESET}")
             return True
             
         except requests.exceptions.RequestException as e:
-            logger.error(f"Error sending global metadata to API: {str(e)}")
+            logger.error(f"{RED}Error sending global metadata to API: {str(e)}{RESET}")
             if hasattr(e.response, 'text'):
-                logger.error(f"Error response: {e.response.text}")
+                logger.error(f"{RED}Error response: {e.response.text}{RESET}")
             return False
 
     def send_generate_edge_label_meta(self, table_name: str, ingestor_id: str, intent: str) -> bool:
@@ -176,14 +187,16 @@ class APIClient:
             logger.info(f"Sending request to generate edge label metadata for dataset type: {table_name}")
             response = self.session.get(url, headers=headers, timeout=API_TIMEOUT)
             
-            response.raise_for_status()
-            logger.info(f"Successfully generated edge label metadata. Response")
+            # Check status after retries are exhausted
+            if response.status_code >= 400:
+                raise requests.exceptions.HTTPError(f"HTTP {response.status_code}: {response.text}")
+            logger.info(f"{GREEN}Successfully generated edge label metadata. Response{RESET}")
             return True
             
         except requests.exceptions.RequestException as e:
-            logger.error(f"Error generating edge label metadata: {str(e)}")
+            logger.error(f"{RED}Error generating edge label metadata: {str(e)}{RESET}")
             if hasattr(e.response, 'text'):
-                logger.error(f"Error response: {e.response.text}")
+                logger.error(f"{RED}Error response: {e.response.text}{RESET}")
             return False
 
     def prepare_dataset(self, category: str, ingestor_id: str, data_format: str, intent: str) -> bool:
@@ -217,14 +230,16 @@ class APIClient:
             logger.info(f"Sending prepare request for category: {category}, injester_id: {ingestor_id}, data_format: {data_format} , data_intent: {intent}")
             response = self.session.get(url, headers=headers, timeout=API_TIMEOUT)
             
-            response.raise_for_status()
-            logger.info(f"Successfully prepared data. Response: {response.json()}")
+            # Check status after retries are exhausted
+            if response.status_code >= 400:
+                raise requests.exceptions.HTTPError(f"HTTP {response.status_code}: {response.text}")
+            logger.info(f"{GREEN}Successfully prepared data. Response: {response.json()}{RESET}")
             return True
             
         except requests.exceptions.RequestException as e:
-            logger.error(f"Error preparing data: {str(e)}")
+            logger.error(f"{RED}Error preparing data: {str(e)}{RESET}")
             if hasattr(e.response, 'text'):
-                logger.error(f"Error response: {e.response.text}")
+                logger.error(f"{RED}Error response: {e.response.text}{RESET}")
             return False
 
     def create_dataset(self, requires_gpu: bool = False, allow_feature_modification: bool = False, ingestor_id: str = None, category: str = None) -> Dict[str, Any]:
@@ -266,7 +281,7 @@ class APIClient:
                 "allow_feature_modification": allow_feature_modification
             })
 
-            logger.info(f"Creating dataset with payload: {payload}")
+            logger.info(f"{GREEN}Creating dataset with payload: {payload}{RESET}")
             
             headers = {
                 "Authorization": f"TOKEN {self.token}",
@@ -280,14 +295,16 @@ class APIClient:
                 timeout=API_TIMEOUT
             )
             
-            response.raise_for_status()
-            logger.info(f"Successfully created dataset. Response: {response.json()}")
+            # Check status after retries are exhausted
+            if response.status_code >= 400:
+                raise requests.exceptions.HTTPError(f"HTTP {response.status_code}: {response.text}")
+            logger.info(f"{GREEN}Successfully created dataset. Response: {response.json()}{RESET}")
             return response.json()
             
         except requests.exceptions.RequestException as e:
-            logger.error(f"Error creating dataset: {str(e)}")
+            logger.error(f"{RED}Error creating dataset: {str(e)}{RESET}")
             if hasattr(e.response, 'text'):
-                logger.error(f"Error response: {e.response.text}")
+                logger.error(f"{RED}Error response: {e.response.text}{RESET}")
             raise
 
     def __del__(self):

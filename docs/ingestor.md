@@ -57,20 +57,7 @@ The CSV Ingestor is designed to read data from CSV files, process it, and store 
    }
    ```
 
-6. **Processor Definition**:
-   Create a processor to transform data (e.g., convert names to uppercase):
-   ```python
-   class UpperCaseProcessor(BaseProcessor):
-       def __init__(self, column_name: str):
-           self.column_name = column_name
-
-       def process(self, record: Dict[str, Any]) -> Dict[str, Any]:
-           if self.column_name in record and isinstance(record[self.column_name], str):
-               record[self.column_name] = record[self.column_name].upper()
-           return record
-   ```
-
-7. **Ingestor Creation**:
+6. **Ingestor Creation**:
    Create an instance of the CSV ingestor with the defined schema and options:
    ```python
    ingestor = CSVIngestor(
@@ -79,7 +66,6 @@ The CSV Ingestor is designed to read data from CSV files, process it, and store 
        table_name=config.TABLE_NAME,
        schema=schema,
        csv_options=csv_options,
-       processors=[upper_case_processor],
        unique_id_column="id",
        label_column="name",
        intent_column="data_intent",
@@ -87,7 +73,7 @@ The CSV Ingestor is designed to read data from CSV files, process it, and store 
    )
    ```
 
-8. **Data Ingestion**:
+7. **Data Ingestion**:
    Use the ingestor to read and process the data:
    ```python
    with ingestor:

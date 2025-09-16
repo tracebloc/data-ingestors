@@ -13,8 +13,8 @@ from pathlib import Path
 from .base import BaseIngestor
 from ..database import Database
 from ..api.client import APIClient
-from ..processors.base import BaseProcessor
-
+from ..utils.constants import RESET, RED,YELLOW
+from ..validators import BaseValidator
 logger = logging.getLogger(__name__)
 
 __all__ = ['JSONIngestor']
@@ -36,7 +36,6 @@ class JSONIngestor(BaseIngestor):
         api_client: APIClient,
         table_name: str,
         schema: Dict[str, str],
-        processors: Optional[List[BaseProcessor]] = None,
         max_retries: int = 3,
         json_options: Optional[Dict[str, Any]] = None,
         unique_id_column: Optional[str] = None,
@@ -44,7 +43,9 @@ class JSONIngestor(BaseIngestor):
         intent: Optional[str] = None,
         annotation_column: Optional[str] = None,
         category: Optional[str] = None,
-        data_format: Optional[str] = None
+        data_format: Optional[str] = None,
+        log_level: Optional[int] = None,
+        validators: Optional[List[BaseValidator]] = None
     ):
         """Initialize JSON Ingestor.
         
@@ -53,7 +54,6 @@ class JSONIngestor(BaseIngestor):
             api_client: API client instance for data transmission
             table_name: Name of the target table
             schema: Database schema definition
-            processors: List of data processors to apply
             max_retries: Maximum number of retry attempts
             json_options: Additional options for JSON processing
             unique_id_column: Name of the column to use as unique identifier
@@ -62,22 +62,26 @@ class JSONIngestor(BaseIngestor):
             annotation_column: Name of the column to use as annotation
             category: Category of the data
             data_format: Format of the data
+            log_level: Level of the logger
+            validators: List of validators to run before ingestion
         """
         super().__init__(
             database, 
             api_client, 
             table_name, 
             schema, 
-            processors, 
             max_retries,
             unique_id_column,
             label_column,
             intent,
             annotation_column,
             category,
-            data_format
+            data_format,
+            log_level,
+            validators
         )
         self.json_options = json_options or {}
+        logger.setLevel(log_level)
         
     def _validate_record(self, record: Dict[str, Any]) -> None:
         """Validate JSON record against schema.
@@ -99,11 +103,11 @@ class JSONIngestor(BaseIngestor):
         # Log which schema fields are not in the record (for information only)
         missing_fields = schema_fields - record_fields
         if missing_fields:
-            logger.warning(f"Schema fields not present in JSON record: {', '.join(missing_fields)}")
+            logger.warning(f"{YELLOW}Schema fields not present in JSON record: {', '.join(missing_fields)}{RESET}")
         
         # Validate unique_id_column exists if specified
         if self.unique_id_column and self.unique_id_column not in record:
-            raise ValueError(f"Specified unique_id_column '{self.unique_id_column}' not found in record")
+            raise ValueError(f"{RED}Specified unique_id_column '{self.unique_id_column}' not found in record{RESET}")
 
         # Basic data type validation - only for fields that exist in the record
         common_fields = schema_fields & record_fields
@@ -120,7 +124,7 @@ class JSONIngestor(BaseIngestor):
                 # Add more type validations as needed
             except Exception as e:
                 raise ValueError(
-                    f"Data type validation failed for field {field}: {str(e)}"
+                    f"{RED}Data type validation failed for field {field}: {str(e)}{RESET}"
                 )
 
     def read_data(self, file_path: str) -> Generator[Dict[str, Any], None, None]:
@@ -143,7 +147,7 @@ class JSONIngestor(BaseIngestor):
         """
         file_path = Path(file_path)
         if not file_path.exists():
-            raise FileNotFoundError(f"JSON file not found: {file_path}")
+            raise FileNotFoundError(f"{RED}JSON file not found: {file_path}{RESET}")
             
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
@@ -159,22 +163,22 @@ class JSONIngestor(BaseIngestor):
                 # Process each record
                 for record in data:
                     if not isinstance(record, dict):
-                        logger.warning(f"Skipping invalid record: {record}")
+                        logger.warning(f"{YELLOW}Skipping invalid record: {record}{RESET}")
                         continue
                         
                     try:
                         self._validate_record(record)
                         yield record  # Let base class handle the cleaning and unique ID mapping
                     except ValueError as e:
-                        logger.warning(f"Skipping invalid record: {str(e)}")
+                        logger.warning(f"{YELLOW}Skipping invalid record: {str(e)}{RESET}")
                         continue
                     
         except json.JSONDecodeError as e:
-            logger.error(f"Error parsing JSON file: {str(e)}")
+            logger.error(f"{RED}Error parsing JSON file: {str(e)}{RESET}")
             raise
             
         except Exception as e:
-            logger.error(f"Unexpected error reading JSON: {str(e)}")
+            logger.error(f"{RED}Unexpected error reading JSON: {str(e)}{RESET}")
             raise
 
     def _count_records(self, file_path: str) -> Optional[int]:
@@ -198,7 +202,7 @@ class JSONIngestor(BaseIngestor):
                     return len(data)
             return None
         except Exception as e:
-            logger.debug(f"Unable to count JSON records: {str(e)}")
+            logger.debug(f"{YELLOW}Unable to count JSON records: {str(e)}{RESET}")
             return None
 
     def ingest(self, file_path: str, batch_size: int = 50) -> List[Dict[str, Any]]:
@@ -230,5 +234,5 @@ class JSONIngestor(BaseIngestor):
             return failed_records
             
         except Exception as e:
-            logger.error(f"JSON ingestion failed: {str(e)}")
+            logger.error(f"{RED}JSON ingestion failed: {str(e)}{RESET}")
             raise 
