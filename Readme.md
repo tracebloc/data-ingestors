@@ -1,33 +1,16 @@
-## Steps to Run Project
-To run this project follow these steps:
-* Clone Repository
-```
-git clone https://github.com/tracebloc/data-ingestors.git
-```
-* Check required directory inside "/data/shared/" and files are present
-    * input_images : containing all images
-    * label.csv
-* Create required directory 
-    * raw_images
-    * processed_images
-* Activate Python Environment
-* Move to repository
-```commandline
-cd data-ingestors/csv-ingestor
-```
-* Run command to build docker image 
-```commandline
-docker build -t IMAGE_NAME:TAG PATH_TO_DOCKERFILE .
-```
-* Run command to push docker image
-```commandline
-docker push IMAGE_NAME:TAG PATH_TO_DOCKERFILE
-```
-* Run command to start ingestor deployment "deployment.yaml"
-```commandline
-kubectl apply -f deployment.yaml
-```
-* Move all images from input_images to raw_images
-```commandline
-mv input_images/* raw_images
-```
+# The Data Ingestor
+
+## Official Documentation
+Follow the [official documentation](https://docs.tracebloc.io/create-use-case/prepare-dataset) to add your training/test dataset to your tracebloc client.
+
+## Features
+- Multi-source data ingestion
+- API endpoints for data management
+- Containerized deployment
+- Kubernetes support
+
+## License
+This project is licensed under the MIT License [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT).
+
+## Support
+For additional support or questions, please refer to our documentation or contact the Tracebloc support team at `support@tracebloc.io`.

@@ -1,0 +1,50 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ingestor-job-train-data # train/test switch
+  namespace: tracebloc-templates
+spec:
+  template:
+    spec:
+      containers:
+      - name: api
+        image: moritz000/csv-templates-ingestor-claims-train:latest # train/test switch
+        imagePullPolicy: Always
+        volumeMounts:
+          - name: shared-volume
+            mountPath: "/data/shared/" # Storage path within the client cluster (not the ingestor path). The data ingestor will copy all images and text files to that location.
+        env:
+        # Client credentials 
+        - name: CLIENT_ENV
+          value: "dev"
+        - name: CLIENT_ID
+          value: "08ec78b9-871c-4fe1-8414-6a0ab3d268e3"
+        - name: CLIENT_PASSWORD
+          value: "2unfcsowu4fh!8Uxz23fj"
+        - name: CLIENT_PVC
+          value: "shared-pvc"
+        - name: MYSQL_HOST
+          value: "mysql"
+        - name: SRC_PATH
+          value: "/data" # Source folder path whithin the data ingestor
+        - name: LABEL_FILE
+          value: "/app/data/shared/Xy_train.csv" # train/test switch
+        - name: COMPANY
+          value: "Template-Use-Cases"
+        - name: TABLE_NAME
+          value: "claims_table_train_v2" # train/test switch
+        - name: TITLE
+          value: "Insurance Claims" # Optional: provide a title for the dataset
+        - name: BATCH_SIZE
+          value: "4000"
+        - name: LOG_LEVEL
+          value: "WARNING"
+      imagePullSecrets:
+      - name: regcred
+      nodeSelector:
+        type: system
+      volumes:
+        - name: shared-volume
+          persistentVolumeClaim:
+            claimName: shared-pvc # value has to match the shared data PVC name in the client values.yaml
+      restartPolicy: Never
