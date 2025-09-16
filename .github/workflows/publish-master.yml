@@ -1,0 +1,41 @@
+name: Publish Master Package to GitHub Packages
+
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install build tools
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+
+      - name: Build distribution
+        run: |
+          python setup.py sdist bdist_wheel
+
+      - name: Install built package for validation
+        run: |
+          pip install dist/*.tar.gz
+
+      - name: Run basic import test
+        run: |
+          python -c "import tracebloc_ingestor"
+
+      - name: Publish to GitHub Packages
+        run: |
+          python -m pip install twine
+          twine upload dist/*
+        env:
+          TWINE_USERNAME: '__token__'
+          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
