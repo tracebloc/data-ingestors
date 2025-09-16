@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 
 this_directory = Path(__file__).parent
-long_description = (this_directory / "README.md").read_text()
+long_description = (this_directory / "Readme.md").read_text()
 
 with open("requirements.txt", "r") as f:
     requirements = f.read().splitlines()
