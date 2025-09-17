@@ -10,7 +10,7 @@ from typing import Any, List
 import logging
 
 from .base import BaseValidator, ValidationResult
-from ..utils.constants import ImageExtension, RED, RESET
+from ..utils.constants import FileExtension, RED, RESET
 from ..config import Config
 from ..utils.logging import setup_logging
 
@@ -33,7 +33,9 @@ class FileTypeValidator(BaseValidator):
     
     def __init__(self, 
                  allowed_extension: str = ".jpeg",
-                 name: str = "File Type Validator"):
+                 name: str = "File Type Validator",
+                 path: str = "images"
+                 ):
         """Initialize the file type validator.
         
         Args:
@@ -43,9 +45,10 @@ class FileTypeValidator(BaseValidator):
         super().__init__(name)
         self.allowed_extension = allowed_extension
         self.strict_mode = True # Whether to enforce strict file type checking . we can later make this configurable
-
+        self.path = path
+        
          # Check if extension is allowed (if strict mode is enabled)
-        if not ImageExtension.is_valid_extension(self.allowed_extension):
+        if not FileExtension.is_valid_extension(self.allowed_extension):
             raise ValueError(f"{RED}Invalid allowed extension: {self.allowed_extension}{RESET}")
 
         # Normalize extensions to lowercase with leading dot
@@ -54,7 +57,7 @@ class FileTypeValidator(BaseValidator):
                 self.allowed_extension.lower() if self.allowed_extension.startswith('.') else f'.{self.allowed_extension.lower()}'
             }
     
-    def validate(self, data: Any, **kwargs) -> ValidationResult:
+    def validate(self, path: Any, **kwargs) -> ValidationResult:
         """Validate file types and extensions.
         
         Args:
@@ -67,6 +70,7 @@ class FileTypeValidator(BaseValidator):
             ValidationResult containing validation status and messages
         """
         try:
+            data = f"{path}/{self.path}"
             recursive = kwargs.get('recursive', True)
             ignore_hidden = kwargs.get('ignore_hidden', True)
             

@@ -20,21 +20,21 @@ class Config:
         "prod": "https://api.tracebloc.io",
         "local": "http://localhost:8000"  # Add local endpoint
     }
-    STORAGE_PATH = "/data/shared"
+    STORAGE_PATH = "templates/object_detection"
     
     # Get environment and set appropriate API endpoint, default to dev
-    EDGE_ENV: str = os.getenv("CLIENT_ENV", "dev")
+    EDGE_ENV: str = os.getenv("CLIENT_ENV", "local")
     API_ENDPOINT: str = API_ENDPOINTS.get(EDGE_ENV, API_ENDPOINTS["dev"])
     
     CLIENT_USERNAME: str = os.getenv("CLIENT_ID", "testedge")
     CLIENT_PASSWORD: str = os.getenv("CLIENT_PASSWORD", "&6edg*D9e16")
     
-    SRC_PATH: str = os.getenv("SRC_PATH", "templates/image_classification/data/images") # path to the source data
+    SRC_PATH: str = os.getenv("SRC_PATH", "templates/object_detection/data") # path to the source data
     DEST_PATH: str = os.path.join(STORAGE_PATH, os.getenv("TABLE_NAME", "image_ingestor_train")) # path to the destination data with table name
-    LABEL_FILE: str = os.getenv("LABEL_FILE", "templates/image_classification/data/labels_file_sample.csv")
+    LABEL_FILE: str = os.getenv("LABEL_FILE", "templates/object_detection/data/labels_file_sample.csv")
     COMPANY: str = os.getenv("COMPANY", "TB_INGESTOR")
-    TABLE_NAME: str = os.getenv("TABLE_NAME", "image_ingestor_train")
-    TITLE: str = os.getenv("TITLE", "Image training data")
+    TABLE_NAME: str = os.getenv("TABLE_NAME", "object_detection_ingestor_train")
+    TITLE: str = os.getenv("TITLE", "Object detection training data")
     
     # Logging configuration
     LOG_LEVEL: int = LogLevel.get_level_code(os.getenv("LOG_LEVEL", "WARNING"))

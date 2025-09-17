@@ -10,7 +10,13 @@ def map_validators(task_category: TaskCategory, options: Dict[str, Any]) -> List
 
     if task_category == TaskCategory.IMAGE_CLASSIFICATION:
         return [
-          FileTypeValidator(allowed_extension=options["extension"]),
+          FileTypeValidator(allowed_extension=options["extension"], path="images"),
+          ImageResolutionValidator(expected_resolution=options["target_size"])
+         ]
+    elif task_category == TaskCategory.OBJECT_DETECTION:
+        return [
+          FileTypeValidator(allowed_extension=options["extension"], path="images"),
+          FileTypeValidator(allowed_extension=".xml", path="annotations"),
           ImageResolutionValidator(expected_resolution=options["target_size"])
          ]
     else:
