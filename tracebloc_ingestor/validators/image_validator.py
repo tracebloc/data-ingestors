@@ -64,7 +64,7 @@ class ImageResolutionValidator(BaseValidator):
         if not PIL_AVAILABLE:
             logger.warning("PIL/Pillow not available. Image resolution validation will be limited.")
     
-    def validate(self, data: Any, **kwargs) -> ValidationResult:
+    def validate(self, path: Any, **kwargs) -> ValidationResult:
         """Validate image resolution uniformity.
         
         Args:
@@ -78,6 +78,7 @@ class ImageResolutionValidator(BaseValidator):
             ValidationResult containing validation status and messages
         """
         try:
+            data = f"{path}/images"
             if not PIL_AVAILABLE:
                 return self._create_result(
                     is_valid=False,
@@ -89,6 +90,7 @@ class ImageResolutionValidator(BaseValidator):
             ignore_hidden = kwargs.get('ignore_hidden', True)
             auto_detect_resolution = kwargs.get('auto_detect_resolution', True)
             
+
             # Get list of image files to validate
             image_files = self._get_image_files(data, recursive, ignore_hidden)
             
