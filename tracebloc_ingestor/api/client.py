@@ -13,6 +13,13 @@ setup_logging(config)
 logger = logging.getLogger(__name__)
 logger.setLevel(config.LOG_LEVEL)
 
+class LoggingRetry(Retry):
+    def increment(self, *args, **kwargs):
+        new_retry = super().increment(*args, **kwargs)
+        # Print or log the retry number
+        logger.info(f"Retrying {kwargs.get('url', '')} (attempt {self.total - new_retry.total})")
+        return new_retry
+    
 class APIClient:
     def __init__(self, config: Config):
         self.config = config
@@ -28,10 +35,11 @@ class APIClient:
         session = requests.Session()
         
         # Configure retry strategy
-        retry_strategy = Retry(
+        retry_strategy = LoggingRetry(
             total=5,
             backoff_factor=1,
-            status_forcelist=[500, 502, 503, 504]
+            status_forcelist=[500, 502, 503, 504],
+            allowed_methods=["GET", "POST"]
         )
         
         adapter = HTTPAdapter(max_retries=retry_strategy)

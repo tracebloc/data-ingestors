@@ -5,6 +5,12 @@ Constants used throughout the application.
 # API Constants
 API_TIMEOUT = 1500
 
+# Retry configuration for file transfers
+RETRY_MAX_ATTEMPTS = 3
+RETRY_WAIT_MULTIPLIER = 1.0
+RETRY_WAIT_MIN = 1.0
+RETRY_WAIT_MAX = 10.0
+
 # Intent Constants
 class Intent:
     """
