@@ -9,10 +9,12 @@ import logging
 import os
 from typing import Dict, Any
 import shutil
+import time
 
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type, before_sleep_log
 from tracebloc_ingestor import Config
 from tracebloc_ingestor.utils.logging import setup_logging
-from tracebloc_ingestor.utils.constants import TaskCategory
+from tracebloc_ingestor.utils.constants import RETRY_MAX_ATTEMPTS, RETRY_WAIT_MULTIPLIER, RETRY_WAIT_MIN, RETRY_WAIT_MAX, TaskCategory
 from tracebloc_ingestor.utils.constants import RESET, GREEN, RED
 
 # Initialize config and configure logging
@@ -20,6 +22,27 @@ config = Config()
 setup_logging(config)
 logger = logging.getLogger(__name__)
 logger.setLevel(config.LOG_LEVEL)
+
+# Define retry decorator for file operations
+retry_decorator = retry(
+    stop=stop_after_attempt(RETRY_MAX_ATTEMPTS),
+    wait=wait_exponential(
+        multiplier=RETRY_WAIT_MULTIPLIER,
+        min=RETRY_WAIT_MIN,
+        max=RETRY_WAIT_MAX
+    ),
+    retry=retry_if_exception_type((OSError, IOError, shutil.Error)),
+    before_sleep=before_sleep_log(logger, config.LOG_LEVEL),
+    reraise=True
+)
+
+
+@retry_decorator
+def _copy_file_with_retry(src_path: str, dest_path: str) -> None:
+    """Copy file with retry logic for handling transient errors."""
+    logger.debug(f"Attempting to copy file from {src_path} to {dest_path}")
+    shutil.copy(src_path, dest_path)
+    logger.debug(f"Successfully copied file from {src_path} to {dest_path}")
 
 
 def image_transfer(record: Dict[str, Any], options: Dict[str, Any]) -> Dict[str, Any]:
@@ -50,8 +73,8 @@ def image_transfer(record: Dict[str, Any], options: Dict[str, Any]) -> Dict[str,
 
         # Save the resized image
         image_dest_path = os.path.join(config.DEST_PATH, f"{data_id}{extension}")
-        # Copy file 
-        shutil.copy(image_src_path, image_dest_path)
+        # Copy file with retry logic
+        _copy_file_with_retry(image_src_path, image_dest_path)
 
         logger.info(f"{GREEN}Successfully copied image: {filename}{RESET}")
         return record
@@ -89,8 +112,8 @@ def annotation_transfer(record: Dict[str, Any], options: Dict[str, Any], extensi
 
         # Save the file
         file_dest_path = os.path.join(config.DEST_PATH, f"{data_id}{extension}")
-        # Copy file 
-        shutil.copy(file_src_path, file_dest_path)
+        # Copy file with retry logic
+        _copy_file_with_retry(file_src_path, file_dest_path)
 
         logger.info(f"{GREEN}Successfully copied file: {filename}{RESET}")
         return record
