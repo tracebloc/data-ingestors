@@ -120,7 +120,7 @@ class APIClient:
             if hasattr(e.response, 'text'):
                 logger.error(f"{RED}Error response: {e.response.text}{RESET}")
             else:
-                logger.error(f"{RED}Error sending batch to API: {str(e)}{RESET}")
+                logger.error(f"{RED}Error sending batch to API: {str(e)[:100]}{RESET}")
             return False
 
     def send_global_meta_meta(self, table_name: str, schema: Dict[str, str]) -> bool:
@@ -166,7 +166,7 @@ class APIClient:
             return True
             
         except requests.exceptions.RequestException as e:
-            logger.error(f"{RED}Error sending global metadata to API: {str(e)}{RESET}")
+            logger.error(f"{RED}Error sending global metadata to API: {str(e)[:100]}{RESET}")
             if hasattr(e.response, 'text'):
                 logger.error(f"{RED}Error response: {e.response.text}{RESET}")
             return False
@@ -202,7 +202,7 @@ class APIClient:
             return True
             
         except requests.exceptions.RequestException as e:
-            logger.error(f"{RED}Error generating edge label metadata: {str(e)}{RESET}")
+            logger.error(f"{RED}Error generating edge label metadata: {str(e)[:100]}{RESET}")
             if hasattr(e.response, 'text'):
                 logger.error(f"{RED}Error response: {e.response.text}{RESET}")
             return False
@@ -245,7 +245,7 @@ class APIClient:
             return True
             
         except requests.exceptions.RequestException as e:
-            logger.error(f"{RED}Error preparing data: {str(e)}{RESET}")
+            logger.error(f"{RED}Error preparing data: {str(e)[:100]}{RESET}")
             if hasattr(e.response, 'text'):
                 logger.error(f"{RED}Error response: {e.response.text}{RESET}")
             return False
@@ -310,7 +310,7 @@ class APIClient:
             return response.json()
             
         except requests.exceptions.RequestException as e:
-            logger.error(f"{RED}Error creating dataset: {str(e)}{RESET}")
+            logger.error(f"{RED}Error creating dataset: {str(e)[:100]}{RESET}")
             if hasattr(e.response, 'text'):
                 logger.error(f"{RED}Error response: {e.response.text}{RESET}")
             raise
