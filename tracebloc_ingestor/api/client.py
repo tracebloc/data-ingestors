@@ -17,7 +17,7 @@ class LoggingRetry(Retry):
     def increment(self, *args, **kwargs):
         new_retry = super().increment(*args, **kwargs)
         # Print or log the retry number
-        logger.info(f"Retrying {kwargs.get('url', '')} (attempt {self.total - new_retry.total})")
+        print(f"{BOLD}{YELLOW}Retrying {kwargs.get('url', '')} (attempt {self.total - new_retry.total}){RESET}")
         return new_retry
     
 class APIClient:
