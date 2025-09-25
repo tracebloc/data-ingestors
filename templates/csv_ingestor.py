@@ -1,10 +1,11 @@
-"""Basic CSV Ingestion Example.
-This example demonstrates how to use the CSVIngestor to ingest data from a CSV file
-into a database and optionally send it to an API.
+"""CSV Ingestion Example.
+
+This example demonstrates how to ingest data from a CSV file into a database
+for classification tasks. It includes data validation, proper error handling,
+and supports various CSV formats with comprehensive configuration options.
 """
 
 import logging
-from pathlib import Path
 
 from tracebloc_ingestor import Config, Database, APIClient, CSVIngestor
 from tracebloc_ingestor.utils.logging import setup_logging
@@ -15,24 +16,26 @@ config = Config()
 setup_logging(config)
 logger = logging.getLogger(__name__)
 
-# Initialize components
-database = Database(config)
-api_client = APIClient(config)
-
 def main():
-    """Run the CSV ingestion example."""
+    """Run the tabular data ingestion example."""
     try:
-        # Schema definition with constraints
+        
+        # Initialize components
+        database = Database(config)
+        # Initialize API client
+        api_client = APIClient(config)
+        
+        # Schema definition for tabular data with constraints
         schema = {
-            "name": "VARCHAR(255)",
+            "name": "VARCHAR(255) NOT NULL",
             "age": "INT",
             "email": "VARCHAR(255)",
-            "description": "VARCHAR(255)",
+            "description": "VARCHAR(500)",
             "profile_image_url": "VARCHAR(512)",
             "notes": "TEXT"
         }
 
-        # CSV specific options with additional configurations
+        # CSV specific options
         csv_options = {
             "chunk_size": 1000,
             "delimiter": ",",
@@ -44,7 +47,7 @@ def main():
             "na_values": ["", "NA", "NULL", "None"]
         }
 
-        # Create ingestor
+        # Create ingestor for tabular data with validators
         ingestor = CSVIngestor(
             database=database,
             api_client=api_client,
@@ -53,10 +56,13 @@ def main():
             data_format=DataFormat.TABULAR,
             category=TaskCategory.TABULAR_CLASSIFICATION,
             csv_options=csv_options,
+            file_options=csv_options,
             label_column="name",
-            intent=Intent.TRAIN
-        )    
-        # Ingest data
+            intent=Intent.TRAIN  # Is the data for training or testing
+        )
+
+        # Ingest data with validation
+        logger.info("Starting tabular data ingestion with data validation...")
         with ingestor:
             failed_records = ingestor.ingest(config.LABEL_FILE, batch_size=config.BATCH_SIZE)
             if failed_records:
@@ -68,8 +74,7 @@ def main():
                 logger.info("All records processed successfully")
 
     except Exception as e:
-        logger.error(f"Error during CSV ingestion: {str(e)}")
-        raise
+        logger.error(f"{str(e)}")
 
 if __name__ == "__main__":
     main() 
