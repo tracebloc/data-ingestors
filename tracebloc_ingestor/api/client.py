@@ -13,6 +13,13 @@ setup_logging(config)
 logger = logging.getLogger(__name__)
 logger.setLevel(config.LOG_LEVEL)
 
+class LoggingRetry(Retry):
+    def increment(self, *args, **kwargs):
+        new_retry = super().increment(*args, **kwargs)
+        # Print or log the retry number
+        print(f"{BOLD}{YELLOW}Retrying {kwargs.get('url', '')} (attempt {self.total - new_retry.total}){RESET}")
+        return new_retry
+    
 class APIClient:
     def __init__(self, config: Config):
         self.config = config
@@ -28,10 +35,11 @@ class APIClient:
         session = requests.Session()
         
         # Configure retry strategy
-        retry_strategy = Retry(
+        retry_strategy = LoggingRetry(
             total=5,
             backoff_factor=1,
-            status_forcelist=[500, 502, 503, 504]
+            status_forcelist=[500, 502, 503, 504],
+            allowed_methods=["GET", "POST"]
         )
         
         adapter = HTTPAdapter(max_retries=retry_strategy)
@@ -112,7 +120,7 @@ class APIClient:
             if hasattr(e.response, 'text'):
                 logger.error(f"{RED}Error response: {e.response.text}{RESET}")
             else:
-                logger.error(f"{RED}Error sending batch to API: {str(e)}{RESET}")
+                logger.error(f"{RED}Error sending batch to API: {str(e)[:100]}{RESET}")
             return False
 
     def send_global_meta_meta(self, table_name: str, schema: Dict[str, str]) -> bool:
@@ -158,7 +166,7 @@ class APIClient:
             return True
             
         except requests.exceptions.RequestException as e:
-            logger.error(f"{RED}Error sending global metadata to API: {str(e)}{RESET}")
+            logger.error(f"{RED}Error sending global metadata to API: {str(e)[:100]}{RESET}")
             if hasattr(e.response, 'text'):
                 logger.error(f"{RED}Error response: {e.response.text}{RESET}")
             return False
@@ -194,7 +202,7 @@ class APIClient:
             return True
             
         except requests.exceptions.RequestException as e:
-            logger.error(f"{RED}Error generating edge label metadata: {str(e)}{RESET}")
+            logger.error(f"{RED}Error generating edge label metadata: {str(e)[:100]}{RESET}")
             if hasattr(e.response, 'text'):
                 logger.error(f"{RED}Error response: {e.response.text}{RESET}")
             return False
@@ -237,7 +245,7 @@ class APIClient:
             return True
             
         except requests.exceptions.RequestException as e:
-            logger.error(f"{RED}Error preparing data: {str(e)}{RESET}")
+            logger.error(f"{RED}Error preparing data: {str(e)[:100]}{RESET}")
             if hasattr(e.response, 'text'):
                 logger.error(f"{RED}Error response: {e.response.text}{RESET}")
             return False
@@ -302,7 +310,7 @@ class APIClient:
             return response.json()
             
         except requests.exceptions.RequestException as e:
-            logger.error(f"{RED}Error creating dataset: {str(e)}{RESET}")
+            logger.error(f"{RED}Error creating dataset: {str(e)[:100]}{RESET}")
             if hasattr(e.response, 'text'):
                 logger.error(f"{RED}Error response: {e.response.text}{RESET}")
             raise
