@@ -14,7 +14,7 @@ import time
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type, before_sleep_log
 from tracebloc_ingestor import Config
 from tracebloc_ingestor.utils.logging import setup_logging
-from tracebloc_ingestor.utils.constants import RETRY_MAX_ATTEMPTS, RETRY_WAIT_MULTIPLIER, RETRY_WAIT_MIN, RETRY_WAIT_MAX, TaskCategory
+from tracebloc_ingestor.utils.constants import RETRY_MAX_ATTEMPTS, RETRY_WAIT_MULTIPLIER, RETRY_WAIT_MIN, RETRY_WAIT_MAX, TaskCategory, FileExtension
 from tracebloc_ingestor.utils.constants import RESET, GREEN, RED
 
 # Initialize config and configure logging
@@ -45,6 +45,19 @@ def _copy_file_with_retry(src_path: str, dest_path: str) -> None:
     logger.debug(f"Successfully copied file from {src_path} to {dest_path}")
 
 
+def _has_extension(filename: str) -> bool:
+    """Check if filename has an extension, handling multiple dots correctly."""
+    if not filename:
+        return False
+    
+    allowed_extensions = FileExtension.get_all_extensions()
+    parts = filename.split('.')
+    if len(parts) > 1:
+        ext = parts[len(parts) - 1]
+        return ext in allowed_extensions
+    return False
+
+
 def image_transfer(record: Dict[str, Any], options: Dict[str, Any]) -> Dict[str, Any]:
    # Create destination directory if it doesn't exist
     os.makedirs(config.DEST_PATH, exist_ok=True)
@@ -60,7 +73,7 @@ def image_transfer(record: Dict[str, Any], options: Dict[str, Any]) -> Dict[str,
 
     
         # Add extension to filename if it doesn't have one
-        if not os.path.splitext(filename)[1]:
+        if not _has_extension(filename):
             filename_with_ext = f"{filename}{extension}"
         else:
             filename_with_ext = filename
@@ -99,7 +112,7 @@ def annotation_transfer(record: Dict[str, Any], options: Dict[str, Any], extensi
 
     
         # Add extension to filename if it doesn't have one
-        if not os.path.splitext(filename)[1]:
+        if not _has_extension(filename):
             filename_with_ext = f"{filename}{extension}"
         else:
             filename_with_ext = filename
