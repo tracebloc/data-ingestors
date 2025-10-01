@@ -45,6 +45,17 @@ def _copy_file_with_retry(src_path: str, dest_path: str) -> None:
     logger.debug(f"Successfully copied file from {src_path} to {dest_path}")
 
 
+def _has_extension(filename: str) -> bool:
+    """Check if filename has an extension, handling multiple dots correctly."""
+    if not filename:
+        return False
+    
+    # Split by dots and check if there's more than one part
+    # and the last part is not empty (indicating a real extension)
+    parts = filename.split('.')
+    return len(parts) > 1 and parts[-1].strip() != ''
+
+
 def image_transfer(record: Dict[str, Any], options: Dict[str, Any]) -> Dict[str, Any]:
    # Create destination directory if it doesn't exist
     os.makedirs(config.DEST_PATH, exist_ok=True)
@@ -60,7 +71,7 @@ def image_transfer(record: Dict[str, Any], options: Dict[str, Any]) -> Dict[str,
 
     
         # Add extension to filename if it doesn't have one
-        if not os.path.splitext(filename)[1]:
+        if not _has_extension(filename):
             filename_with_ext = f"{filename}{extension}"
         else:
             filename_with_ext = filename
@@ -99,7 +110,7 @@ def annotation_transfer(record: Dict[str, Any], options: Dict[str, Any], extensi
 
     
         # Add extension to filename if it doesn't have one
-        if not os.path.splitext(filename)[1]:
+        if not _has_extension(filename):
             filename_with_ext = f"{filename}{extension}"
         else:
             filename_with_ext = filename
