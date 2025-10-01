@@ -14,7 +14,7 @@ import time
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type, before_sleep_log
 from tracebloc_ingestor import Config
 from tracebloc_ingestor.utils.logging import setup_logging
-from tracebloc_ingestor.utils.constants import RETRY_MAX_ATTEMPTS, RETRY_WAIT_MULTIPLIER, RETRY_WAIT_MIN, RETRY_WAIT_MAX, TaskCategory
+from tracebloc_ingestor.utils.constants import RETRY_MAX_ATTEMPTS, RETRY_WAIT_MULTIPLIER, RETRY_WAIT_MIN, RETRY_WAIT_MAX, TaskCategory, FileExtension
 from tracebloc_ingestor.utils.constants import RESET, GREEN, RED
 
 # Initialize config and configure logging
@@ -50,10 +50,12 @@ def _has_extension(filename: str) -> bool:
     if not filename:
         return False
     
-    # Split by dots and check if there's more than one part
-    # and the last part is not empty (indicating a real extension)
+    allowed_extensions = FileExtension.get_all_extensions()
     parts = filename.split('.')
-    return len(parts) > 1 and parts[-1].strip() != ''
+    if len(parts) > 1:
+        ext = parts[len(parts) - 1]
+        return ext in allowed_extensions
+    return False
 
 
 def image_transfer(record: Dict[str, Any], options: Dict[str, Any]) -> Dict[str, Any]:
