@@ -154,7 +154,7 @@ class BaseIngestor(ABC):
             # logger.warning("No unique ID column specified, generating unique ID mapping")
             cleaned_record['data_id'] = str(uuid.uuid4())
             return cleaned_record
-            
+
         unique_id = record.get(self.unique_id_column)
         if unique_id is not None and str(unique_id).strip():
             cleaned_record['data_id'] = str(unique_id).strip()
@@ -172,7 +172,6 @@ class BaseIngestor(ABC):
                 for k, v in record.items()
                 if k in self.schema
             }
-            
             # Map unique ID if specified
             cleaned_record = self._map_unique_id(record, cleaned_record)
 
@@ -183,6 +182,8 @@ class BaseIngestor(ABC):
             
             # Add ingestor_id to the record
             cleaned_record['ingestor_id'] = self.ingestor_id
+            cleaned_record['filename'] = record.get("filename")
+            cleaned_record['extension'] = record.get("extension")
             return cleaned_record
             
         except Exception as e:
@@ -315,7 +316,8 @@ class BaseIngestor(ABC):
                         processed_record = self.process_record(record)
                         if processed_record:
                             stats['processed_records'] += 1
-                            file_transfer = map_file_transfer(self.category, processed_record, self.file_options)
+                            processed_record = map_file_transfer(self.category, processed_record, self.file_options)
+
                             batch.append(processed_record)
                             
                             if len(batch) >= batch_size:

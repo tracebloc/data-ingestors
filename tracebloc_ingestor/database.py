@@ -93,6 +93,8 @@ class Database:
             Column('label', String(255), nullable=True),
             Column('data_intent', String(100), nullable=True),
             Column('data_id', String(255), unique=True, nullable=False),
+            Column('filename', String(255), nullable=True),
+            Column('extension', String(10), nullable=True),
             Column('annotation', Text, nullable=True),
             Column('ingestor_id', String(255), nullable=True)
         ]

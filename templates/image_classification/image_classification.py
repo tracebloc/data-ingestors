@@ -9,7 +9,7 @@ import logging
 
 from tracebloc_ingestor import Config, Database, APIClient, CSVIngestor
 from tracebloc_ingestor.utils.logging import setup_logging
-from tracebloc_ingestor.utils.constants import TaskCategory, Intent, DataFormat, ImageExtension
+from tracebloc_ingestor.utils.constants import TaskCategory, Intent, DataFormat, FileExtension
 
 # Initialize config and configure logging
 config = Config()
@@ -17,15 +17,13 @@ setup_logging(config)
 logger = logging.getLogger(__name__)
 
 # Schema definition for segmentation data with constraints
-schema = {
-    "filename": "VARCHAR(255) NOT NULL"
-}
+schema = {}
 
 # Image specific options including CSV options
 image_options = {
     # Image processing options
-    "target_size": (256, 256),  # Resize images to this dimension
-    "extension": ImageExtension.JPEG, # allowed extension for images: jpeg, jpg, png
+    "target_size": (512, 512),  # Resize images to this dimension
+    "extension": FileExtension.JPG, # allowed extension for images: jpeg, jpg, png
 }
 
 # CSV specific options
