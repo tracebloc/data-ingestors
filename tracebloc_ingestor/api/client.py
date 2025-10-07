@@ -103,8 +103,7 @@ class APIClient:
                 "Authorization": f"TOKEN {self.token}",
                 "Content-Type": "application/json"
             }
-
-            print(f"url : {self.config.API_ENDPOINT}/global_meta/{table_name}/")
+            
             response = self.session.post(
                 f"{self.config.API_ENDPOINT}/global_meta/{table_name}/",
                 data=payload,
@@ -286,7 +285,7 @@ class APIClient:
             
             payload = json.dumps({
                 "title": title,
-                "requires_gpu": requires_gpu,
+                "requires_gpu": True, # TODO: make this dynamic
                 "allow_feature_modification": allow_feature_modification
             })
 
