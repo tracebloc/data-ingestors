@@ -1,7 +1,8 @@
-"""Schema Validator Module.
+"""Data Validator Module.
 
-This module provides validation for data schema compliance including data types,
-field constraints, and required fields to ensure data matches expected schema.
+This module provides validation for data type compliance with schema.
+It validates that data types in CSV files match the data types specified 
+in the schema and provides clear errors when mismatches are found.
 """
 
 import logging
@@ -27,12 +28,12 @@ logger = logging.getLogger(__name__)
 logger.setLevel(config.LOG_LEVEL)
 
 
-class SchemaValidator(BaseValidator):
-    """Validator for ensuring data schema compliance.
+class DataValidator(BaseValidator):
+    """Validator for ensuring data type compliance with schema.
     
-    This validator checks two key things:
-    1. If all required columns are present in the file
-    2. If data types mentioned in schema match the actual data
+    This validator focuses on validating that data types in the CSV file 
+    match the data types specified in the schema. It provides clear errors 
+    when data type mismatches are found.
     
     Attributes:
         schema: Expected schema definition (column_name -> data_type)
@@ -40,8 +41,8 @@ class SchemaValidator(BaseValidator):
     
     def __init__(self, 
                  schema: Optional[Dict[str, str]] = None,
-                 name: str = "Schema Validator"):
-        """Initialize the schema validator.
+                 name: str = "Data Validator"):
+        """Initialize the data validator.
         
         Args:
             schema: Expected schema definition (column_name -> data_type)
@@ -70,11 +71,11 @@ class SchemaValidator(BaseValidator):
         }
     
     def validate(self, data: Any, **kwargs) -> ValidationResult:
-        """Validate data against schema.
+        """Validate data types against schema.
         
-        This method checks:
-        1. If all required columns are present in the file
-        2. If data types mentioned in schema match the actual data
+        This method validates that data types in the CSV file match the 
+        data types specified in the schema. It provides clear errors when 
+        mismatches are found.
         
         Args:
             data: CSV file path or pandas DataFrame to validate
@@ -88,7 +89,7 @@ class SchemaValidator(BaseValidator):
             if not PANDAS_AVAILABLE:
                 return self._create_result(
                     is_valid=False,
-                    errors=["Pandas not available. Cannot perform schema validation."],
+                    errors=["Pandas not available. Cannot perform data type validation."],
                     metadata={'pandas_available': False}
                 )
             
@@ -114,10 +115,10 @@ class SchemaValidator(BaseValidator):
             return self._validate_schema(df)
             
         except Exception as e:
-            logger.error(f"Error during schema validation: {str(e)}")
+            logger.error(f"Error during data type validation: {str(e)}")
             return self._create_result(
                 is_valid=False,
-                errors=[f"Validation error: {str(e)}"],
+                errors=[f"Data type validation error: {str(e)}"],
                 metadata={'error_type': 'validation_exception'}
             )
     
@@ -153,9 +154,8 @@ class SchemaValidator(BaseValidator):
     def _validate_schema(self, df: pd.DataFrame) -> ValidationResult:
         """Validate data against schema.
         
-        This method checks:
-        1. If all required columns are present in the file
-        2. If data types mentioned in schema match the actual data
+        This method focuses on validating that data types in the CSV file 
+        match the data types specified in the schema.
         
         Args:
             df: Pandas DataFrame to validate
@@ -170,20 +170,11 @@ class SchemaValidator(BaseValidator):
             'columns_checked': len(df.columns),
             'schema_columns': list(self.schema.keys()),
             'file_columns': list(df.columns),
-            'missing_columns': [],
             'type_mismatches': {},
             'compliant_columns': {}
         }
         
-        # 1. Check if all required columns are present in the file
-        missing_columns = set(self.schema.keys()) - set(df.columns)
-        if missing_columns:
-            errors.append(f"Missing required columns: {list(missing_columns)}")
-            metadata['missing_columns'] = list(missing_columns)
-        else:
-            metadata['all_columns_present'] = True
-        
-        # 2. Check if data types mentioned in schema match the actual data
+        # Check if data types mentioned in schema match the actual data
         for column in df.columns:
             if column in self.schema:
                 expected_type = self.schema[column]
@@ -204,15 +195,6 @@ class SchemaValidator(BaseValidator):
                     }
                 
                 warnings.extend(validation_result['warnings'])
-            else:
-                # Column exists in file but not in schema - this is just a warning
-                warnings.append(f"Column '{column}' exists in file but not in schema")
-        
-        # Check for unexpected columns (in file but not in schema)
-        unexpected_columns = set(df.columns) - set(self.schema.keys())
-        if unexpected_columns:
-            warnings.append(f"Unexpected columns found in file: {list(unexpected_columns)}")
-            metadata['unexpected_columns'] = list(unexpected_columns)
         
         is_valid = len(errors) == 0
         
