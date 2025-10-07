@@ -103,7 +103,8 @@ class APIClient:
                 "Authorization": f"TOKEN {self.token}",
                 "Content-Type": "application/json"
             }
-            
+
+            print(f"url : {self.config.API_ENDPOINT}/global_meta/{table_name}/")
             response = self.session.post(
                 f"{self.config.API_ENDPOINT}/global_meta/{table_name}/",
                 data=payload,
