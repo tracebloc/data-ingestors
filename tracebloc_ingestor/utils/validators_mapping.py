@@ -5,6 +5,7 @@ from tracebloc_ingestor.validators.image_validator import ImageResolutionValidat
 from tracebloc_ingestor.validators.data_validator import DataValidator
 from tracebloc_ingestor.validators.table_name_validator import TableNameValidator
 from tracebloc_ingestor.validators.duplicate_validator import DuplicateValidator
+from tracebloc_ingestor.validators.xml_validator import PascalVOCXMLValidator
 from tracebloc_ingestor.utils.constants import TaskCategory
 
 
@@ -22,6 +23,7 @@ def map_validators(task_category: TaskCategory, options: Dict[str, Any]) -> List
         return [
           FileTypeValidator(allowed_extension=options["extension"], path="images"),
           FileTypeValidator(allowed_extension=".xml", path="annotations"),
+          PascalVOCXMLValidator(),
           ImageResolutionValidator(expected_resolution=options["target_size"]),
           TableNameValidator(),
           DuplicateValidator()
