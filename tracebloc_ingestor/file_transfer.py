@@ -1,4 +1,4 @@
-"""Image Data Ingestion Example.
+"""File Transfer Module.
 
 This example demonstrates how to ingest image data from a CSV file into a database
 and optionally send it to an API. It includes metadata extraction,
@@ -149,17 +149,92 @@ def annotation_transfer(record: Dict[str, Any], options: Dict[str, Any], extensi
         raise ValueError(f"{RED}Error processing binary file: {str(e)}{RESET}")
 
 
+def text_transfer(record: Dict[str, Any], options: Dict[str, Any]) -> Dict[str, Any]:
+    """Transfer text files for text classification tasks.
+    
+    Args:
+        record: Dictionary containing filename, data_id, and other record data
+        options: Dictionary containing transfer options like allowed_extensions, encoding
+        
+    Returns:
+        Updated record dictionary
+    """
+    # Create destination directory if it doesn't exist
+    os.makedirs(config.DEST_PATH, exist_ok=True)
+
+    try:
+        # Get the filename from the record
+        filename = record.get("filename")
+        data_id = record.get("data_id")
+        allowed_extensions = options.get("allowed_extensions", [".txt", ".text"])
+        
+        if not filename:
+            logger.error(f"{RED}No filename found in record{RESET}")
+            return record
+
+        # Determine file extension
+        file_extension = os.path.splitext(filename)[1].lower()
+        if not file_extension:
+            # If no extension, try to find a matching one from allowed extensions
+            for ext in allowed_extensions:
+                potential_filename = f"{filename}{ext}"
+                potential_src_path = os.path.join(config.SRC_PATH, "text_files", potential_filename)
+                if os.path.exists(potential_src_path):
+                    filename = potential_filename
+                    file_extension = ext
+                    break
+            else:
+                # Default to .txt if no extension found
+                filename = f"{filename}.txt"
+                file_extension = ".txt"
+        else:
+            # Ensure the extension is in allowed extensions
+            if file_extension not in [ext.lower() for ext in allowed_extensions]:
+                logger.warning(f"{RED}File extension {file_extension} not in allowed extensions: {allowed_extensions}{RESET}")
+                # Still proceed with the file
+
+        # Process the text file
+        text_src_path = os.path.join(config.SRC_PATH, "texts", filename)
+        if not os.path.exists(text_src_path):
+            logger.error(f"{RED}Source text file not found: {text_src_path}{RESET}")
+            return record
+
+        # Save the text file
+        text_dest_path = os.path.join(config.DEST_PATH, f"{data_id}{file_extension}")
+        # Copy file with retry logic
+        _copy_file_with_retry(text_src_path, text_dest_path)
+
+        logger.info(f"{GREEN}Successfully copied text file: {filename}{RESET}")
+        return record
+
+    except Exception as e:
+        raise ValueError(f"{RED}Error processing text file: {str(e)}{RESET}")
+
+
 
 def map_file_transfer(task_category: TaskCategory, record: Dict[str, Any], options: Dict[str, Any]) -> Dict[str, Any]:
-
+    """Map file transfer function based on task category.
+    
+    Args:
+        task_category: The type of task (IMAGE_CLASSIFICATION, OBJECT_DETECTION, TEXT_CLASSIFICATION, etc.)
+        record: Dictionary containing filename, data_id, and other record data
+        options: Dictionary containing transfer options
+        
+    Returns:
+        Updated record dictionary or tuple of results for multi-file tasks
+    """
     if task_category == TaskCategory.IMAGE_CLASSIFICATION:
         result = image_transfer(record, options)
         return result
     elif task_category == TaskCategory.OBJECT_DETECTION:
-        record = image_transfer(record, options)
-        result = annotation_transfer(record, options, ".xml")
+        result = image_transfer(record, options)
+        result2 = annotation_transfer(record, options, ".xml")
+        return result, result2
+    elif task_category == TaskCategory.TEXT_CLASSIFICATION:
+        result = text_transfer(record, options)
         return result
     else:
+        logger.warning(f"Unsupported task category: {task_category}")
         return None
 
 

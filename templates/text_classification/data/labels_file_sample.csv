@@ -1,0 +1,6 @@
+filename,extension,label
+sample1,'.txt',positive
+sample2,'.txt',negative
+sample3,'.txt',neutral
+sample4,'.txt',positive
+sample5,'.txt',negative

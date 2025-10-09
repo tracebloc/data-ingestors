@@ -116,13 +116,15 @@ class FileExtension:
     JPG = '.jpg'
     PNG = '.png'
     XML = '.xml'
+    TXT = '.txt'
+    TEXT = '.text'
 
     @classmethod
     def get_all_extensions(cls) -> list[str]:
         """
         Returns a list of all available extension values.
         """
-        return [cls.JPEG, cls.JPG, cls.PNG, cls.XML]
+        return [cls.JPEG, cls.JPG, cls.PNG, cls.XML, cls.TXT, cls.TEXT]
     
     @classmethod
     def is_valid_extension(cls, extension: str) -> bool:
