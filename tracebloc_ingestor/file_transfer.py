@@ -153,8 +153,8 @@ def text_transfer(record: Dict[str, Any], options: Dict[str, Any]) -> Dict[str, 
     """Transfer text files for text classification tasks.
     
     Args:
-        record: Dictionary containing filename, data_id, and other record data
-        options: Dictionary containing transfer options like allowed_extensions, encoding
+        record: Dictionary containing filename and other record data
+        options: Dictionary containing transfer options like allowed_extension
         
     Returns:
         Updated record dictionary
@@ -165,44 +165,30 @@ def text_transfer(record: Dict[str, Any], options: Dict[str, Any]) -> Dict[str, 
     try:
         # Get the filename from the record
         filename = record.get("filename")
-        data_id = record.get("data_id")
-        allowed_extensions = options.get("allowed_extensions", [".txt", ".text"])
-        
+        extension = options.get("allowed_extension")
         if not filename:
             logger.error(f"{RED}No filename found in record{RESET}")
             return record
 
-        # Determine file extension
-        file_extension = os.path.splitext(filename)[1].lower()
-        if not file_extension:
-            # If no extension, try to find a matching one from allowed extensions
-            for ext in allowed_extensions:
-                potential_filename = f"{filename}{ext}"
-                potential_src_path = os.path.join(config.SRC_PATH, "text_files", potential_filename)
-                if os.path.exists(potential_src_path):
-                    filename = potential_filename
-                    file_extension = ext
-                    break
-            else:
-                # Default to .txt if no extension found
-                filename = f"{filename}.txt"
-                file_extension = ".txt"
+        # Add extension to filename if it doesn't have one
+        if not _has_extension(filename):
+            filename_with_ext = f"{filename}{extension}"
         else:
-            # Ensure the extension is in allowed extensions
-            if file_extension not in [ext.lower() for ext in allowed_extensions]:
-                logger.warning(f"{RED}File extension {file_extension} not in allowed extensions: {allowed_extensions}{RESET}")
-                # Still proceed with the file
+            filename_with_ext = filename
 
         # Process the text file
-        text_src_path = os.path.join(config.SRC_PATH, "texts", filename)
+        text_src_path = os.path.join(config.SRC_PATH, "texts", filename_with_ext)
         if not os.path.exists(text_src_path):
             logger.error(f"{RED}Source text file not found: {text_src_path}{RESET}")
             return record
 
         # Save the text file
-        text_dest_path = os.path.join(config.DEST_PATH, f"{data_id}{file_extension}")
+        text_dest_path = os.path.join(config.DEST_PATH, filename_with_ext)
         # Copy file with retry logic
         _copy_file_with_retry(text_src_path, text_dest_path)
+
+        record['filename'] = os.path.splitext(filename_with_ext)[0]
+        record['extension'] = extension
 
         logger.info(f"{GREEN}Successfully copied text file: {filename}{RESET}")
         return record
@@ -227,9 +213,9 @@ def map_file_transfer(task_category: TaskCategory, record: Dict[str, Any], optio
         result = image_transfer(record, options)
         return result
     elif task_category == TaskCategory.OBJECT_DETECTION:
-        result = image_transfer(record, options)
-        result2 = annotation_transfer(record, options, ".xml")
-        return result, result2
+        record = image_transfer(record, options)
+        result = annotation_transfer(record, options, ".xml")
+        return result
     elif task_category == TaskCategory.TEXT_CLASSIFICATION:
         result = text_transfer(record, options)
         return result

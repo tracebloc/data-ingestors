@@ -6,7 +6,6 @@ from tracebloc_ingestor.validators.data_validator import DataValidator
 from tracebloc_ingestor.validators.table_name_validator import TableNameValidator
 from tracebloc_ingestor.validators.duplicate_validator import DuplicateValidator
 from tracebloc_ingestor.validators.xml_validator import PascalVOCXMLValidator
-from tracebloc_ingestor.validators.text_validator import TextFileValidator
 from tracebloc_ingestor.utils.constants import TaskCategory, FileExtension
 
 
@@ -43,16 +42,9 @@ def map_validators(task_category: TaskCategory, options: Dict[str, Any]) -> List
         validators = []
         
         # Add text file validator
-        allowed_extensions = options.get("allowed_extensions", [FileExtension.TXT, FileExtension.TEXT])
-        max_file_size = options.get("max_file_size", 10 * 1024 * 1024)  # 10MB default
-        encoding = options.get("encoding", "utf-8")
-        
-        validators.append(TextFileValidator(
-            allowed_extensions=allowed_extensions,
-            max_file_size=max_file_size,
-            encoding=encoding,
-            path="text_files"
-        ))
+        allowed_extension = options.get("allowed_extension", FileExtension.TXT)
+
+        validators.append(FileTypeValidator(allowed_extension=allowed_extension, path="texts"),)
         
         # Add data validator if schema is provided
         if options.get("schema"):

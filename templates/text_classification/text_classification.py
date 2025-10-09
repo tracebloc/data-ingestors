@@ -19,14 +19,11 @@ setup_logging(config)
 logger = logging.getLogger(__name__)
 
 # Schema definition for text classification data
-schema = {
-}
+schema = {}
 
 # Text specific options including CSV options
 text_options = {
-    "encoding": "utf-8",  # Text file encoding
-    "max_file_size": 10 * 1024 * 1024,  # 10MB max file size
-    "allowed_extensions": ['.txt', '.text']  # Allowed text file extensions
+    "allowed_extension": FileExtension.TXT  # Allowed text file extensions
 }
 
 # CSV specific options
