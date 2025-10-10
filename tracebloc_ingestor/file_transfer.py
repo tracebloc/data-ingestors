@@ -220,7 +220,6 @@ def map_file_transfer(task_category: TaskCategory, record: Dict[str, Any], optio
         result = text_transfer(record, options)
         return result
     else:
-        logger.warning(f"Unsupported task category: {task_category}")
         return None
 
 
