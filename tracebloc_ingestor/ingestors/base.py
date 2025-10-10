@@ -10,7 +10,7 @@ from ..database import Database
 from ..api.client import APIClient
 from ..utils.logging import setup_logging
 from ..config import Config
-from ..utils.constants import Intent, RESET, BOLD, GREEN, RED, YELLOW, BLUE, CYAN
+from ..utils.constants import Intent, TaskCategory, RESET, BOLD, GREEN, RED, YELLOW, BLUE, CYAN
 from ..utils.validators_mapping import map_validators
 from ..file_transfer import map_file_transfer
 
@@ -316,7 +316,14 @@ class BaseIngestor(ABC):
                         processed_record = self.process_record(record)
                         if processed_record:
                             stats['processed_records'] += 1
-                            processed_record = map_file_transfer(self.category, processed_record, self.file_options)
+                            
+                            if self.category in [TaskCategory.IMAGE_CLASSIFICATION, TaskCategory.OBJECT_DETECTION, TaskCategory.TEXT_CLASSIFICATION]:
+                                processed_record = map_file_transfer(self.category, processed_record, self.file_options)
+                                # Skip record if file transfer failed
+                                if processed_record is None:
+                                    stats['skipped_records'] += 1
+                                    logger.warning(f"Skipping record due to file transfer failure: {record.get('filename', 'Unknown')}")
+                                    continue
 
                             batch.append(processed_record)
                             
