@@ -123,7 +123,7 @@ class APIClient:
                 logger.error(f"{RED}Error sending batch to API: {str(e)[:100]}{RESET}")
             return False
 
-    def send_global_meta_meta(self, table_name: str, schema: Dict[str, str]) -> bool:
+    def send_global_meta_meta(self, table_name: str, schema: Dict[str, str], add_info) -> bool:
         """
         Sends global metadata, including the schema, to the remote server.
         
@@ -142,7 +142,8 @@ class APIClient:
         try:
             payload = json.dumps({
                 "table_name": table_name,
-                "schema": schema
+                "schema": schema,
+                "meta_data": add_info,
             })
 
             logger.info(f"Global metadata to send: {(payload)}")
