@@ -10,7 +10,7 @@ from ..database import Database
 from ..api.client import APIClient
 from ..utils.logging import setup_logging
 from ..config import Config
-from ..utils.constants import Intent, RESET, BOLD, GREEN, RED, YELLOW, BLUE, CYAN
+from ..utils.constants import Intent, TaskCategory, RESET, BOLD, GREEN, RED, YELLOW, BLUE, CYAN
 from ..utils.validators_mapping import map_validators
 from ..file_transfer import map_file_transfer
 
@@ -154,7 +154,7 @@ class BaseIngestor(ABC):
             # logger.warning("No unique ID column specified, generating unique ID mapping")
             cleaned_record['data_id'] = str(uuid.uuid4())
             return cleaned_record
-            
+
         unique_id = record.get(self.unique_id_column)
         if unique_id is not None and str(unique_id).strip():
             cleaned_record['data_id'] = str(unique_id).strip()
@@ -172,7 +172,6 @@ class BaseIngestor(ABC):
                 for k, v in record.items()
                 if k in self.schema
             }
-            
             # Map unique ID if specified
             cleaned_record = self._map_unique_id(record, cleaned_record)
 
@@ -183,6 +182,8 @@ class BaseIngestor(ABC):
             
             # Add ingestor_id to the record
             cleaned_record['ingestor_id'] = self.ingestor_id
+            cleaned_record['filename'] = record.get("filename")
+            cleaned_record['extension'] = record.get("extension")
             return cleaned_record
             
         except Exception as e:
@@ -315,7 +316,15 @@ class BaseIngestor(ABC):
                         processed_record = self.process_record(record)
                         if processed_record:
                             stats['processed_records'] += 1
-                            file_transfer = map_file_transfer(self.category, processed_record, self.file_options)
+                            
+                            if self.category in [TaskCategory.IMAGE_CLASSIFICATION, TaskCategory.OBJECT_DETECTION, TaskCategory.TEXT_CLASSIFICATION]:
+                                processed_record = map_file_transfer(self.category, processed_record, self.file_options)
+                                # Skip record if file transfer failed
+                                if processed_record is None:
+                                    stats['skipped_records'] += 1
+                                    logger.warning(f"Skipping record due to file transfer failure: {record.get('filename', 'Unknown')}")
+                                    continue
+
                             batch.append(processed_record)
                             
                             if len(batch) >= batch_size:
@@ -371,8 +380,9 @@ class BaseIngestor(ABC):
 
                     # schema dict
                     schema_dict = self.database.get_table_schema(self.table_name)
+                    add_info = self.file_options
                     # Send global metadata
-                    if self.api_client.send_global_meta_meta(self.table_name, schema_dict):
+                    if self.api_client.send_global_meta_meta(self.table_name, schema_dict, add_info):
 
                         # Prepare dataset
                         if self.api_client.prepare_dataset(self.category, self.ingestor_id, self.data_format, self.intent):

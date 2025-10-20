@@ -1,4 +1,4 @@
-"""Image Data Ingestion Example.
+"""File Transfer Module.
 
 This example demonstrates how to ingest image data from a CSV file into a database
 and optionally send it to an API. It includes metadata extraction,
@@ -41,6 +41,12 @@ retry_decorator = retry(
 def _copy_file_with_retry(src_path: str, dest_path: str) -> None:
     """Copy file with retry logic for handling transient errors."""
     logger.debug(f"Attempting to copy file from {src_path} to {dest_path}")
+    
+    # Remove destination file if it exists to avoid conflicts
+    if os.path.exists(dest_path):
+        logger.debug(f"Destination file exists, removing: {dest_path}")
+        os.remove(dest_path)
+    
     shutil.copy(src_path, dest_path)
     logger.debug(f"Successfully copied file from {src_path} to {dest_path}")
 
@@ -65,7 +71,6 @@ def image_transfer(record: Dict[str, Any], options: Dict[str, Any]) -> Dict[str,
     try:
         # Get the filename from the record
         filename = record.get("filename")
-        data_id = record.get("data_id")
         extension = options.get("extension")
         if not filename:
             logger.error(f"{RED}No filename found in record{RESET}")
@@ -85,9 +90,12 @@ def image_transfer(record: Dict[str, Any], options: Dict[str, Any]) -> Dict[str,
             return record
 
         # Save the resized image
-        image_dest_path = os.path.join(config.DEST_PATH, f"{data_id}{extension}")
+        image_dest_path = os.path.join(config.DEST_PATH, filename_with_ext)
         # Copy file with retry logic
         _copy_file_with_retry(image_src_path, image_dest_path)
+
+        record['filename'] = os.path.splitext(filename_with_ext)[0]
+        record['extension'] = extension
 
         logger.info(f"{GREEN}Successfully copied image: {filename}{RESET}")
         return record
@@ -97,6 +105,13 @@ def image_transfer(record: Dict[str, Any], options: Dict[str, Any]) -> Dict[str,
 
 
 
+
+"""
+Row: id, data_id, filename, extension, label, intent, ingestor_id
+filename: file_name.png (or any other extension) file_name.xml
+
+"""
+
 def annotation_transfer(record: Dict[str, Any], options: Dict[str, Any], extension: str) -> Dict[str, Any]:
    # Create destination directory if it doesn't exist
     os.makedirs(config.DEST_PATH, exist_ok=True)
@@ -104,7 +119,6 @@ def annotation_transfer(record: Dict[str, Any], options: Dict[str, Any], extensi
     try:
         # Get the filename from the record
         filename = record.get("filename")
-        data_id = record.get("data_id")
         extension = extension
         if not filename:
             logger.error(f"{RED}No filename found in record{RESET}")
@@ -124,7 +138,7 @@ def annotation_transfer(record: Dict[str, Any], options: Dict[str, Any], extensi
             return record
 
         # Save the file
-        file_dest_path = os.path.join(config.DEST_PATH, f"{data_id}{extension}")
+        file_dest_path = os.path.join(config.DEST_PATH, filename_with_ext)
         # Copy file with retry logic
         _copy_file_with_retry(file_src_path, file_dest_path)
 
@@ -135,16 +149,76 @@ def annotation_transfer(record: Dict[str, Any], options: Dict[str, Any], extensi
         raise ValueError(f"{RED}Error processing binary file: {str(e)}{RESET}")
 
 
+def text_transfer(record: Dict[str, Any], options: Dict[str, Any]) -> Dict[str, Any]:
+    """Transfer text files for text classification tasks.
+    
+    Args:
+        record: Dictionary containing filename and other record data
+        options: Dictionary containing transfer options like allowed_extension
+        
+    Returns:
+        Updated record dictionary
+    """
+    # Create destination directory if it doesn't exist
+    os.makedirs(config.DEST_PATH, exist_ok=True)
+
+    try:
+        # Get the filename from the record
+        filename = record.get("filename")
+        extension = options.get("allowed_extension")
+        if not filename:
+            logger.error(f"{RED}No filename found in record{RESET}")
+            return record
+
+        # Add extension to filename if it doesn't have one
+        if not _has_extension(filename):
+            filename_with_ext = f"{filename}{extension}"
+        else:
+            filename_with_ext = filename
+
+        # Process the text file
+        text_src_path = os.path.join(config.SRC_PATH, "texts", filename_with_ext)
+        if not os.path.exists(text_src_path):
+            logger.error(f"{RED}Source text file not found: {text_src_path}{RESET}")
+            return record
+
+        # Save the text file
+        text_dest_path = os.path.join(config.DEST_PATH, filename_with_ext)
+        # Copy file with retry logic
+        _copy_file_with_retry(text_src_path, text_dest_path)
+
+        record['filename'] = os.path.splitext(filename_with_ext)[0]
+        record['extension'] = extension
+
+        logger.info(f"{GREEN}Successfully copied text file: {filename}{RESET}")
+        return record
+
+    except Exception as e:
+        raise ValueError(f"{RED}Error processing text file: {str(e)}{RESET}")
+
+
 
 def map_file_transfer(task_category: TaskCategory, record: Dict[str, Any], options: Dict[str, Any]) -> Dict[str, Any]:
-
+    """Map file transfer function based on task category.
+    
+    Args:
+        task_category: The type of task (IMAGE_CLASSIFICATION, OBJECT_DETECTION, TEXT_CLASSIFICATION, etc.)
+        record: Dictionary containing filename, data_id, and other record data
+        options: Dictionary containing transfer options
+        
+    Returns:
+        Updated record dictionary or tuple of results for multi-file tasks
+    """
     if task_category == TaskCategory.IMAGE_CLASSIFICATION:
         result = image_transfer(record, options)
         return result
     elif task_category == TaskCategory.OBJECT_DETECTION:
-        result = image_transfer(record, options)
-        result2 = annotation_transfer(record, options, ".xml")
-        return result, result2
+        record = image_transfer(record, options)
+        result = annotation_transfer(record, options, ".xml")
+        return result
+    elif task_category == TaskCategory.TEXT_CLASSIFICATION:
+        result = text_transfer(record, options)
+        return result
     else:
         return None
 

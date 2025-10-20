@@ -9,7 +9,7 @@ from .config import Config
 from .database import Database
 from .api.client import APIClient
 from .ingestors import BaseIngestor,CSVIngestor, JSONIngestor
-from .validators import BaseValidator, ValidationResult, FileTypeValidator, ImageResolutionValidator
+from .validators import BaseValidator, ValidationResult, FileTypeValidator, ImageResolutionValidator, TableNameValidator
 
 __version__ = '0.1.0'
 
@@ -23,5 +23,6 @@ __all__ = [
     'BaseValidator',
     'ValidationResult',
     'FileTypeValidator',
-    'ImageResolutionValidator'
+    'ImageResolutionValidator',
+    'TableNameValidator'
 ]

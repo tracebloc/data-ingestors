@@ -22,14 +22,12 @@ setup_logging(config)
 logger = logging.getLogger(__name__)
 
 # Schema definition for object detection data
-schema = {
-    "filename": "VARCHAR(255) NOT NULL",
-}
+schema = {}
 
 # Object detection specific options including CSV options
 object_detection_options = {
     # Image processing options
-    "target_size": (1920, 1080),  # Resize images to this dimension
+    "target_size": (448, 448),  # Resize images to this dimension
     "extension": FileExtension.JPG,  # allowed extension for images: jpeg, jpg, png
 }
 
