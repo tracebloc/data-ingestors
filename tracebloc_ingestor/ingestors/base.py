@@ -380,8 +380,9 @@ class BaseIngestor(ABC):
 
                     # schema dict
                     schema_dict = self.database.get_table_schema(self.table_name)
+                    add_info = self.file_options
                     # Send global metadata
-                    if self.api_client.send_global_meta_meta(self.table_name, schema_dict):
+                    if self.api_client.send_global_meta_meta(self.table_name, schema_dict, add_info):
 
                         # Prepare dataset
                         if self.api_client.prepare_dataset(self.category, self.ingestor_id, self.data_format, self.intent):

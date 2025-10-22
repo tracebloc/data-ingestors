@@ -46,6 +46,9 @@ def main():
             "skip_blank_lines": True,
             "na_values": ["", "NA", "NULL", "None"]
         }
+        file_options = {
+            "number_of_columns": 6  #total number of columns in schema
+        }
 
         # Create ingestor for tabular data with validators
         ingestor = CSVIngestor(
@@ -56,7 +59,7 @@ def main():
             data_format=DataFormat.TABULAR,
             category=TaskCategory.TABULAR_CLASSIFICATION,
             csv_options=csv_options,
-            file_options=csv_options,
+            file_options=file_options,
             label_column="name",
             intent=Intent.TRAIN  # Is the data for training or testing
         )
