@@ -88,7 +88,6 @@ class APIClient:
             payload = json.dumps([
                 {
                     "data_id": record_data.get("data_id"),
-                    "company": self.config.COMPANY,
                     "data_intent": record_data.get("data_intent", "train"),
                     "label": record_data.get("label", ""),
                     "is_sample": False,
