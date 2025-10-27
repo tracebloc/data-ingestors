@@ -47,7 +47,7 @@ def main():
             "na_values": ["", "NA", "NULL", "None"]
         }
         file_options = {
-            "number_of_columns": 6  #total number of columns in schema
+            "number_of_columns": len(schema)-1  # total number of columns in schema excluding label column
         }
 
         # Create ingestor for tabular data with validators
