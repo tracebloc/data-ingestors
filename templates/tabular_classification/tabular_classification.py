@@ -25,7 +25,8 @@ def main():
         # Initialize API client
         api_client = APIClient(config)
         
-        # Schema definition for tabular data with constraints
+        # Schema definition for tabular data
+        # don't specify label column in schema otherwise specify all column
         schema = {
             "name": "VARCHAR(255) NOT NULL",
             "age": "INT",
@@ -46,8 +47,9 @@ def main():
             "skip_blank_lines": True,
             "na_values": ["", "NA", "NULL", "None"]
         }
+
         file_options = {
-            "number_of_columns": len(schema)-1  # total number of columns in schema excluding label column
+            "number_of_columns": len(schema)  # total number of columns in schema
         }
 
         # Create ingestor for tabular data with validators
