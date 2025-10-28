@@ -22,12 +22,13 @@ logger = logging.getLogger(__name__)
 database = Database(config)
 api_client = APIClient(config)
 
+
 class UpperCaseProcessor(BaseProcessor):
     """Processor that converts specified column values to uppercase."""
-    
+
     def __init__(self, config: Config, column_name: str):
         """Initialize the processor.
-        
+
         Args:
             config: Configuration object
             column_name: Name of the column to process
@@ -37,10 +38,10 @@ class UpperCaseProcessor(BaseProcessor):
 
     def process(self, record: Dict[str, Any]) -> Dict[str, Any]:
         """Process a record by converting the specified column to uppercase.
-        
+
         Args:
             record: The record to process
-            
+
         Returns:
             The processed record
         """
@@ -48,38 +49,40 @@ class UpperCaseProcessor(BaseProcessor):
             record[self.column_name] = record[self.column_name].upper()
         return record
 
+
 class EmailDomainProcessor(BaseProcessor):
     """Processor that extracts domain from email addresses."""
-    
+
     def __init__(self, config: Config):
         """Initialize the processor.
-        
+
         Args:
             config: Configuration object
         """
         super().__init__(config)
-    
+
     def process(self, record: Dict[str, Any]) -> Dict[str, Any]:
         """Process a record by extracting email domain.
-        
+
         Args:
             record: The record to process
-            
+
         Returns:
             The processed record with added 'email_domain' field
-            
+
         Raises:
             ValueError: If email format is invalid
         """
-        if 'email' in record and isinstance(record['email'], str):
+        if "email" in record and isinstance(record["email"], str):
             try:
-                domain = record['email'].split('@')[1]
+                domain = record["email"].split("@")[1]
                 if not domain:  # Check if domain is empty
                     raise ValueError("Empty domain in email")
-                record['email_domain'] = domain
+                record["email_domain"] = domain
             except IndexError:
                 raise ValueError(f"Invalid email format: {record['email']}")
         return record
+
 
 def main():
     """Run the custom processor example."""
@@ -91,13 +94,13 @@ def main():
             "email": "VARCHAR(255) UNIQUE",
             "email_domain": "VARCHAR(255)",  # Added for the EmailDomainProcessor
             "age": "INT CHECK (age >= 0 AND age <= 150)",
-            "description": "VARCHAR(255)"
+            "description": "VARCHAR(255)",
         }
 
         # Create processors
         processors = [
             UpperCaseProcessor(config=config, column_name="name"),
-            EmailDomainProcessor(config=config)
+            EmailDomainProcessor(config=config),
         ]
 
         # Create ingestor with processors
@@ -110,14 +113,16 @@ def main():
             data_format=DataFormat.TABULAR,
             processors=processors,
             label_column="name",
-            intent=Intent.TRAIN
+            intent=Intent.TRAIN,
         )
 
         # use example file: "examples/data/tabular_classification_sample_in_csv_format.csv"
-        
+
         # Ingest data
         with ingestor:
-            failed_records = ingestor.ingest(config.LABEL_FILE, batch_size=config.BATCH_SIZE)
+            failed_records = ingestor.ingest(
+                config.LABEL_FILE, batch_size=config.BATCH_SIZE
+            )
             if failed_records:
                 logger.warning(f"Failed to process {len(failed_records)} records")
             else:
@@ -127,5 +132,6 @@ def main():
         logger.error(f"Error during ingestion: {str(e)}")
         raise
 
+
 if __name__ == "__main__":
-    main() 
+    main()

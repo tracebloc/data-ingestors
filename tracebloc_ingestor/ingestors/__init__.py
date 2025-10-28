@@ -10,9 +10,4 @@ from .base import BaseIngestor, IngestionSummary
 from .csv_ingestor import CSVIngestor
 from .json_ingestor import JSONIngestor
 
-__all__ = [
-    'BaseIngestor',
-    'IngestionSummary',
-    'CSVIngestor',
-    'JSONIngestor'
-]
+__all__ = ["BaseIngestor", "IngestionSummary", "CSVIngestor", "JSONIngestor"]

@@ -14,7 +14,12 @@ import os
 
 from tracebloc_ingestor import Config, Database, APIClient, CSVIngestor
 from tracebloc_ingestor.utils.logging import setup_logging
-from tracebloc_ingestor.utils.constants import TaskCategory, Intent, DataFormat, FileExtension
+from tracebloc_ingestor.utils.constants import (
+    TaskCategory,
+    Intent,
+    DataFormat,
+    FileExtension,
+)
 
 # Initialize config and configure logging
 config = Config()
@@ -34,9 +39,10 @@ csv_options = {
     "delimiter": ",",
     "quotechar": '"',
     "escapechar": "\\",
-    "on_bad_lines": 'warn',
-    "encoding": "utf-8"
+    "on_bad_lines": "warn",
+    "encoding": "utf-8",
 }
+
 
 def main():
     """Run the object detection ingestion example."""
@@ -44,7 +50,7 @@ def main():
         # Initialize components
         database = Database(config)
         api_client = APIClient(config)
-       
+
         # Create ingestor for object detection data with validators
         ingestor = CSVIngestor(
             database=database,
@@ -55,18 +61,24 @@ def main():
             csv_options=csv_options,
             file_options=object_detection_options,
             label_column="image_label",
-            intent=Intent.TRAIN  # Is the data for training or testing
+            intent=Intent.TRAIN,  # Is the data for training or testing
         )
 
         # Ingest data with validation
         logger.info("Starting object detection ingestion with data validation...")
         with ingestor:
-            failed_records = ingestor.ingest(config.LABEL_FILE, batch_size=config.BATCH_SIZE)
+            failed_records = ingestor.ingest(
+                config.LABEL_FILE, batch_size=config.BATCH_SIZE
+            )
             if failed_records:
                 logger.warning(f"Failed to process {len(failed_records)} records")
                 for record in failed_records:
-                    logger.warning(f"Failed record: {record.get('image_id', 'Unknown')}")
-                    logger.warning(f"Error details: {record.get('error', 'Unknown error')}")
+                    logger.warning(
+                        f"Failed record: {record.get('image_id', 'Unknown')}"
+                    )
+                    logger.warning(
+                        f"Error details: {record.get('error', 'Unknown error')}"
+                    )
             else:
                 logger.info("All records processed successfully")
 
@@ -74,5 +86,6 @@ def main():
         logger.error(f"Ingestion failed: {str(e)}")
         raise
 
+
 if __name__ == "__main__":
-    main() 
+    main()

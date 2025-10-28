@@ -11,10 +11,23 @@ from typing import Dict, Any
 import shutil
 import time
 
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type, before_sleep_log
+from tenacity import (
+    retry,
+    stop_after_attempt,
+    wait_exponential,
+    retry_if_exception_type,
+    before_sleep_log,
+)
 from tracebloc_ingestor import Config
 from tracebloc_ingestor.utils.logging import setup_logging
-from tracebloc_ingestor.utils.constants import RETRY_MAX_ATTEMPTS, RETRY_WAIT_MULTIPLIER, RETRY_WAIT_MIN, RETRY_WAIT_MAX, TaskCategory, FileExtension
+from tracebloc_ingestor.utils.constants import (
+    RETRY_MAX_ATTEMPTS,
+    RETRY_WAIT_MULTIPLIER,
+    RETRY_WAIT_MIN,
+    RETRY_WAIT_MAX,
+    TaskCategory,
+    FileExtension,
+)
 from tracebloc_ingestor.utils.constants import RESET, GREEN, RED
 
 # Initialize config and configure logging
@@ -27,13 +40,11 @@ logger.setLevel(config.LOG_LEVEL)
 retry_decorator = retry(
     stop=stop_after_attempt(RETRY_MAX_ATTEMPTS),
     wait=wait_exponential(
-        multiplier=RETRY_WAIT_MULTIPLIER,
-        min=RETRY_WAIT_MIN,
-        max=RETRY_WAIT_MAX
+        multiplier=RETRY_WAIT_MULTIPLIER, min=RETRY_WAIT_MIN, max=RETRY_WAIT_MAX
     ),
     retry=retry_if_exception_type((OSError, IOError, shutil.Error)),
     before_sleep=before_sleep_log(logger, config.LOG_LEVEL),
-    reraise=True
+    reraise=True,
 )
 
 
@@ -57,7 +68,7 @@ def _has_extension(filename: str) -> bool:
         return False
 
     allowed_extensions = FileExtension.get_all_extensions()
-    parts = filename.split('.')
+    parts = filename.split(".")
     if len(parts) > 1:
         ext = parts[len(parts) - 1]
         return ext in allowed_extensions
@@ -65,7 +76,7 @@ def _has_extension(filename: str) -> bool:
 
 
 def image_transfer(record: Dict[str, Any], options: Dict[str, Any]) -> Dict[str, Any]:
-   # Create destination directory if it doesn't exist
+    # Create destination directory if it doesn't exist
     os.makedirs(config.DEST_PATH, exist_ok=True)
 
     try:
@@ -76,7 +87,6 @@ def image_transfer(record: Dict[str, Any], options: Dict[str, Any]) -> Dict[str,
             logger.error(f"{RED}No filename found in record{RESET}")
             return record
 
-    
         # Add extension to filename if it doesn't have one
         if not _has_extension(filename):
             filename_with_ext = f"{filename}{extension}"
@@ -94,8 +104,8 @@ def image_transfer(record: Dict[str, Any], options: Dict[str, Any]) -> Dict[str,
         # Copy file with retry logic
         _copy_file_with_retry(image_src_path, image_dest_path)
 
-        record['filename'] = os.path.splitext(filename_with_ext)[0]
-        record['extension'] = extension
+        record["filename"] = os.path.splitext(filename_with_ext)[0]
+        record["extension"] = extension
 
         logger.info(f"{GREEN}Successfully copied image: {filename}{RESET}")
         return record
@@ -104,16 +114,17 @@ def image_transfer(record: Dict[str, Any], options: Dict[str, Any]) -> Dict[str,
         raise ValueError(f"{RED}Error processing binary image: {str(e)}{RESET}")
 
 
-
-
 """
 Row: id, data_id, filename, extension, label, intent, ingestor_id
 filename: file_name.png (or any other extension) file_name.xml
 
 """
 
-def annotation_transfer(record: Dict[str, Any], options: Dict[str, Any], extension: str) -> Dict[str, Any]:
-   # Create destination directory if it doesn't exist
+
+def annotation_transfer(
+    record: Dict[str, Any], options: Dict[str, Any], extension: str
+) -> Dict[str, Any]:
+    # Create destination directory if it doesn't exist
     os.makedirs(config.DEST_PATH, exist_ok=True)
 
     try:
@@ -124,7 +135,6 @@ def annotation_transfer(record: Dict[str, Any], options: Dict[str, Any], extensi
             logger.error(f"{RED}No filename found in record{RESET}")
             return record
 
-    
         # Add extension to filename if it doesn't have one
         if not _has_extension(filename):
             filename_with_ext = f"{filename}{extension}"
@@ -153,8 +163,8 @@ def text_transfer(record: Dict[str, Any], options: Dict[str, Any]) -> Dict[str, 
     """Transfer text files for text classification tasks.
 
     Args:
-        record: Dictionary containing filename, data_id, and other record data
-        options: Dictionary containing transfer options like allowed_extensions, encoding
+        record: Dictionary containing filename and other record data
+        options: Dictionary containing transfer options like allowed_extension
 
     Returns:
         Updated record dictionary
@@ -165,44 +175,30 @@ def text_transfer(record: Dict[str, Any], options: Dict[str, Any]) -> Dict[str, 
     try:
         # Get the filename from the record
         filename = record.get("filename")
-        data_id = record.get("data_id")
-        allowed_extensions = options.get("allowed_extensions", [".txt", ".text"])
-
+        extension = options.get("allowed_extension")
         if not filename:
             logger.error(f"{RED}No filename found in record{RESET}")
             return record
 
-        # Determine file extension
-        file_extension = os.path.splitext(filename)[1].lower()
-        if not file_extension:
-            # If no extension, try to find a matching one from allowed extensions
-            for ext in allowed_extensions:
-                potential_filename = f"{filename}{ext}"
-                potential_src_path = os.path.join(config.SRC_PATH, "text_files", potential_filename)
-                if os.path.exists(potential_src_path):
-                    filename = potential_filename
-                    file_extension = ext
-                    break
-            else:
-                # Default to .txt if no extension found
-                filename = f"{filename}.txt"
-                file_extension = ".txt"
+        # Add extension to filename if it doesn't have one
+        if not _has_extension(filename):
+            filename_with_ext = f"{filename}{extension}"
         else:
-            # Ensure the extension is in allowed extensions
-            if file_extension not in [ext.lower() for ext in allowed_extensions]:
-                logger.warning(f"{RED}File extension {file_extension} not in allowed extensions: {allowed_extensions}{RESET}")
-                # Still proceed with the file
+            filename_with_ext = filename
 
         # Process the text file
-        text_src_path = os.path.join(config.SRC_PATH, "texts", filename)
+        text_src_path = os.path.join(config.SRC_PATH, "texts", filename_with_ext)
         if not os.path.exists(text_src_path):
             logger.error(f"{RED}Source text file not found: {text_src_path}{RESET}")
             return record
 
         # Save the text file
-        text_dest_path = os.path.join(config.DEST_PATH, f"{data_id}{file_extension}")
+        text_dest_path = os.path.join(config.DEST_PATH, filename_with_ext)
         # Copy file with retry logic
         _copy_file_with_retry(text_src_path, text_dest_path)
+
+        record["filename"] = os.path.splitext(filename_with_ext)[0]
+        record["extension"] = extension
 
         logger.info(f"{GREEN}Successfully copied text file: {filename}{RESET}")
         return record
@@ -211,8 +207,9 @@ def text_transfer(record: Dict[str, Any], options: Dict[str, Any]) -> Dict[str, 
         raise ValueError(f"{RED}Error processing text file: {str(e)}{RESET}")
 
 
-
-def map_file_transfer(task_category: TaskCategory, record: Dict[str, Any], options: Dict[str, Any]) -> Dict[str, Any]:
+def map_file_transfer(
+    task_category: TaskCategory, record: Dict[str, Any], options: Dict[str, Any]
+) -> Dict[str, Any]:
     """Map file transfer function based on task category.
 
     Args:
@@ -235,7 +232,3 @@ def map_file_transfer(task_category: TaskCategory, record: Dict[str, Any], optio
         return result
     else:
         return None
-
-
-
-

@@ -11,27 +11,30 @@ RETRY_WAIT_MULTIPLIER = 1.0
 RETRY_WAIT_MIN = 1.0
 RETRY_WAIT_MAX = 10.0
 
+
 # Intent Constants
 class Intent:
     """
     Enumeration of supported intents for model training and classification.
     """
+
     TEST = "test"
     TRAIN = "train"
-    
+
     @classmethod
     def get_all_intents(cls) -> list[str]:
         """
         Returns a list of all available intent values.
         """
         return [cls.TEST, cls.TRAIN]
-        
+
 
 # Data Categories
 class TaskCategory:
     """
     Enumeration of supported data categories for model training and classification.
     """
+
     IMAGE_CLASSIFICATION = "image_classification"
     OBJECT_DETECTION = "object_detection"
     KEYPOINT_DETECTION = "keypoint_detection"
@@ -44,7 +47,7 @@ class TaskCategory:
     def get_all_categories(cls) -> list[str]:
         """
         Returns a list of all available category values.
-        
+
         Returns:
             list[str]: List of all category values
         """
@@ -62,19 +65,21 @@ class TaskCategory:
     def is_valid_category(cls, category: str) -> bool:
         """
         Check if a given category is valid.
-        
+
         Args:
             category: The category string to validate
-            
+
         Returns:
             bool: True if category is valid, False otherwise
         """
-        return category in cls.get_all_categories() 
-    
+        return category in cls.get_all_categories()
+
+
 class DataFormat:
     """
     Enumeration of supported data formats for model training and classification.
     """
+
     IMAGE = "image"
     VIDEO = "video"
     AUDIO = "audio"
@@ -87,7 +92,7 @@ class DataFormat:
         Returns a list of all available format values.
         """
         return [cls.IMAGE, cls.VIDEO, cls.AUDIO, cls.TEXT, cls.TABULAR]
-    
+
     @classmethod
     def is_valid_format(cls, format: str) -> bool:
         """
@@ -96,28 +101,27 @@ class DataFormat:
         return format in cls.get_all_formats()
 
 
-
-
 # ANSI color codes
-RESET = '\033[0m'
-BOLD = '\033[1m'
-GREEN = '\033[92m'
-RED = '\033[91m'
-YELLOW = '\033[93m'
-BLUE = '\033[94m'
-CYAN = '\033[96m'
+RESET = "\033[0m"
+BOLD = "\033[1m"
+GREEN = "\033[92m"
+RED = "\033[91m"
+YELLOW = "\033[93m"
+BLUE = "\033[94m"
+CYAN = "\033[96m"
 
 
 class FileExtension:
     """
     Enumeration of supported file extensions.
     """
-    JPEG = '.jpeg'
-    JPG = '.jpg'
-    PNG = '.png'
-    XML = '.xml'
-    TXT = '.txt'
-    TEXT = '.text'
+
+    JPEG = ".jpeg"
+    JPG = ".jpg"
+    PNG = ".png"
+    XML = ".xml"
+    TXT = ".txt"
+    TEXT = ".text"
 
     @classmethod
     def get_all_extensions(cls) -> list[str]:
@@ -125,7 +129,7 @@ class FileExtension:
         Returns a list of all available extension values.
         """
         return [cls.JPEG, cls.JPG, cls.PNG, cls.XML, cls.TXT, cls.TEXT]
-    
+
     @classmethod
     def is_valid_extension(cls, extension: str) -> bool:
         """
@@ -138,6 +142,7 @@ class LogLevel:
     """
     Enumeration of supported log levels.
     """
+
     DEBUG = 10
     INFO = 20
     WARNING = 30
@@ -149,8 +154,9 @@ class LogLevel:
         "INFO": INFO,
         "WARNING": WARNING,
         "ERROR": ERROR,
-        "CRITICAL": CRITICAL
+        "CRITICAL": CRITICAL,
     }
+
     @classmethod
     def get_level_code(cls, level: str) -> int:
         """
