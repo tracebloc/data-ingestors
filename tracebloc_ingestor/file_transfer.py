@@ -41,12 +41,12 @@ retry_decorator = retry(
 def _copy_file_with_retry(src_path: str, dest_path: str) -> None:
     """Copy file with retry logic for handling transient errors."""
     logger.debug(f"Attempting to copy file from {src_path} to {dest_path}")
-    
+
     # Remove destination file if it exists to avoid conflicts
     if os.path.exists(dest_path):
         logger.debug(f"Destination file exists, removing: {dest_path}")
         os.remove(dest_path)
-    
+
     shutil.copy(src_path, dest_path)
     logger.debug(f"Successfully copied file from {src_path} to {dest_path}")
 
@@ -55,7 +55,7 @@ def _has_extension(filename: str) -> bool:
     """Check if filename has an extension, handling multiple dots correctly."""
     if not filename:
         return False
-    
+
     allowed_extensions = FileExtension.get_all_extensions()
     parts = filename.split('.')
     if len(parts) > 1:
@@ -151,11 +151,11 @@ def annotation_transfer(record: Dict[str, Any], options: Dict[str, Any], extensi
 
 def text_transfer(record: Dict[str, Any], options: Dict[str, Any]) -> Dict[str, Any]:
     """Transfer text files for text classification tasks.
-    
+
     Args:
-        record: Dictionary containing filename and other record data
-        options: Dictionary containing transfer options like allowed_extension
-        
+        record: Dictionary containing filename, data_id, and other record data
+        options: Dictionary containing transfer options like allowed_extensions, encoding
+
     Returns:
         Updated record dictionary
     """
@@ -165,30 +165,44 @@ def text_transfer(record: Dict[str, Any], options: Dict[str, Any]) -> Dict[str, 
     try:
         # Get the filename from the record
         filename = record.get("filename")
-        extension = options.get("allowed_extension")
+        data_id = record.get("data_id")
+        allowed_extensions = options.get("allowed_extensions", [".txt", ".text"])
+
         if not filename:
             logger.error(f"{RED}No filename found in record{RESET}")
             return record
 
-        # Add extension to filename if it doesn't have one
-        if not _has_extension(filename):
-            filename_with_ext = f"{filename}{extension}"
+        # Determine file extension
+        file_extension = os.path.splitext(filename)[1].lower()
+        if not file_extension:
+            # If no extension, try to find a matching one from allowed extensions
+            for ext in allowed_extensions:
+                potential_filename = f"{filename}{ext}"
+                potential_src_path = os.path.join(config.SRC_PATH, "text_files", potential_filename)
+                if os.path.exists(potential_src_path):
+                    filename = potential_filename
+                    file_extension = ext
+                    break
+            else:
+                # Default to .txt if no extension found
+                filename = f"{filename}.txt"
+                file_extension = ".txt"
         else:
-            filename_with_ext = filename
+            # Ensure the extension is in allowed extensions
+            if file_extension not in [ext.lower() for ext in allowed_extensions]:
+                logger.warning(f"{RED}File extension {file_extension} not in allowed extensions: {allowed_extensions}{RESET}")
+                # Still proceed with the file
 
         # Process the text file
-        text_src_path = os.path.join(config.SRC_PATH, "texts", filename_with_ext)
+        text_src_path = os.path.join(config.SRC_PATH, "texts", filename)
         if not os.path.exists(text_src_path):
             logger.error(f"{RED}Source text file not found: {text_src_path}{RESET}")
             return record
 
         # Save the text file
-        text_dest_path = os.path.join(config.DEST_PATH, filename_with_ext)
+        text_dest_path = os.path.join(config.DEST_PATH, f"{data_id}{file_extension}")
         # Copy file with retry logic
         _copy_file_with_retry(text_src_path, text_dest_path)
-
-        record['filename'] = os.path.splitext(filename_with_ext)[0]
-        record['extension'] = extension
 
         logger.info(f"{GREEN}Successfully copied text file: {filename}{RESET}")
         return record
@@ -200,12 +214,12 @@ def text_transfer(record: Dict[str, Any], options: Dict[str, Any]) -> Dict[str, 
 
 def map_file_transfer(task_category: TaskCategory, record: Dict[str, Any], options: Dict[str, Any]) -> Dict[str, Any]:
     """Map file transfer function based on task category.
-    
+
     Args:
         task_category: The type of task (IMAGE_CLASSIFICATION, OBJECT_DETECTION, TEXT_CLASSIFICATION, etc.)
         record: Dictionary containing filename, data_id, and other record data
         options: Dictionary containing transfer options
-        
+
     Returns:
         Updated record dictionary or tuple of results for multi-file tasks
     """

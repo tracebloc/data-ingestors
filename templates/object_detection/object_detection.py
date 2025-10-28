@@ -50,7 +50,6 @@ def main():
             database=database,
             api_client=api_client,
             table_name=config.TABLE_NAME,
-            schema=schema,
             data_format=DataFormat.IMAGE,
             category=TaskCategory.OBJECT_DETECTION,
             csv_options=csv_options,

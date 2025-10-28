@@ -38,7 +38,7 @@ class CSVIngestor(BaseIngestor):
         database: Database,
         api_client: APIClient,
         table_name: str,
-        schema: Dict[str, str],
+        schema: Dict[str, str] = {},
         max_retries: int = 3,
         csv_options: Optional[Dict[str, Any]] = None,
         file_options: Optional[Dict[str, Any]] = None,
