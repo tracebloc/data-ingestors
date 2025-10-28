@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 # Image specific options including CSV options
 image_options = {
     # Image processing options
-    "target_size": (512, 512),  # Resize images to this dimension
+    "target_size": (512, 512),  # Define image size. Height = Width
     "extension": FileExtension.JPG,  # allowed extension for images: jpeg, jpg, png
 }
 
