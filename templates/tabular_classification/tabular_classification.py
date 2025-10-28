@@ -27,18 +27,11 @@ def main():
         api_client = APIClient(config)
 
         # Schema definition for tabular data
-        # schema should contain only feature columns only
+        # Schema should contain feature columns only
         schema = {
             "feature_00": "FLOAT ",
             "feature_01": "FLOAT ",
             "feature_02": "FLOAT ",
-            "feature_03": "FLOAT ",
-            "feature_04": "FLOAT ",
-            "feature_05": "FLOAT ",
-            "feature_06": "FLOAT ",
-            "feature_07": "FLOAT ",
-            "feature_08": "FLOAT ",
-            "feature_09": "FLOAT ",
         }
 
         # CSV specific options
