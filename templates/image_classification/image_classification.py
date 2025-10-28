@@ -16,9 +16,6 @@ config = Config()
 setup_logging(config)
 logger = logging.getLogger(__name__)
 
-# Schema definition for segmentation data with constraints
-schema = {}
-
 # Image specific options including CSV options
 image_options = {
     # Image processing options

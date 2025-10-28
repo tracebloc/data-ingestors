@@ -21,9 +21,6 @@ config = Config()
 setup_logging(config)
 logger = logging.getLogger(__name__)
 
-# Schema definition for object detection data
-schema = {}
-
 # Object detection specific options including CSV options
 object_detection_options = {
     # Image processing options

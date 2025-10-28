@@ -66,7 +66,7 @@ class BaseIngestor(ABC):
                  database: Database, 
                  api_client: APIClient,
                  table_name: str,
-                 schema: Dict[str, str],
+                 schema: Dict[str, str] = {},
                  max_retries: int = 3,
                  unique_id_column: Optional[str] = None,
                  label_column: Optional[str] = None,

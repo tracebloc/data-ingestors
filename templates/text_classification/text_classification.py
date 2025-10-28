@@ -18,9 +18,6 @@ config = Config()
 setup_logging(config)
 logger = logging.getLogger(__name__)
 
-# Schema definition for text classification data
-schema = {}
-
 # Text specific options including CSV options
 text_options = {
     "allowed_extension": FileExtension.TXT  # Allowed text file extensions
