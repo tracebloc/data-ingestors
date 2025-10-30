@@ -7,8 +7,7 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y netcat-traditional
 
 # Install data ingestor package
-RUN pip install git+https://<secret>:x-oauth-basic@github.com/tracebloc/data-ingestors.git@develop#egg=tracebloc_ingestor
-# <for prod: RUN pip install tracebloc_ingestor>
+RUN pip install tracebloc_ingestor
 
 # Create necessary directories
 RUN mkdir -p /data/shared
