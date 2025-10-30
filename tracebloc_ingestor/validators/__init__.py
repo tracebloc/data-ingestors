@@ -14,12 +14,12 @@ from .table_name_validator import TableNameValidator
 from .xml_validator import PascalVOCXMLValidator
 
 __all__ = [
-    'BaseValidator',
-    'ValidationResult', 
-    'FileTypeValidator',
-    'ImageResolutionValidator',
-    'TableNameValidator',
-    'DataValidator',
-    'DuplicateValidator',
-    'PascalVOCXMLValidator'
+    "BaseValidator",
+    "ValidationResult",
+    "FileTypeValidator",
+    "ImageResolutionValidator",
+    "TableNameValidator",
+    "DataValidator",
+    "DuplicateValidator",
+    "PascalVOCXMLValidator",
 ]

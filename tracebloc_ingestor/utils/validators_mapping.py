@@ -9,25 +9,25 @@ from tracebloc_ingestor.validators.xml_validator import PascalVOCXMLValidator
 from tracebloc_ingestor.utils.constants import TaskCategory, FileExtension
 
 
-
-def map_validators(task_category: TaskCategory, options: Dict[str, Any]) -> List[BaseValidator]:
-
+def map_validators(
+    task_category: TaskCategory, options: Dict[str, Any]
+) -> List[BaseValidator]:
     if task_category == TaskCategory.IMAGE_CLASSIFICATION:
         return [
-          FileTypeValidator(allowed_extension=options["extension"], path="images"),
-          ImageResolutionValidator(expected_resolution=options["target_size"]),
-          TableNameValidator(),
-          DuplicateValidator()
-         ]
+            FileTypeValidator(allowed_extension=options["extension"], path="images"),
+            ImageResolutionValidator(expected_resolution=options["target_size"]),
+            TableNameValidator(),
+            DuplicateValidator(),
+        ]
     elif task_category == TaskCategory.OBJECT_DETECTION:
         return [
-          FileTypeValidator(allowed_extension=options["extension"], path="images"),
-          FileTypeValidator(allowed_extension=".xml", path="annotations"),
-          PascalVOCXMLValidator(),
-          ImageResolutionValidator(expected_resolution=options["target_size"]),
-          TableNameValidator(),
-          DuplicateValidator()
-         ]
+            FileTypeValidator(allowed_extension=options["extension"], path="images"),
+            FileTypeValidator(allowed_extension=".xml", path="annotations"),
+            PascalVOCXMLValidator(),
+            ImageResolutionValidator(expected_resolution=options["target_size"]),
+            TableNameValidator(),
+            DuplicateValidator(),
+        ]
     elif task_category == TaskCategory.TABULAR_CLASSIFICATION:
         validators = []
 
@@ -40,20 +40,21 @@ def map_validators(task_category: TaskCategory, options: Dict[str, Any]) -> List
         return validators
     elif task_category == TaskCategory.TEXT_CLASSIFICATION:
         validators = []
-        
+
         # Add text file validator
         allowed_extension = options.get("allowed_extension", FileExtension.TXT)
 
-        validators.append(FileTypeValidator(allowed_extension=allowed_extension, path="texts"),)
-        
+        validators.append(
+            FileTypeValidator(allowed_extension=allowed_extension, path="texts"),
+        )
+
         # Add data validator if schema is provided
         if options.get("schema"):
             validators.append(DataValidator(schema=options["schema"]))
-        
+
         validators.append(TableNameValidator())
         validators.append(DuplicateValidator())
-        
+
         return validators
     else:
         return []
-

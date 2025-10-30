@@ -1,11 +1,9 @@
-id,name,age,email,description,profile_image_url,notes
-1,John Doe changed,30,john@example.com,Software Engineer,https://example.com/images/john.png,"Experienced developer with 5+ years in Python"
-2,Jane Smith,28,jane@example.com,Data Scientist,https://example.com/images/jane.jpg,"PhD in Machine Learning"
-3,Bob Wilson,35,bob@example.com,Project Manager,,"It contains multiple paragraphs and special characters: @#$%"
-4,Alice Brown,25,alice@example.com,UX Designer,https://example.com/images/alice.png,"Creative professional"
-5,Charlie Davis,42,charlie@example.com,CTO,https://example.com/images/charlie.jpg,"Technical leader with 15+ years experience"
-6,Eva Martinez,31,eva@example.com,Product Owner,https://example.com/images/eva.png,"Agile certified,MBA graduate"
-7,David Lee,29,david@example.com,DevOps Engineer,https://example.com/images/david.jpg,"Cloud architecture specialist,AWS certified"
-8,Sarah Johnson,33,sarah@example.com,Data Engineer,,Worked with various big data technologies including Hadoop and Spark"
-9,Michael Chang,27,michael@example.com,Frontend Developer,https://example.com/images/michael.png,"React specialist"
-10,Rachel Green,36,rachel@example.com,Product Manager,https://example.com/images/rachel.jpg,"Strategic thinker"
+id,feature_00,feature_01,feature_02,label
+1,1.6680773978214032,-0.903902455,6.661496229171176,0
+2,0.7017820066004041,1.9789541930566035,5.826137181850707,0
+3,1.6970145189310326,-1.667527426,-1.589981977,0
+4,4.427524335645055,-1.543700586,6.2987092866052485,1
+5,-1.841556791,-3.555829705,-2.888636102,0
+6,9.277801058644444,-1.341497713,-1.220330611,1
+7,-1.269983379,-4.658564205,1.0240388248822088,1
+8,-1.445838743,-6.417109212,0.13496971458012474,0

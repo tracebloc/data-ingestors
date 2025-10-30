@@ -45,6 +45,7 @@ csv_options = {
     "escapechar": "\\",
 }
 
+
 # Define an image and mask processor for segmentation tasks
 class SegmentationProcessor(BaseProcessor):
     def __init__(self, target_size: tuple = (256, 256)):
@@ -59,7 +60,7 @@ class SegmentationProcessor(BaseProcessor):
             # Get the image_id and mask_id from the record
             image_id = record.get("image_id")
             mask_id = record.get("mask_id")
-            
+
             if not image_id:
                 logger.error("No image_id found in record")
                 return record
@@ -68,13 +69,17 @@ class SegmentationProcessor(BaseProcessor):
                 return record
 
             # Process the image
-            image_src_path = os.path.join(self.config.SRC_PATH, "images", f"{image_id}.jpg")
+            image_src_path = os.path.join(
+                self.config.SRC_PATH, "images", f"{image_id}.jpg"
+            )
             if not os.path.exists(image_src_path):
                 logger.error(f"Source image not found: {image_src_path}")
                 return record
 
             # Process the mask
-            mask_src_path = os.path.join(self.config.SRC_PATH, "masks", f"{mask_id}.png")
+            mask_src_path = os.path.join(
+                self.config.SRC_PATH, "masks", f"{mask_id}.png"
+            )
             if not os.path.exists(mask_src_path):
                 logger.error(f"Source mask not found: {mask_src_path}")
                 return record
@@ -102,15 +107,20 @@ class SegmentationProcessor(BaseProcessor):
                 logger.info(f"Successfully processed mask: {mask_id}")
 
         except Exception as e:
-            logger.error(f"Error processing image {image_id} and mask {mask_id}: {str(e)}")
+            logger.error(
+                f"Error processing image {image_id} and mask {mask_id}: {str(e)}"
+            )
 
         return record
+
 
 def main():
     """Run the segmentation data ingestion example."""
     try:
         # Create an instance of the processor
-        segmentation_processor = SegmentationProcessor(target_size=image_options["target_size"])
+        segmentation_processor = SegmentationProcessor(
+            target_size=image_options["target_size"]
+        )
 
         # Create ingestor for segmentation data
         ingestor = CSVIngestor(
@@ -132,8 +142,12 @@ def main():
             if failed_records:
                 logger.warning(f"Failed to process {len(failed_records)} records")
                 for record in failed_records:
-                    logger.warning(f"Failed record: {record.get('image_id', 'Unknown')} - {record.get('mask_id', 'Unknown')}")
-                    logger.warning(f"Error details: {record.get('error', 'Unknown error')}")
+                    logger.warning(
+                        f"Failed record: {record.get('image_id', 'Unknown')} - {record.get('mask_id', 'Unknown')}"
+                    )
+                    logger.warning(
+                        f"Error details: {record.get('error', 'Unknown error')}"
+                    )
             else:
                 logger.info("All records processed successfully")
 
@@ -141,5 +155,6 @@ def main():
         logger.error(f"Ingestion failed: {str(e)}")
         raise
 
+
 if __name__ == "__main__":
-    main() 
+    main()
