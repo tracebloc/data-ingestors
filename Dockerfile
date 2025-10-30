@@ -7,14 +7,10 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y netcat-traditional
 
 # Install data ingestor package
-RUN pip install git+https://<secret>:x-oauth-basic@github.com/tracebloc/data-ingestors.git@develop#egg=tracebloc_ingestor
-# <for prod: RUN pip install tracebloc_ingestor>
-
-# Create necessary directories
-RUN mkdir -p /data/shared
+# RUN pip install git+https://<secret>:x-oauth-basic@github.com/tracebloc/data-ingestors.git@develop#egg=tracebloc_ingestor
+RUN pip install tracebloc_ingestor
 
 # Copy the source code and requirements # train/test switch
-COPY templates/data/tabular_classification_sample_in_csv_format.csv /app/data/shared/tabular_classification_sample_in_csv_format.csv
 COPY templates/csv_ingestor.py /app/ingestor.py
 
 
