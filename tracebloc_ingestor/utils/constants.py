@@ -40,6 +40,8 @@ class TaskCategory:
     KEYPOINT_DETECTION = "keypoint_detection"
     TEXT_CLASSIFICATION = "text_classification"
     TABULAR_CLASSIFICATION = "tabular_classification"
+    TABULAR_REGRESSION = "tabular_regression"
+    TIME_SERIES_FORECASTING = "time_series_forecasting"
     SEMANTIC_SEGMENTATION = "semantic_segmentation"
     INSTANCE_SEGMENTATION = "instance_segmentation"
 
@@ -57,6 +59,8 @@ class TaskCategory:
             cls.KEYPOINT_DETECTION,
             cls.TEXT_CLASSIFICATION,
             cls.TABULAR_CLASSIFICATION,
+            cls.TABULAR_REGRESSION,
+            cls.TIME_SERIES_FORECASTING,
             cls.SEMANTIC_SEGMENTATION,
             cls.INSTANCE_SEGMENTATION,
         ]
