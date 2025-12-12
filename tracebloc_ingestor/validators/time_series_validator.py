@@ -264,7 +264,7 @@ class TimeSeriesValidator(BaseValidator):
                     return data.head(sample_size)
                 return data
             elif isinstance(data, (str, Path)):
-                path = Path(data)
+                path = Path(data).expanduser()
                 
                 # If it's a CSV file, load it directly
                 if path.is_file() and path.suffix.lower() == ".csv":
@@ -276,11 +276,16 @@ class TimeSeriesValidator(BaseValidator):
                     )
                     return df
                 
+                # If it's a file but not CSV, provide clear error message
+                elif path.is_file():
+                    logger.warning(f"Unsupported file type: {path.suffix}. Expected CSV file.")
+                    return None
+                
                 # If it's a directory, try to find CSV file
                 elif path.is_dir():
                     # First, try to use LABEL_FILE from config if available
                     if hasattr(config, 'LABEL_FILE') and config.LABEL_FILE:
-                        label_file = Path(config.LABEL_FILE)
+                        label_file = Path(config.LABEL_FILE).expanduser()
                         if label_file.exists() and label_file.suffix.lower() == ".csv":
                             logger.info(f"Using LABEL_FILE for validation: {label_file}")
                             df = pd.read_csv(
@@ -292,9 +297,9 @@ class TimeSeriesValidator(BaseValidator):
                             return df
                     
                     # If LABEL_FILE not available, search for CSV files in directory
-                    csv_files = list(path.glob("*.csv"))
+                    csv_files = sorted(path.glob("*.csv"))
                     if csv_files:
-                        # Use the first CSV file found
+                        # Use the first CSV file found (sorted for deterministic behavior)
                         csv_file = csv_files[0]
                         logger.info(f"Found CSV file in directory: {csv_file}")
                         df = pd.read_csv(
