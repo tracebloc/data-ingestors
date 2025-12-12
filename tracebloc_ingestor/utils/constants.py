@@ -59,6 +59,8 @@ class TaskCategory:
             cls.KEYPOINT_DETECTION,
             cls.TEXT_CLASSIFICATION,
             cls.TABULAR_CLASSIFICATION,
+            cls.TABULAR_REGRESSION,
+            cls.TIME_SERIES_FORECASTING,
             cls.SEMANTIC_SEGMENTATION,
             cls.INSTANCE_SEGMENTATION,
         ]
