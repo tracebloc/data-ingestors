@@ -252,7 +252,7 @@ class TimeSeriesValidator(BaseValidator):
         """Load data from input source.
 
         Args:
-            data: Input data (file path or DataFrame)
+            data: Input data (file path, directory path, or DataFrame)
             sample_size: Maximum number of rows to load (None for all rows)
 
         Returns:
@@ -265,7 +265,9 @@ class TimeSeriesValidator(BaseValidator):
                 return data
             elif isinstance(data, (str, Path)):
                 path = Path(data)
-                if path.suffix.lower() == ".csv":
+                
+                # If it's a CSV file, load it directly
+                if path.is_file() and path.suffix.lower() == ".csv":
                     df = pd.read_csv(
                         path,
                         nrows=sample_size,
@@ -273,8 +275,41 @@ class TimeSeriesValidator(BaseValidator):
                         on_bad_lines="warn",
                     )
                     return df
+                
+                # If it's a directory, try to find CSV file
+                elif path.is_dir():
+                    # First, try to use LABEL_FILE from config if available
+                    if hasattr(config, 'LABEL_FILE') and config.LABEL_FILE:
+                        label_file = Path(config.LABEL_FILE)
+                        if label_file.exists() and label_file.suffix.lower() == ".csv":
+                            logger.info(f"Using LABEL_FILE for validation: {label_file}")
+                            df = pd.read_csv(
+                                label_file,
+                                nrows=sample_size,
+                                encoding="utf-8",
+                                on_bad_lines="warn",
+                            )
+                            return df
+                    
+                    # If LABEL_FILE not available, search for CSV files in directory
+                    csv_files = list(path.glob("*.csv"))
+                    if csv_files:
+                        # Use the first CSV file found
+                        csv_file = csv_files[0]
+                        logger.info(f"Found CSV file in directory: {csv_file}")
+                        df = pd.read_csv(
+                            csv_file,
+                            nrows=sample_size,
+                            encoding="utf-8",
+                            on_bad_lines="warn",
+                        )
+                        return df
+                    else:
+                        logger.warning(f"No CSV files found in directory: {path}")
+                        return None
+                
                 else:
-                    logger.warning(f"Unsupported file type: {path.suffix}")
+                    logger.warning(f"Path does not exist or is not a file/directory: {path}")
                     return None
             else:
                 logger.warning(f"Unsupported data type: {type(data)}")
