@@ -283,20 +283,41 @@ class TimeSeriesValidator(BaseValidator):
                 
                 # If it's a directory, try to find CSV file
                 elif path.is_dir():
-                    # First, try to use LABEL_FILE from config if available
+                    # Resolve directory to absolute path for comparison
+                    dir_path = path.resolve()
+                    
+                    # First, try to use LABEL_FILE from config if it's within the directory
                     if hasattr(config, 'LABEL_FILE') and config.LABEL_FILE:
                         label_file = Path(config.LABEL_FILE).expanduser()
                         if label_file.exists() and label_file.suffix.lower() == ".csv":
-                            logger.info(f"Using LABEL_FILE for validation: {label_file}")
-                            df = pd.read_csv(
-                                label_file,
-                                nrows=sample_size,
-                                encoding="utf-8",
-                                on_bad_lines="warn",
-                            )
-                            return df
+                            # Only use LABEL_FILE if it's within the directory being validated
+                            try:
+                                label_file_resolved = label_file.resolve()
+                                # Check if label_file is within the directory
+                                # The file is within the directory if the directory is a parent of the file
+                                is_within_dir = (
+                                    dir_path in label_file_resolved.parents 
+                                    or dir_path == label_file_resolved.parent
+                                )
+                                
+                                if is_within_dir:
+                                    logger.info(f"Using LABEL_FILE for validation: {label_file}")
+                                    df = pd.read_csv(
+                                        label_file,
+                                        nrows=sample_size,
+                                        encoding="utf-8",
+                                        on_bad_lines="warn",
+                                    )
+                                    return df
+                                else:
+                                    logger.debug(
+                                        f"LABEL_FILE ({label_file}) is not within directory ({dir_path}), "
+                                        "searching directory for CSV files instead"
+                                    )
+                            except Exception as e:
+                                logger.debug(f"Error checking if LABEL_FILE is within directory: {e}")
                     
-                    # If LABEL_FILE not available, search for CSV files in directory
+                    # Search for CSV files within the directory
                     csv_files = sorted(path.glob("*.csv"))
                     if csv_files:
                         # Use the first CSV file found (sorted for deterministic behavior)
