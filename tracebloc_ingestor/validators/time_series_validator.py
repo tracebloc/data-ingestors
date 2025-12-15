@@ -107,19 +107,42 @@ class TimeSeriesValidator(BaseValidator):
                     metadata={"rows_checked": 0},
                 )
 
-            # Check if date column exists
+            # Check if date column exists, try to find it from schema if not found
             if self.date_column not in df.columns:
-                return self._create_result(
-                    is_valid=False,
-                    errors=[
-                        f"Date column '{self.date_column}' not found in dataset. "
-                        f"Available columns: {list(df.columns)}"
-                    ],
-                    metadata={
-                        "date_column": self.date_column,
-                        "available_columns": list(df.columns),
-                    },
-                )
+                # Try to find date column from schema that exists in CSV
+                found_date_column = None
+                if self.schema:
+                    for col, col_type in self.schema.items():
+                        if col_type.upper() in ["DATE", "DATETIME", "TIMESTAMP"] and col in df.columns:
+                            found_date_column = col
+                            break
+                
+                # If still not found, try common date column names
+                if not found_date_column:
+                    common_date_names = ["timestamp", "time", "datetime", "date", "ts"]
+                    for col_name in common_date_names:
+                        if col_name in df.columns:
+                            found_date_column = col_name
+                            break
+                
+                if found_date_column:
+                    logger.info(
+                        f"Date column '{self.date_column}' not found, using '{found_date_column}' instead"
+                    )
+                    self.date_column = found_date_column
+                else:
+                    return self._create_result(
+                        is_valid=False,
+                        errors=[
+                            f"Date column '{self.date_column}' not found in dataset. "
+                            f"Available columns: {list(df.columns)}. "
+                            f"Please ensure the schema defines a DATE/DATETIME/TIMESTAMP column that exists in the CSV."
+                        ],
+                        metadata={
+                            "date_column": self.date_column,
+                            "available_columns": list(df.columns),
+                        },
+                    )
 
             errors = []
             warnings = []
