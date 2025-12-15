@@ -306,7 +306,7 @@ class BaseIngestor(ABC):
         # Validate data before ingestion
         logger.info(f"{CYAN}Starting data validation before ingestion...{RESET}")
         try:
-            self.validate_data(f"{config.SRC_PATH}")
+            self.validate_data(f"{source}")
             logger.info(f"{GREEN}Data validation completed successfully{RESET}")
         except ValueError as e:
             raise e
