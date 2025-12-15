@@ -146,7 +146,7 @@ class DataValidator(BaseValidator):
                     )
                     return df
                 else:
-                    logger.warning(f"Unsupported file type: {path.suffix}")
+                    logger.warning(f"Unsupported file type: {path.suffix}, \n\n{path}")
                     return None
             else:
                 logger.warning(f"Unsupported data type: {type(data)}")
