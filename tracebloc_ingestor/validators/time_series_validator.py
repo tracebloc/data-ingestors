@@ -264,78 +264,25 @@ class TimeSeriesValidator(BaseValidator):
                     return data.head(sample_size)
                 return data
             elif isinstance(data, (str, Path)):
-                path = Path(data).expanduser()
-                
-                # If it's a CSV file, load it directly
-                if path.is_file() and path.suffix.lower() == ".csv":
-                    df = pd.read_csv(
-                        path,
-                        nrows=sample_size,
-                        encoding="utf-8",
-                        on_bad_lines="warn",
-                    )
-                    return df
-                
-                # If it's a file but not CSV, provide clear error message
-                elif path.is_file():
-                    logger.warning(f"Unsupported file type: {path.suffix}. Expected CSV file.")
-                    return None
-                
-                # If it's a directory, try to find CSV file
-                elif path.is_dir():
-                    # Resolve directory to absolute path for comparison
-                    dir_path = path.resolve()
-                    
-                    # First, try to use LABEL_FILE from config if it's within the directory
-                    if hasattr(config, 'LABEL_FILE') and config.LABEL_FILE:
-                        label_file = Path(config.LABEL_FILE).expanduser()
-                        if label_file.exists() and label_file.suffix.lower() == ".csv":
-                            # Only use LABEL_FILE if it's within the directory being validated
-                            try:
-                                label_file_resolved = label_file.resolve()
-                                # Check if label_file is within the directory
-                                # The file is within the directory if the directory is a parent of the file
-                                is_within_dir = (
-                                    dir_path in label_file_resolved.parents 
-                                    or dir_path == label_file_resolved.parent
-                                )
-                                
-                                if is_within_dir:
-                                    logger.info(f"Using LABEL_FILE for validation: {label_file}")
-                                    df = pd.read_csv(
-                                        label_file,
-                                        nrows=sample_size,
-                                        encoding="utf-8",
-                                        on_bad_lines="warn",
-                                    )
-                                    return df
-                                else:
-                                    logger.debug(
-                                        f"LABEL_FILE ({label_file}) is not within directory ({dir_path}), "
-                                        "searching directory for CSV files instead"
-                                    )
-                            except Exception as e:
-                                logger.debug(f"Error checking if LABEL_FILE is within directory: {e}")
-                    
-                    # Search for CSV files within the directory
-                    csv_files = sorted(path.glob("*.csv"))
-                    if csv_files:
-                        # Use the first CSV file found (sorted for deterministic behavior)
-                        csv_file = csv_files[0]
-                        logger.info(f"Found CSV file in directory: {csv_file}")
+                # For time series forecasting, always use LABEL_FILE as the dataset file
+                if hasattr(config, 'LABEL_FILE') and config.LABEL_FILE:
+                    label_file = Path(config.LABEL_FILE).expanduser()
+                    if label_file.exists() and label_file.suffix.lower() == ".csv":
+                        logger.info(f"Using LABEL_FILE for validation: {label_file}")
                         df = pd.read_csv(
-                            csv_file,
+                            label_file,
                             nrows=sample_size,
                             encoding="utf-8",
                             on_bad_lines="warn",
                         )
                         return df
                     else:
-                        logger.warning(f"No CSV files found in directory: {path}")
+                        logger.warning(
+                            f"LABEL_FILE ({label_file}) does not exist or is not a CSV file."
+                        )
                         return None
-                
                 else:
-                    logger.warning(f"Path does not exist or is not a file/directory: {path}")
+                    logger.warning("LABEL_FILE not configured. Cannot validate time series data.")
                     return None
             else:
                 logger.warning(f"Unsupported data type: {type(data)}")
