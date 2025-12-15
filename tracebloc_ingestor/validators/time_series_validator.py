@@ -107,8 +107,11 @@ class TimeSeriesValidator(BaseValidator):
                     metadata={"rows_checked": 0},
                 )
 
+            # Determine which date column to use (preserve original configuration)
+            date_column_to_use = self.date_column
+            
             # Check if date column exists, try to find it from schema if not found
-            if self.date_column not in df.columns:
+            if date_column_to_use not in df.columns:
                 # Try to find date column from schema that exists in CSV
                 found_date_column = None
                 if self.schema:
@@ -127,19 +130,19 @@ class TimeSeriesValidator(BaseValidator):
                 
                 if found_date_column:
                     logger.info(
-                        f"Date column '{self.date_column}' not found, using '{found_date_column}' instead"
+                        f"Date column '{date_column_to_use}' not found, using '{found_date_column}' instead"
                     )
-                    self.date_column = found_date_column
+                    date_column_to_use = found_date_column
                 else:
                     return self._create_result(
                         is_valid=False,
                         errors=[
-                            f"Date column '{self.date_column}' not found in dataset. "
+                            f"Date column '{date_column_to_use}' not found in dataset. "
                             f"Available columns: {list(df.columns)}. "
                             f"Please ensure the schema defines a DATE/DATETIME/TIMESTAMP column that exists in the CSV."
                         ],
                         metadata={
-                            "date_column": self.date_column,
+                            "date_column": date_column_to_use,
                             "available_columns": list(df.columns),
                         },
                     )
@@ -147,12 +150,12 @@ class TimeSeriesValidator(BaseValidator):
             errors = []
             warnings = []
             metadata = {
-                "date_column": self.date_column,
+                "date_column": date_column_to_use,
                 "rows_checked": len(df),
             }
 
             # Validate date format and parse dates
-            date_series = df[self.date_column].copy()
+            date_series = df[date_column_to_use].copy()
             parsed_dates = []
             invalid_dates = []
 
