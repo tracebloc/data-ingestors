@@ -292,7 +292,7 @@ class TimeSeriesValidator(BaseValidator):
             elif isinstance(data, (str, Path)):
                 # For time series forecasting, always use LABEL_FILE as the dataset file
                 if hasattr(config, 'LABEL_FILE') and config.LABEL_FILE:
-                    label_file = Path(config.LABEL_FILE)
+                    label_file = Path(config.LABEL_FILE).expanduser()
                     if label_file.exists() and label_file.suffix.lower() == ".csv":
                         logger.info(f"Using LABEL_FILE for validation: {label_file}")
                         df = pd.read_csv(
