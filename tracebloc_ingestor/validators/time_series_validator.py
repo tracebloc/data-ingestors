@@ -252,7 +252,7 @@ class TimeSeriesValidator(BaseValidator):
         """Load data from input source.
 
         Args:
-            data: Input data (file path or DataFrame)
+            data: Input data (file path, directory path, or DataFrame)
             sample_size: Maximum number of rows to load (None for all rows)
 
         Returns:
@@ -264,17 +264,25 @@ class TimeSeriesValidator(BaseValidator):
                     return data.head(sample_size)
                 return data
             elif isinstance(data, (str, Path)):
-                path = Path(data)
-                if path.suffix.lower() == ".csv":
-                    df = pd.read_csv(
-                        path,
-                        nrows=sample_size,
-                        encoding="utf-8",
-                        on_bad_lines="warn",
-                    )
-                    return df
+                # For time series forecasting, always use LABEL_FILE as the dataset file
+                if hasattr(config, 'LABEL_FILE') and config.LABEL_FILE:
+                    label_file = Path(config.LABEL_FILE).expanduser()
+                    if label_file.exists() and label_file.suffix.lower() == ".csv":
+                        logger.info(f"Using LABEL_FILE for validation: {label_file}")
+                        df = pd.read_csv(
+                            label_file,
+                            nrows=sample_size,
+                            encoding="utf-8",
+                            on_bad_lines="warn",
+                        )
+                        return df
+                    else:
+                        logger.warning(
+                            f"LABEL_FILE ({label_file}) does not exist or is not a CSV file."
+                        )
+                        return None
                 else:
-                    logger.warning(f"Unsupported file type: {path.suffix}")
+                    logger.warning("LABEL_FILE not configured. Cannot validate time series data.")
                     return None
             else:
                 logger.warning(f"Unsupported data type: {type(data)}")
