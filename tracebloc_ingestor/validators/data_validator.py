@@ -501,12 +501,26 @@ class DataValidator(BaseValidator):
             
             elif series.dtype == "object" or series.dtype == "string":
                 # String values: try to convert and check for valid boolean strings
+                # First, try numeric conversion for values like "0", "1", "0.0", "1.0"
+                string_series = non_null_series.astype(str).str.strip()
+                numeric_series = pd.to_numeric(string_series, errors="coerce")
+                
+                # Check which values are valid numeric booleans (0, 1, 0.0, 1.0)
+                numeric_valid = numeric_series.isin([0, 1, 0.0, 1.0])
+                
+                # For non-numeric values, check against valid boolean strings
                 valid_boolean_strings = {
-                    "true", "false", "1", "0", "yes", "no", "y", "n", 
-                    "t", "f", "true", "false", "TRUE", "FALSE"
+                    "true", "false", "yes", "no", "y", "n", 
+                    "t", "f", "TRUE", "FALSE", "YES", "NO"
                 }
-                string_series = non_null_series.astype(str).str.strip().str.lower()
-                invalid_values = string_series[~string_series.isin(valid_boolean_strings)]
+                string_lower = string_series.str.lower()
+                string_valid = string_lower.isin(valid_boolean_strings)
+                
+                # A value is valid if it's either a valid numeric boolean OR a valid boolean string
+                # (NaN from to_numeric means it wasn't numeric, so check string_valid for those)
+                is_valid = numeric_valid | (numeric_series.isna() & string_valid)
+                
+                invalid_values = string_series[~is_valid]
                 if len(invalid_values) > 0:
                     errors.append(
                         f"Column '{column_name}' contains non-boolean values. "
