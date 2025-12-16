@@ -451,6 +451,11 @@ class DataValidator(BaseValidator):
     ) -> Dict[str, Any]:
         """Validate BOOLEAN column.
 
+        Accepts valid boolean representations:
+        - True/False (bool dtype)
+        - 0/1 (int dtype)
+        - "True"/"False", "1"/"0", "yes"/"no" (string dtype)
+
         Args:
             series: Pandas Series to validate
             column_name: Name of the column
@@ -462,16 +467,73 @@ class DataValidator(BaseValidator):
         errors = []
         warnings = []
 
-        # Check for boolean values
-        if series.dtype != "bool":
-            # Try to convert to boolean
-            try:
-                bool_series = series.astype(bool)
-                # Check if conversion was successful
-                if not bool_series.equals(series):
+        # If already boolean dtype, it's valid
+        if series.dtype == "bool":
+            return {"is_valid": True, "errors": errors, "warnings": warnings}
+
+        # Check for valid boolean representations
+        try:
+            # Remove NaN/null values for validation
+            non_null_series = series.dropna()
+            
+            if len(non_null_series) == 0:
+                # All values are null, which is acceptable
+                return {"is_valid": True, "errors": errors, "warnings": warnings}
+
+            # Check if values are valid boolean representations
+            if series.dtype in ["int64", "int32", "Int64", "Int32"]:
+                # Integer values: should be 0 or 1
+                invalid_values = non_null_series[~non_null_series.isin([0, 1])]
+                if len(invalid_values) > 0:
+                    errors.append(
+                        f"Column '{column_name}' contains non-boolean values. "
+                        f"Found {len(invalid_values)} invalid value(s): {set(invalid_values.tolist())}"
+                    )
+            
+            elif series.dtype in ["float64", "float32", "Float64", "Float32"]:
+                # Float values: should be 0.0 or 1.0 (or 0/1 as floats)
+                invalid_values = non_null_series[~non_null_series.isin([0.0, 1.0, 0, 1])]
+                if len(invalid_values) > 0:
+                    errors.append(
+                        f"Column '{column_name}' contains non-boolean values. "
+                        f"Found {len(invalid_values)} invalid value(s): {set(invalid_values.tolist())}"
+                    )
+            
+            elif series.dtype == "object" or series.dtype == "string":
+                # String values: try to convert and check for valid boolean strings
+                valid_boolean_strings = {
+                    "true", "false", "1", "0", "yes", "no", "y", "n", 
+                    "t", "f", "true", "false", "TRUE", "FALSE"
+                }
+                string_series = non_null_series.astype(str).str.strip().str.lower()
+                invalid_values = string_series[~string_series.isin(valid_boolean_strings)]
+                if len(invalid_values) > 0:
+                    errors.append(
+                        f"Column '{column_name}' contains non-boolean values. "
+                        f"Found {len(invalid_values)} invalid value(s): {set(invalid_values.tolist())}"
+                    )
+            
+            else:
+                # Try to convert to boolean and check if conversion is possible
+                try:
+                    # Attempt conversion
+                    bool_series = pd.to_numeric(non_null_series, errors="coerce")
+                    # Check if all values are 0 or 1 after numeric conversion
+                    if bool_series.isna().any():
+                        errors.append(f"Column '{column_name}' contains non-boolean values")
+                    else:
+                        invalid_values = bool_series[~bool_series.isin([0, 1])]
+                        if len(invalid_values) > 0:
+                            errors.append(
+                                f"Column '{column_name}' contains non-boolean values. "
+                                f"Found {len(invalid_values)} invalid value(s)"
+                            )
+                except (ValueError, TypeError):
                     errors.append(f"Column '{column_name}' contains non-boolean values")
-            except:
-                errors.append(f"Column '{column_name}' contains non-boolean values")
+
+        except Exception as e:
+            logger.debug(f"Error validating boolean column '{column_name}': {str(e)}")
+            errors.append(f"Column '{column_name}' contains non-boolean values")
 
         return {"is_valid": len(errors) == 0, "errors": errors, "warnings": warnings}
 
