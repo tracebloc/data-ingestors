@@ -30,8 +30,8 @@ def main():
         # Schema should contain feature columns only
         schema = {
             "square_feet": "FLOAT",
-            "bedrooms": "TINYINT",
-            "age": "TINYINT",
+            "bedrooms": "INT",
+            "age": "INT",
         }
 
         # CSV specific options

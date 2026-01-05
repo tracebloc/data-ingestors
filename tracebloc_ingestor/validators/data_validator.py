@@ -223,7 +223,9 @@ class DataValidator(BaseValidator):
             Dictionary with validation results
         """
         # Extract base type from database type (e.g., VARCHAR(255) -> VARCHAR)
-        base_type = expected_type.split("(")[0].upper()
+        # Also strip constraints like NOT NULL, UNSIGNED, DEFAULT, etc.
+        type_without_constraints = expected_type.strip().split()[0]  # Get first word
+        base_type = type_without_constraints.split("(")[0].upper()
 
         if base_type in self.type_validators:
             return self.type_validators[base_type](series, column_name, expected_type)
