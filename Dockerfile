@@ -9,11 +9,7 @@ RUN apt-get update && apt-get install -y netcat-traditional
 # Install data ingestor package
 RUN pip install tracebloc_ingestor
 
-# Create necessary directories
-RUN mkdir -p /data/shared
-
 # Copy the source code and requirements # train/test switch
-COPY templates/data/tabular_classification_sample_in_csv_format.csv /app/data/shared/tabular_classification_sample_in_csv_format.csv
 COPY templates/csv_ingestor.py /app/ingestor.py
 
 

@@ -308,7 +308,6 @@ class APIClient:
 
     def create_dataset(
         self,
-        requires_gpu: bool = False,
         allow_feature_modification: bool = False,
         ingestor_id: str = None,
         category: str = None,
@@ -318,7 +317,6 @@ class APIClient:
 
         Args:
             title: The title of the dataset (if None, will be generated from category and ingestor_id)
-            requires_gpu: Whether the dataset requires GPU processing
             allow_feature_modification: Whether feature modification is allowed
             ingestor_id: The unique identifier for the ingestor
 
@@ -348,7 +346,6 @@ class APIClient:
             payload = json.dumps(
                 {
                     "title": title,
-                    "requires_gpu": True,  # TODO: make this dynamic
                     "allow_feature_modification": allow_feature_modification,
                 }
             )

@@ -122,6 +122,10 @@ class BaseIngestor(ABC):
         self.category = category
         self.data_format = data_format
         self.file_options = file_options or {}
+        
+        # Add schema to file_options for validators if not already present
+        if schema and "schema" not in self.file_options:
+            self.file_options["schema"] = schema
 
         # Ensure table exists
         self.table = self.database.create_table(table_name, schema)
@@ -302,7 +306,7 @@ class BaseIngestor(ABC):
         # Validate data before ingestion
         logger.info(f"{CYAN}Starting data validation before ingestion...{RESET}")
         try:
-            self.validate_data(f"{config.SRC_PATH}")
+            self.validate_data(f"{source}")
             logger.info(f"{GREEN}Data validation completed successfully{RESET}")
         except ValueError as e:
             raise e
