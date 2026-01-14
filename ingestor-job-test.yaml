@@ -1,14 +1,14 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: ingestor-job-train-data # train/test switch
+  name: ingestor-job-test-data # train/test switch
   namespace: <CHANGE_ME NAMESPACE>
 spec:
   template:
     spec:
       containers:
       - name: api
-        image: tracebloc/<CHANGE_ME TAG_NAME>-tabular-regression-sample-ingestor-train-data:latest # train/test switch
+        image: tracebloc/<CHANGE_ME TAG_NAME>-tabular-regression-sample-ingestor-test-data:latest # train/test switch
         imagePullPolicy: Always
         volumeMounts:
           - name: shared-volume
@@ -30,9 +30,9 @@ spec:
         - name: LABEL_FILE
           value: "/data/shared/tabular_regression_sample_in_csv_format.csv" # train/test switch
         - name: TABLE_NAME
-          value: "tabular_regression_sample_train" # train/test switch
+          value: "tabular_regression_sample_test" # train/test switch
         - name: TITLE
-          value: "Tabular Regression Sample Train Data" # Optional: provide a title for the dataset
+          value: "Tabular Regression Sample Test Data" # Optional: provide a title for the dataset
         - name: LOG_LEVEL
           value: "WARNING"
       imagePullSecrets:

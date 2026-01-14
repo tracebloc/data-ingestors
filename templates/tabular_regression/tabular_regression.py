@@ -57,7 +57,7 @@ def main():
             csv_options=csv_options,
             file_options={"number_of_columns": len(schema)},
             label_column="price",
-            intent=Intent.TRAIN,  # Is the data for training or testing
+            intent=Intent.TRAIN,  # <CHANGE_ME> <TRAIN/TEST> Is the data for training or testing
         )
 
         # Ingest data with validation
