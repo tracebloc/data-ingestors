@@ -29,9 +29,18 @@ def main():
         # Schema definition for tabular data
         # Schema should contain feature columns only
         schema = {
-            "feature_00": "FLOAT ",
-            "feature_01": "FLOAT ",
-            "feature_02": "FLOAT ",
+            "area": "FLOAT",
+            "bedrooms": "FLOAT",
+            "bathrooms": "FLOAT",
+            "stories": "FLOAT",
+            "mainroad": "FLOAT",
+            "guestroom": "FLOAT",
+            "basement": "FLOAT",
+            "hotwaterheating": "FLOAT",
+            "airconditioning": "FLOAT",
+            "parking": "FLOAT",
+            "prefarea": "FLOAT",
+            "furnishingstatus": "FLOAT",
         }
 
         # CSV specific options
@@ -56,7 +65,7 @@ def main():
             category=TaskCategory.TABULAR_CLASSIFICATION,
             csv_options=csv_options,
             file_options={"number_of_columns": len(schema)},
-            label_column="name",
+            label_column="price",
             intent=Intent.TRAIN,  # Is the data for training or testing
         )
 
