@@ -8,15 +8,13 @@ spec:
     spec:
       containers:
       - name: api
-        image: tracebloc/heart-failure-clinical-data-ingestor:latest # train/test switch
+        image: moritz000/csv-templates-ingestor-claims-train:latest # train/test switch
         imagePullPolicy: Always
         volumeMounts:
           - name: shared-volume
             mountPath: "/data/shared/" # Storage path within the client cluster (not the ingestor path). The data ingestor will copy all images and text files to that location.
         env:
-        # Client credentials 
-        - name: CLIENT_ENV
-          value: "dev"
+        # Client credentials
         - name: CLIENT_ID
           value: "08ec78b9-871c-4fe1-8414-6a0ab3d268e3"
         - name: CLIENT_PASSWORD
@@ -24,15 +22,15 @@ spec:
         - name: CLIENT_PVC
           value: "client-pvc"
         - name: MYSQL_HOST
-          value: "mysql-client"
+          value: "mysql"
         - name: SRC_PATH
-          value: "/data/shared" # Source folder path whithin the data ingestor
+          value: "/data" # Source folder path whithin the data ingestor
         - name: LABEL_FILE
-          value: "/data/shared/heart_failure_clinical_records_dataset.csv" # train/test switch
+          value: "/app/data/shared/Xy_train.csv" # train/test switch
         - name: TABLE_NAME
-          value: "heart_failure_train_data" # train/test switch
+          value: "claims_table_train_v2" # train/test switch
         - name: TITLE
-          value: "Heart failure train data" # Optional: provide a title for the dataset
+          value: "Insurance Claims" # Optional: provide a title for the dataset
         - name: LOG_LEVEL
           value: "WARNING"
       imagePullSecrets:
