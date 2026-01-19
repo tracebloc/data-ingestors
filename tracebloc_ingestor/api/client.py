@@ -176,6 +176,7 @@ class APIClient:
                     "table_name": table_name,
                     "schema": schema,
                     "meta_data": add_info,
+                    "label_columns": [],
                 }
             )
 

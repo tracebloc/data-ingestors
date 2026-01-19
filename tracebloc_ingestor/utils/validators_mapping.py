@@ -7,6 +7,7 @@ from tracebloc_ingestor.validators.table_name_validator import TableNameValidato
 from tracebloc_ingestor.validators.duplicate_validator import DuplicateValidator
 from tracebloc_ingestor.validators.xml_validator import PascalVOCXMLValidator
 from tracebloc_ingestor.validators.time_series_validator import TimeSeriesValidator
+from tracebloc_ingestor.validators.time_to_event_validator import TimeToEventValidator
 from tracebloc_ingestor.utils.constants import TaskCategory, FileExtension
 
 
@@ -83,6 +84,30 @@ def map_validators(
         return validators
     elif task_category == TaskCategory.TABULAR_REGRESSION:
         validators = []
+
+        # Add data validator if schema is provided
+        if options.get("schema"):
+            validators.append(DataValidator(schema=options["schema"]))
+        validators.append(TableNameValidator())
+        validators.append(DuplicateValidator())
+
+        return validators
+    elif task_category == TaskCategory.TIME_TO_EVENT_PREDICTION:
+        validators = []
+
+        # Add time to event validator with schema to identify time column
+        if options.get("schema"):
+            validators.append(
+                TimeToEventValidator(
+                    schema=options["schema"],
+                    time_column=options.get("time_column"),
+                )
+            )
+        else:
+            # If no schema, use default time column name
+            validators.append(
+                TimeToEventValidator(time_column=options.get("time_column", "time"))
+            )
 
         # Add data validator if schema is provided
         if options.get("schema"):

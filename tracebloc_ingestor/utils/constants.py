@@ -42,6 +42,7 @@ class TaskCategory:
     TABULAR_CLASSIFICATION = "tabular_classification"
     TABULAR_REGRESSION = "tabular_regression"
     TIME_SERIES_FORECASTING = "time_series_forecasting"
+    TIME_TO_EVENT_PREDICTION = "time_to_event_prediction"
     SEMANTIC_SEGMENTATION = "semantic_segmentation"
     INSTANCE_SEGMENTATION = "instance_segmentation"
 
@@ -61,6 +62,7 @@ class TaskCategory:
             cls.TABULAR_CLASSIFICATION,
             cls.TABULAR_REGRESSION,
             cls.TIME_SERIES_FORECASTING,
+            cls.TIME_TO_EVENT_PREDICTION,
             cls.SEMANTIC_SEGMENTATION,
             cls.INSTANCE_SEGMENTATION,
         ]

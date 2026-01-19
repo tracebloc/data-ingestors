@@ -11,7 +11,7 @@ RUN pip install git+https://<secret>:x-oauth-basic@github.com/tracebloc/data-ing
 # <for prod: RUN pip install tracebloc_ingestor>
 
 # Copy the source code and requirements # train/test switch
-COPY templates/csv_ingestor.py /app/ingestor.py
+COPY templates/time_to_event_prediction/time_to_event_prediction.py /app/ingestor.py
 
 
 # Set environment variables
