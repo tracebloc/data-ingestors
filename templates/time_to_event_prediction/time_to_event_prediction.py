@@ -28,15 +28,15 @@ def main():
 
         # Schema definition for tabular data
         schema = {
-            "age": "INT",
+            "age": "FLOAT",
             "anaemia": "INT",
             "creatinine_phosphokinase": "FLOAT",
             "diabetes": "INT",
-            "ejection_fraction": "INT",
+            "ejection_fraction": "FLOAT",
             "high_blood_pressure": "INT",
             "platelets": "FLOAT",
             "serum_creatinine": "FLOAT",
-            "serum_sodium": "INT",
+            "serum_sodium": "FLOAT",
             "sex": "INT",
             "smoking": "INT",
             "time": "INT",
