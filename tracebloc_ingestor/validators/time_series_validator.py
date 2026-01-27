@@ -167,13 +167,13 @@ class TimeSeriesValidator(BaseValidator):
                 try:
                     # Try to parse as datetime
                     if isinstance(date_value, str):
-                        # Try common date formats
-                        parsed_date = pd.to_datetime(date_value, errors="raise")
+                        # Try common date formats with dayfirst=True to handle dd/mm/yyyy format
+                        parsed_date = pd.to_datetime(date_value, dayfirst=True, errors="raise")
                     elif isinstance(date_value, (pd.Timestamp, datetime)):
                         parsed_date = pd.Timestamp(date_value)
                     else:
-                        # Try to convert to datetime
-                        parsed_date = pd.to_datetime(str(date_value), errors="raise")
+                        # Try to convert to datetime with dayfirst=True to handle dd/mm/yyyy format
+                        parsed_date = pd.to_datetime(str(date_value), dayfirst=True, errors="raise")
 
                     parsed_dates.append((idx + 1, parsed_date))
                 except (ValueError, TypeError) as e:
