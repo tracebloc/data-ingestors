@@ -155,8 +155,29 @@ class TimeSeriesValidator(BaseValidator):
             }
 
             # Validate date format and parse dates
-            date_series = df[date_column_to_use].copy()
-            parsed_series = pd.to_datetime(date_series, dayfirst=True, errors="coerce", infer_datetime_format=True)
+            # Convert date column to string first to prevent pandas auto-parsing
+            # Handle case where column might already be datetime (from pandas auto-parsing)
+            if pd.api.types.is_datetime64_any_dtype(df[date_column_to_use]):
+                # If already parsed, convert back to string with dd/mm/yyyy format
+                date_series = df[date_column_to_use].dt.strftime("%d/%m/%Y").astype(str).copy()
+            else:
+                date_series = df[date_column_to_use].astype(str).copy()
+            
+            # Use explicit format for strict dd/mm/yyyy parsing
+            parsed_series = pd.to_datetime(date_series, format="%d/%m/%Y", errors="coerce")
+            
+            # If explicit format failed for many dates, try other dd/mm/yyyy variations
+            if parsed_series.isna().sum() > len(parsed_series) * 0.1:
+                for date_format in ["%d-%m-%Y", "%d/%m/%y", "%d-%m-%y"]:
+                    parsed_alt = pd.to_datetime(date_series, format=date_format, errors="coerce")
+                    if parsed_alt.notna().sum() > parsed_series.notna().sum():
+                        parsed_series = parsed_alt
+                        if parsed_series.notna().sum() > len(parsed_series) * 0.9:
+                            break
+            
+            # If format parsing still didn't work, use dayfirst=True WITHOUT infer_datetime_format
+            if parsed_series.isna().sum() > len(parsed_series) * 0.1:
+                parsed_series = pd.to_datetime(date_series, dayfirst=True, errors="coerce")
             
             # Convert to list of (row_index, parsed_date) tuples
             parsed_dates = []
@@ -287,11 +308,24 @@ class TimeSeriesValidator(BaseValidator):
                     label_file = Path(config.LABEL_FILE).expanduser()
                     if label_file.exists() and label_file.suffix.lower() == ".csv":
                         logger.info(f"Using LABEL_FILE for validation: {label_file}")
+                        # Read CSV with date column as string to prevent auto-parsing
+                        # Find date column name first
+                        date_col_name = None
+                        if self.schema:
+                            for col, col_type in self.schema.items():
+                                if col_type.upper() in ["DATE", "DATETIME", "TIMESTAMP"]:
+                                    date_col_name = col
+                                    break
+                        if not date_col_name:
+                            date_col_name = self.date_column
+                        
+                        # Read CSV, keeping date column as string
                         df = pd.read_csv(
                             label_file,
                             nrows=sample_size,
                             encoding="utf-8",
                             on_bad_lines="warn",
+                            dtype={date_col_name: str} if date_col_name else None,
                         )
                         return df
                     else:
