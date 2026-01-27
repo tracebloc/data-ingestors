@@ -569,9 +569,12 @@ class DataValidator(BaseValidator):
         errors = []
         warnings = []
 
-        # Try to convert to datetime with dayfirst=True to handle dd/mm/yyyy format
+        # Try to convert to datetime with explicit format for strict dd/mm/yyyy parsing
         try:
-            date_series = pd.to_datetime(series, dayfirst=True, errors="coerce")
+            # Try explicit format first, then fall back to dayfirst=True
+            date_series = pd.to_datetime(series, format="%d/%m/%Y", errors="coerce")
+            if date_series.isnull().sum() > len(series) * 0.1:  # If many failed, try dayfirst
+                date_series = pd.to_datetime(series, dayfirst=True, errors="coerce")
             invalid_dates = date_series.isnull().sum()
 
             if invalid_dates > 0:
