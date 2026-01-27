@@ -119,12 +119,7 @@ class CSVIngestor(BaseIngestor):
                 elif "BOOL" in dtype.upper():
                     df[column] = df[column].astype("boolean")
                 elif "DATE" in dtype.upper() or "DATETIME" in dtype.upper() or "TIMESTAMP" in dtype.upper():
-                    # For time series forecasting, parse timestamps as DD/MM/YYYY format
-                    if (self.category == TaskCategory.TIME_SERIES_FORECASTING and
-                        column.lower() == "timestamp"):
-                        df[column] = pd.to_datetime(df[column], format='mixed', dayfirst=True, errors="coerce")
-                    else:
-                        df[column] = pd.to_datetime(df[column], errors="coerce")
+                    df[column] = pd.to_datetime(df[column], errors="coerce", format='mixed')
                 elif "STRING" in dtype.upper() or "TEXT" in dtype.upper():
                     df[column] = df[column].astype("string")
             except Exception as e:
