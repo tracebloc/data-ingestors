@@ -12,7 +12,7 @@ from pathlib import Path
 from .base import BaseIngestor
 from ..database import Database
 from ..api.client import APIClient
-from ..utils.constants import RESET, RED, YELLOW
+from ..utils.constants import RESET, RED, YELLOW, TaskCategory
 from ..config import Config
 
 config = Config()
@@ -119,7 +119,12 @@ class CSVIngestor(BaseIngestor):
                 elif "BOOL" in dtype.upper():
                     df[column] = df[column].astype("boolean")
                 elif "DATE" in dtype.upper() or "DATETIME" in dtype.upper() or "TIMESTAMP" in dtype.upper():
-                    df[column] = pd.to_datetime(df[column])
+                    # For time series forecasting, parse timestamps as DD/MM/YYYY format
+                    if (self.category == TaskCategory.TIME_SERIES_FORECASTING and
+                        column.lower() == "timestamp"):
+                        df[column] = pd.to_datetime(df[column], format='mixed', dayfirst=True, errors="coerce")
+                    else:
+                        df[column] = pd.to_datetime(df[column], errors="coerce")
                 elif "STRING" in dtype.upper() or "TEXT" in dtype.upper():
                     df[column] = df[column].astype("string")
             except Exception as e:
