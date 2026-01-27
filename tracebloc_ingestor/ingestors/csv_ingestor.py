@@ -119,12 +119,8 @@ class CSVIngestor(BaseIngestor):
                 elif "BOOL" in dtype.upper():
                     df[column] = df[column].astype("boolean")
                 elif "DATE" in dtype.upper() or "DATETIME" in dtype.upper() or "TIMESTAMP" in dtype.upper():
-                    # Use explicit format for strict dd/mm/yyyy parsing
-                    # Try %d/%m/%Y first (most common), then fall back to dayfirst=True
-                    parsed = pd.to_datetime(df[column], format="%d/%m/%Y", errors="coerce")
-                    if parsed.isna().sum() > len(parsed) * 0.1:  # If many failed, try dayfirst
-                        parsed = pd.to_datetime(df[column], dayfirst=True, errors="coerce")
-                    df[column] = parsed
+                    df[column] = pd.to_datetime(df[column])
+                    print("date time", df[column])
                 elif "STRING" in dtype.upper() or "TEXT" in dtype.upper():
                     df[column] = df[column].astype("string")
             except Exception as e:
