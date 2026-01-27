@@ -13,7 +13,6 @@ from .data_validator import DataValidator
 from .duplicate_validator import DuplicateValidator
 from .table_name_validator import TableNameValidator
 from .xml_validator import PascalVOCXMLValidator
-from .time_series_validator import TimeSeriesValidator
 from .time_to_event_validator import TimeToEventValidator
 from .time_format_validator import TimeFormatValidator
 from .time_ordered_validator import TimeOrderedValidator
@@ -28,7 +27,6 @@ __all__ = [
     "DataValidator",
     "DuplicateValidator",
     "PascalVOCXMLValidator",
-    "TimeSeriesValidator",
     "TimeToEventValidator",
     "TimeFormatValidator",
     "TimeOrderedValidator",
