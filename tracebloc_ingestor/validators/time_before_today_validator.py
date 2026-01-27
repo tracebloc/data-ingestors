@@ -41,8 +41,8 @@ class TimeBeforeTodayValidator(BaseValidator):
                     errors=[f"Required column 'timestamp' not found. Available: {list(df.columns)}"],
                 )
 
-            # Parse timestamps
-            timestamps = pd.to_datetime(df["timestamp"], errors="coerce")
+            # Parse timestamps (handle DD/MM/YYYY format)
+            timestamps = pd.to_datetime(df["timestamp"], dayfirst=True, errors="coerce")
             today = pd.Timestamp.now().normalize()
             errors = []
             metadata = {"rows_checked": len(df), "today": str(today)}
