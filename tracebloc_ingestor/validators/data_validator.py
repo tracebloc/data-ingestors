@@ -11,13 +11,7 @@ from pathlib import Path
 from typing import Any, List, Dict, Optional, Union
 from datetime import datetime
 
-try:
-    import pandas as pd
-
-    PANDAS_AVAILABLE = True
-except ImportError:
-    PANDAS_AVAILABLE = False
-    pd = None
+import pandas as pd
 
 from .base import BaseValidator, ValidationResult
 from ..config import Config
@@ -87,15 +81,6 @@ class DataValidator(BaseValidator):
             ValidationResult containing validation status and messages
         """
         try:
-            if not PANDAS_AVAILABLE:
-                return self._create_result(
-                    is_valid=False,
-                    errors=[
-                        "Pandas not available. Cannot perform data type validation."
-                    ],
-                    metadata={"pandas_available": False},
-                )
-
             if not self.schema:
                 return self._create_result(
                     is_valid=True,
@@ -569,12 +554,9 @@ class DataValidator(BaseValidator):
         errors = []
         warnings = []
 
-        # Try to convert to datetime with explicit format for strict dd/mm/yyyy parsing
+        # Try to convert to datetime
         try:
-            # Try explicit format first, then fall back to dayfirst=True
-            date_series = pd.to_datetime(series, format="%d/%m/%Y", errors="coerce")
-            if date_series.isnull().sum() > len(series) * 0.1:  # If many failed, try dayfirst
-                date_series = pd.to_datetime(series, dayfirst=True, errors="coerce")
+            date_series = pd.to_datetime(series, errors="coerce")
             invalid_dates = date_series.isnull().sum()
 
             if invalid_dates > 0:
@@ -606,8 +588,6 @@ class DataValidator(BaseValidator):
     ) -> Dict[str, Any]:
         """Validate TIMESTAMP column.
 
-        For time series forecasting, timestamps are parsed as DD/MM/YYYY format.
-
         Args:
             series: Pandas Series to validate
             column_name: Name of the column
@@ -616,22 +596,7 @@ class DataValidator(BaseValidator):
         Returns:
             Dictionary with validation results
         """
-        errors = []
-        warnings = []
-
-        # For timestamp columns, use format='mixed' with dayfirst=True for DD/MM/YYYY parsing
-        try:
-            date_series = pd.to_datetime(series, format='mixed', dayfirst=True, errors="coerce")
-            invalid_dates = date_series.isnull().sum()
-
-            if invalid_dates > 0:
-                errors.append(
-                    f"Column '{column_name}' contains {invalid_dates} invalid timestamp values"
-                )
-        except:
-            errors.append(f"Column '{column_name}' contains invalid timestamp values")
-
-        return {"is_valid": len(errors) == 0, "errors": errors, "warnings": warnings}
+        return self._validate_date(series, column_name, expected_type)
 
     def _validate_time(
         self, series: pd.Series, column_name: str, expected_type: str

@@ -120,7 +120,6 @@ class CSVIngestor(BaseIngestor):
                     df[column] = df[column].astype("boolean")
                 elif "DATE" in dtype.upper() or "DATETIME" in dtype.upper() or "TIMESTAMP" in dtype.upper():
                     df[column] = pd.to_datetime(df[column])
-                    print("date time", df[column])
                 elif "STRING" in dtype.upper() or "TEXT" in dtype.upper():
                     df[column] = df[column].astype("string")
             except Exception as e:

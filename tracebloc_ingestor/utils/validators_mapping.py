@@ -67,6 +67,16 @@ def map_validators(
         validators.append(TimeFormatValidator())
         validators.append(TimeOrderedValidator())
         validators.append(TimeBeforeTodayValidator())
+        
+        # Add data validator if schema is provided (excluding timestamp column)
+        if options.get("schema"):
+            schema_without_timestamp = {
+                k: v for k, v in options["schema"].items() 
+                if k.lower() != "timestamp"
+            }
+            if schema_without_timestamp:  # Only add if there are other columns to validate
+                validators.append(DataValidator(schema=schema_without_timestamp))
+        
         validators.append(TableNameValidator())
         validators.append(DuplicateValidator())
 
