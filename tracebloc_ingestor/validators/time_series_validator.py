@@ -235,7 +235,8 @@ class TimeSeriesValidator(BaseValidator):
                 # Check that all dates are less than today
                 today = pd.Timestamp.now().normalize()
                 future_dates = [
-                    (row, date) for row, date in parsed_dates if date >= today
+                    (row, date) for row, date in parsed_dates 
+                    if pd.Timestamp(date).normalize() >= today
                 ]
 
                 if future_dates:
