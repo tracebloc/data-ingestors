@@ -24,15 +24,30 @@ class TimeFormatValidator(BaseValidator):
 
     Ensures:
     1. Column "timestamp" exists
-    2. All timestamp values are in valid format
+    2. Timestamp column in schema is of type TIMESTAMP (not DATE or DATETIME)
+    3. All timestamp values are in valid format
     """
 
-    def __init__(self, name: str = "Time Format Validator"):
+    def __init__(self, name: str = "Time Format Validator", schema: Optional[dict] = None):
         super().__init__(name)
+        self.schema = schema or {}
 
     def validate(self, data: Any, **kwargs) -> ValidationResult:
         """Validate timestamp format."""
         try:
+            errors = []
+            
+            # Check schema: timestamp column must be of type TIMESTAMP
+            if self.schema and "timestamp" in self.schema:
+                timestamp_type = self.schema["timestamp"].upper()
+                if timestamp_type not in ["TIMESTAMP"]:
+                    errors.append(
+                        f"Timestamp column in schema must be of type 'TIMESTAMP', "
+                        f"but found '{self.schema['timestamp']}'. "
+                        f"For time series forecasting, timestamp column must be TIMESTAMP type."
+                    )
+                    return self._create_result(is_valid=False, errors=errors)
+            
             df = self._load_data(data, kwargs.get("sample_size"))
             if df is None or df.empty:
                 return self._create_result(is_valid=False, errors=["No data found to validate"])
@@ -45,7 +60,6 @@ class TimeFormatValidator(BaseValidator):
 
             # Parse timestamps (handle DD/MM/YYYY format) 
             timestamps = pd.to_datetime(df["timestamp"], format='mixed', dayfirst=True, errors="coerce")
-            errors = []
             metadata = {"rows_checked": len(df)}
 
             # Check for invalid/missing timestamps

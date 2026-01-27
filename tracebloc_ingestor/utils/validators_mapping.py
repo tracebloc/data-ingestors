@@ -63,8 +63,8 @@ def map_validators(
     elif task_category == TaskCategory.TIME_SERIES_FORECASTING:
         validators = []
 
-        # Add time validators
-        validators.append(TimeFormatValidator())
+        schema = options.get("schema", {})
+        validators.append(TimeFormatValidator(schema=schema))
         validators.append(TimeOrderedValidator())
         validators.append(TimeBeforeTodayValidator())
         
