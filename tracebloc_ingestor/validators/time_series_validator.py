@@ -169,6 +169,8 @@ class TimeSeriesValidator(BaseValidator):
                     # Try to parse as datetime
                     if isinstance(date_value, (pd.Timestamp, datetime)):
                         parsed_date = pd.Timestamp(date_value)
+                    else:
+                        parsed_date = date_value
                     print("parsed date:",parsed_date)
 
 
