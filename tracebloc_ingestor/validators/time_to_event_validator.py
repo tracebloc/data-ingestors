@@ -1,12 +1,15 @@
 """Time to Event Validator Module.
 
 This module provides validation for time to event prediction data.
-It validates that the time column is present in the dataset.
+It validates that:
+1. The time column is present in the dataset with the exact name 'time'
+2. The time column contains numeric values (int or float)
+3. The time values are non-negative
 """
 
 import logging
 from pathlib import Path
-from typing import Any, Optional, List
+from typing import Any, Optional
 
 try:
     import pandas as pd
@@ -30,12 +33,14 @@ class TimeToEventValidator(BaseValidator):
     """Validator for time to event prediction data.
 
     This validator ensures that:
-    1. The time column is present in the dataset
-    2. The time column is properly identified from schema or provided explicitly
+    1. The time column with the exact name 'time' (or specified name) is present in the dataset
+    2. The time column is required and must exist with the exact specified name
+    3. The time column contains numeric values (int or float)
+    4. The time values are non-negative
 
     Attributes:
-        time_column: Name of the time column to validate (default: "time")
-        schema: Optional schema to identify the time column
+        time_column: Name of the time column to validate (default: "time", must exist exactly)
+        schema: Optional schema dictionary (kept for compatibility, not used for column detection)
     """
 
     def __init__(
@@ -47,36 +52,23 @@ class TimeToEventValidator(BaseValidator):
         """Initialize the time to event validator.
 
         Args:
-            time_column: Name of the time column to validate
-            schema: Optional schema dictionary to identify time column
+            time_column: Name of the time column to validate (default: "time")
+            schema: Optional schema dictionary (not used for column detection, kept for compatibility)
             name: Human-readable name of the validator
         """
         super().__init__(name)
-        self.time_column = time_column
+        # Strictly require 'time' column name
+        self.time_column = time_column if time_column is not None else "time"
         self.schema = schema or {}
-
-        # If time_column not provided, try to find it from schema
-        if not self.time_column and self.schema:
-            # Look for TIME, DATETIME, TIMESTAMP, or INT/FLOAT type columns that might be time
-            for col, col_type in self.schema.items():
-                if col_type.upper() in ["TIME", "DATETIME", "TIMESTAMP"]:
-                    self.time_column = col
-                    break
-                # Also check for common time column names
-                if col.lower() in ["time", "timestamp", "duration", "time_to_event"]:
-                    self.time_column = col
-                    break
-
-        # If still not found, default to "time"
-        if not self.time_column:
-            self.time_column = "time"
 
     def validate(self, data: Any, **kwargs) -> ValidationResult:
         """Validate time to event prediction data.
 
         This method validates that:
-        1. The time column exists in the dataset
-        2. The time column is properly identified
+        1. The time column with the exact required name exists in the dataset
+        2. The time column is present (no fallback to alternative names)
+        3. The time column contains numeric values (int or float)
+        4. The time values are non-negative
 
         Args:
             data: CSV file path or pandas DataFrame to validate
@@ -107,50 +99,23 @@ class TimeToEventValidator(BaseValidator):
                     metadata={"rows_checked": 0},
                 )
 
-            # Determine which time column to use (preserve original configuration)
+            # Strictly require the time column to exist with the exact name
             time_column_to_use = self.time_column
 
-            # Check if time column exists, try to find it from schema if not found
+            # Check if time column exists - no fallback, must be exact match
             if time_column_to_use not in df.columns:
-                # Try to find time column from schema that exists in CSV
-                found_time_column = None
-                if self.schema:
-                    for col, col_type in self.schema.items():
-                        if col_type.upper() in ["TIME", "DATETIME", "TIMESTAMP"] and col in df.columns:
-                            found_time_column = col
-                            break
-                        # Also check for common time column names
-                        if col.lower() in ["time", "timestamp", "duration", "time_to_event"] and col in df.columns:
-                            found_time_column = col
-                            break
-
-                # If still not found, try common time column names
-                if not found_time_column:
-                    common_time_names = ["time", "timestamp", "duration", "time_to_event", "time_to_event_prediction"]
-                    for col_name in common_time_names:
-                        if col_name in df.columns:
-                            found_time_column = col_name
-                            break
-
-                if found_time_column:
-                    logger.info(
-                        f"Time column '{time_column_to_use}' not found, using '{found_time_column}' instead"
-                    )
-                    time_column_to_use = found_time_column
-                else:
-                    return self._create_result(
-                        is_valid=False,
-                        errors=[
-                            f"Time column '{time_column_to_use}' not found in dataset. "
-                            f"Available columns: {list(df.columns)}. "
-                            f"Please ensure the schema defines a TIME/DATETIME/TIMESTAMP column that exists in the CSV, "
-                            f"or provide the time_column parameter explicitly."
-                        ],
-                        metadata={
-                            "time_column": time_column_to_use,
-                            "available_columns": list(df.columns),
-                        },
-                    )
+                return self._create_result(
+                    is_valid=False,
+                    errors=[
+                        f"Required time column '{time_column_to_use}' not found in dataset. "
+                        f"Available columns: {list(df.columns)}. "
+                        f"The dataset must contain a column named '{time_column_to_use}'."
+                    ],
+                    metadata={
+                        "time_column": time_column_to_use,
+                        "available_columns": list(df.columns),
+                    },
+                )
 
             errors = []
             warnings = []
@@ -166,6 +131,54 @@ class TimeToEventValidator(BaseValidator):
                     f"Time column '{time_column_to_use}' contains {null_count} null/missing value(s)"
                 )
                 metadata["null_count"] = null_count
+
+            # Validate that time column contains numeric values
+            time_series = df[time_column_to_use].copy()
+            
+            # Try to convert to numeric, non-numeric values will become NaN
+            numeric_series = pd.to_numeric(time_series, errors="coerce")
+            non_numeric_mask = numeric_series.isna() & ~time_series.isna()
+            non_numeric_count = non_numeric_mask.sum()
+            
+            if non_numeric_count > 0:
+                # Get sample of non-numeric values for error message
+                non_numeric_values = time_series[non_numeric_mask].head(10).tolist()
+                error_msg = (
+                    f"Time column '{time_column_to_use}' contains {non_numeric_count} non-numeric value(s). "
+                    f"Time values must be numeric (int or float). "
+                    f"Sample invalid values: {non_numeric_values}"
+                )
+                if non_numeric_count > 10:
+                    error_msg += f" (and {non_numeric_count - 10} more)"
+                errors.append(error_msg)
+                metadata["non_numeric_count"] = non_numeric_count
+                metadata["non_numeric_sample"] = non_numeric_values
+
+            # Check for negative time values (time should be non-negative)
+            if non_numeric_count == 0:
+                # Only check for negative values if all values are numeric
+                negative_mask = numeric_series < 0
+                negative_count = negative_mask.sum()
+                
+                if negative_count > 0:
+                    negative_values = numeric_series[negative_mask].head(10).tolist()
+                    error_msg = (
+                        f"Time column '{time_column_to_use}' contains {negative_count} negative value(s). "
+                        f"Time values must be non-negative. "
+                        f"Sample negative values: {negative_values}"
+                    )
+                    if negative_count > 10:
+                        error_msg += f" (and {negative_count - 10} more)"
+                    errors.append(error_msg)
+                    metadata["negative_count"] = negative_count
+                    metadata["negative_sample"] = negative_values
+                
+                # Add statistics about time values
+                valid_times = numeric_series.dropna()
+                if len(valid_times) > 0:
+                    metadata["min_time"] = float(valid_times.min())
+                    metadata["max_time"] = float(valid_times.max())
+                    metadata["mean_time"] = float(valid_times.mean())
 
             is_valid = len(errors) == 0
 
