@@ -156,40 +156,32 @@ class TimeSeriesValidator(BaseValidator):
 
             # Validate date format and parse dates
             date_series = df[date_column_to_use].copy()
+            parsed_series = pd.to_datetime(date_series, dayfirst=True, errors="coerce", infer_datetime_format=True)
+            
+            # Convert to list of (row_index, parsed_date) tuples
             parsed_dates = []
             invalid_dates = []
+            
+            for idx, (original_value, parsed_date) in enumerate(zip(date_series, parsed_series)):
+                row_num = idx + 1
+                if pd.isna(original_value):
+                    invalid_dates.append((row_num, "Missing/NaN value"))
+                elif pd.isna(parsed_date):
+                    invalid_dates.append((row_num, f"Invalid date format: {original_value}"))
+                else:
+                    parsed_dates.append((row_num, parsed_date))
 
-            for idx, date_value in enumerate(date_series):
-                if pd.isna(date_value):
-                    invalid_dates.append((idx + 1, "Missing/NaN value"))
-                    continue
-
-                try:
-                    # Try to parse as datetime
-                    if isinstance(date_value, str):
-                        # Try common date formats with dayfirst=True to handle dd/mm/yyyy format
-                        parsed_date = pd.to_datetime(date_value, dayfirst=True, errors="raise")
-                    elif isinstance(date_value, (pd.Timestamp, datetime)):
-                        parsed_date = pd.Timestamp(date_value)
-                    else:
-                        # Try to convert to datetime with dayfirst=True to handle dd/mm/yyyy format
-                        parsed_date = pd.to_datetime(str(date_value), dayfirst=True, errors="raise")
-
-                    parsed_dates.append((idx + 1, parsed_date))
-                except (ValueError, TypeError) as e:
-                    invalid_dates.append((idx + 1, f"Invalid date format: {date_value}"))
-
-            # Check for invalid date formats
+            # Check for invalid date formats - timestamp columns cannot be empty
             if invalid_dates:
                 error_messages = [
                     f"Row {row}: {error}" for row, error in invalid_dates[:10]
                 ]
                 if len(invalid_dates) > 10:
                     error_messages.append(
-                        f"... and {len(invalid_dates) - 10} more invalid dates"
+                        f"... and {len(invalid_dates) - 10} more invalid/missing dates"
                     )
                 errors.append(
-                    f"Found {len(invalid_dates)} invalid date format(s):\n"
+                    f"Timestamp column '{date_column_to_use}' cannot be empty. Found {len(invalid_dates)} invalid/missing date value(s):\n"
                     + "\n".join(error_messages)
                 )
                 metadata["invalid_dates"] = invalid_dates
