@@ -606,6 +606,8 @@ class DataValidator(BaseValidator):
     ) -> Dict[str, Any]:
         """Validate TIMESTAMP column.
 
+        For time series forecasting, timestamps are parsed as DD/MM/YYYY format.
+
         Args:
             series: Pandas Series to validate
             column_name: Name of the column
@@ -614,7 +616,22 @@ class DataValidator(BaseValidator):
         Returns:
             Dictionary with validation results
         """
-        return self._validate_date(series, column_name, expected_type)
+        errors = []
+        warnings = []
+
+        # For timestamp columns, use format='mixed' with dayfirst=True for DD/MM/YYYY parsing
+        try:
+            date_series = pd.to_datetime(series, format='mixed', dayfirst=True, errors="coerce")
+            invalid_dates = date_series.isnull().sum()
+
+            if invalid_dates > 0:
+                errors.append(
+                    f"Column '{column_name}' contains {invalid_dates} invalid timestamp values"
+                )
+        except:
+            errors.append(f"Column '{column_name}' contains invalid timestamp values")
+
+        return {"is_valid": len(errors) == 0, "errors": errors, "warnings": warnings}
 
     def _validate_time(
         self, series: pd.Series, column_name: str, expected_type: str
