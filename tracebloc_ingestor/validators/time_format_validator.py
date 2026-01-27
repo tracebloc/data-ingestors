@@ -43,8 +43,8 @@ class TimeFormatValidator(BaseValidator):
                     errors=[f"Required column 'timestamp' not found. Available: {list(df.columns)}"],
                 )
 
-            # Parse timestamps (handle DD/MM/YYYY format)
-            timestamps = pd.to_datetime(df["timestamp"], dayfirst=True, errors="coerce")
+            # Parse timestamps (handle DD/MM/YYYY format) 
+            timestamps = pd.to_datetime(df["timestamp"], format='mixed', dayfirst=True, errors="coerce")
             errors = []
             metadata = {"rows_checked": len(df)}
 
