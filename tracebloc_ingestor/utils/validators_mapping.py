@@ -8,6 +8,9 @@ from tracebloc_ingestor.validators.duplicate_validator import DuplicateValidator
 from tracebloc_ingestor.validators.xml_validator import PascalVOCXMLValidator
 from tracebloc_ingestor.validators.time_series_validator import TimeSeriesValidator
 from tracebloc_ingestor.validators.time_to_event_validator import TimeToEventValidator
+from tracebloc_ingestor.validators.time_format_validator import TimeFormatValidator
+from tracebloc_ingestor.validators.time_ordered_validator import TimeOrderedValidator
+from tracebloc_ingestor.validators.time_before_today_validator import TimeBeforeTodayValidator
 from tracebloc_ingestor.utils.constants import TaskCategory, FileExtension
 
 
@@ -61,7 +64,10 @@ def map_validators(
     elif task_category == TaskCategory.TIME_SERIES_FORECASTING:
         validators = []
 
-        validators.append(TimeSeriesValidator())
+        # Add time validators
+        validators.append(TimeFormatValidator())
+        validators.append(TimeOrderedValidator())
+        validators.append(TimeBeforeTodayValidator())
         validators.append(TableNameValidator())
         validators.append(DuplicateValidator())
 

@@ -1,6 +1,6 @@
-"""Time Series Validator Module.
+"""Time Before Today Validator Module.
 
-Validates that timestamp column exists, is ordered chronologically, and all timestamps are before today.
+Validates that all timestamps are before today.
 """
 
 import logging
@@ -19,20 +19,17 @@ logger = logging.getLogger(__name__)
 logger.setLevel(config.LOG_LEVEL)
 
 
-class TimeSeriesValidator(BaseValidator):
-    """Validator for time series forecasting data.
+class TimeBeforeTodayValidator(BaseValidator):
+    """Validator for timestamps before today.
 
-    Ensures:
-    1. Column "timestamp" exists
-    2. Timestamps are ordered chronologically
-    3. All timestamps are before today
+    Ensures all timestamps are before today's date.
     """
 
-    def __init__(self, name: str = "Time Series Validator"):
+    def __init__(self, name: str = "Time Before Today Validator"):
         super().__init__(name)
 
     def validate(self, data: Any, **kwargs) -> ValidationResult:
-        """Validate time series data."""
+        """Validate timestamps are before today."""
         try:
             df = self._load_data(data, kwargs.get("sample_size"))
             if df is None or df.empty:
@@ -48,28 +45,16 @@ class TimeSeriesValidator(BaseValidator):
             timestamps = pd.to_datetime(df["timestamp"], errors="coerce")
             today = pd.Timestamp.now().normalize()
             errors = []
-            metadata = {"rows_checked": len(df)}
+            metadata = {"rows_checked": len(df), "today": str(today)}
 
-            # Check 1: Invalid/missing timestamps
-            invalid_mask = timestamps.isna()
-            if invalid_mask.any():
-                invalid_count = invalid_mask.sum()
-                invalid_rows = [i+1 for i in df.index[invalid_mask][:10]]
-                errors.append(f"Found {invalid_count} invalid timestamp(s) at rows: {invalid_rows}")
-
-            # Check 2: Ordering (only on valid timestamps)
-            valid_timestamps = timestamps[~invalid_mask]
+            # Work with valid timestamps only
+            valid_timestamps = timestamps[~timestamps.isna()]
             if len(valid_timestamps) > 0:
-                if not valid_timestamps.is_monotonic_increasing:
-                    diffs = valid_timestamps.diff()
-                    out_of_order = (diffs < pd.Timedelta(0)).sum()
-                    errors.append(f"Found {out_of_order} out-of-order timestamp pair(s)")
-
-                # Check 3: Future dates
                 future_count = (valid_timestamps.dt.normalize() >= today).sum()
                 if future_count > 0:
                     errors.append(f"Found {future_count} timestamp(s) that are not before today")
-
+                    metadata["future_timestamps"] = future_count
+                
                 metadata.update({
                     "earliest": str(valid_timestamps.min()),
                     "latest": str(valid_timestamps.max()),
@@ -82,7 +67,7 @@ class TimeSeriesValidator(BaseValidator):
             )
 
         except Exception as e:
-            logger.error(f"Time series validation error: {e}")
+            logger.error(f"Time before today validation error: {e}")
             return self._create_result(is_valid=False, errors=[f"Validation error: {str(e)}"])
 
     def _load_data(self, data: Any, sample_size: Optional[int]) -> Optional[pd.DataFrame]:

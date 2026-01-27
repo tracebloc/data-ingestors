@@ -15,6 +15,9 @@ from .table_name_validator import TableNameValidator
 from .xml_validator import PascalVOCXMLValidator
 from .time_series_validator import TimeSeriesValidator
 from .time_to_event_validator import TimeToEventValidator
+from .time_format_validator import TimeFormatValidator
+from .time_ordered_validator import TimeOrderedValidator
+from .time_before_today_validator import TimeBeforeTodayValidator
 
 __all__ = [
     "BaseValidator",
@@ -27,4 +30,7 @@ __all__ = [
     "PascalVOCXMLValidator",
     "TimeSeriesValidator",
     "TimeToEventValidator",
+    "TimeFormatValidator",
+    "TimeOrderedValidator",
+    "TimeBeforeTodayValidator",
 ]
