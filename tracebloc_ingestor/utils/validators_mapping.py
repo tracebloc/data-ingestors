@@ -61,23 +61,7 @@ def map_validators(
     elif task_category == TaskCategory.TIME_SERIES_FORECASTING:
         validators = []
 
-        # Add time series validator with schema to identify date column
-        if options.get("schema"):
-            validators.append(
-                TimeSeriesValidator(
-                    schema=options["schema"],
-                    date_column=options.get("date_column"),
-                )
-            )
-        else:
-            # If no schema, use default date column name
-            validators.append(
-                TimeSeriesValidator(date_column=options.get("date_column", "date"))
-            )
-
-        # Add data validator if schema is provided
-        if options.get("schema"):
-            validators.append(DataValidator(schema=options["schema"]))
+        validators.append(TimeSeriesValidator())
         validators.append(TableNameValidator())
         validators.append(DuplicateValidator())
 
