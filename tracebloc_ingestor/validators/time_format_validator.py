@@ -23,12 +23,16 @@ class TimeFormatValidator(BaseValidator):
     """Validator for timestamp format.
 
     Ensures:
-    1. Column "timestamp" exists
+    1. Column "timestamp" exists in the dataset
     2. Timestamp column in schema is of type TIMESTAMP (not DATE or DATETIME)
     3. All timestamp values are in valid format
     """
 
-    def __init__(self, name: str = "Time Format Validator", schema: Optional[dict] = None):
+    def __init__(
+        self,
+        name: str = "Time Format Validator",
+        schema: Optional[dict] = None,
+    ):
         super().__init__(name)
         self.schema = schema or {}
 
@@ -37,8 +41,15 @@ class TimeFormatValidator(BaseValidator):
         try:
             errors = []
             
-            # Check schema: timestamp column must be of type TIMESTAMP
-            if self.schema and "timestamp" in self.schema:
+            # Check schema: timestamp column must exist and be of type TIMESTAMP
+            if self.schema:
+                if "timestamp" not in self.schema:
+                    errors.append(
+                        "Schema must contain a 'timestamp' column. "
+                        "For time series forecasting, a 'timestamp' column is required."
+                    )
+                    return self._create_result(is_valid=False, errors=errors)
+                
                 timestamp_type = self.schema["timestamp"].upper()
                 if timestamp_type not in ["TIMESTAMP"]:
                     errors.append(
@@ -48,7 +59,7 @@ class TimeFormatValidator(BaseValidator):
                     )
                     return self._create_result(is_valid=False, errors=errors)
             
-            df = self._load_data(data, kwargs.get("sample_size"))
+            df = self._load_data(data)
             if df is None or df.empty:
                 return self._create_result(is_valid=False, errors=["No data found to validate"])
 
@@ -79,19 +90,16 @@ class TimeFormatValidator(BaseValidator):
         except Exception as e:
             logger.error(f"Time format validation error: {e}")
             return self._create_result(is_valid=False, errors=[f"Validation error: {str(e)}"])
-
-    def _load_data(self, data: Any, sample_size: Optional[int]) -> Optional[pd.DataFrame]:
-        """Load data from input source."""
+    def _load_data(self, data: Any) -> Optional[pd.DataFrame]:
         try:
-            if isinstance(data, pd.DataFrame):
-                return data.head(sample_size) if sample_size else data
-            
-            if isinstance(data, (str, Path)) and hasattr(config, 'LABEL_FILE') and config.LABEL_FILE:
-                label_file = Path(config.LABEL_FILE).expanduser()
-                if label_file.exists() and label_file.suffix.lower() == ".csv":
-                    return pd.read_csv(label_file, nrows=sample_size, encoding="utf-8", on_bad_lines="warn")
+            if isinstance(data, (str, Path)):
+                file_path = Path(data).expanduser()
+                if file_path.exists() and file_path.suffix.lower() == ".csv":
+                    # Always load complete file for timestamp validation
+                    return pd.read_csv(file_path, encoding="utf-8", on_bad_lines="warn")
             
             return None
         except Exception as e:
             logger.error(f"Error loading data: {e}")
             return None
+

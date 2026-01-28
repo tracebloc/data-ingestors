@@ -127,8 +127,18 @@ class BaseIngestor(ABC):
         if schema and "schema" not in self.file_options:
             self.file_options["schema"] = schema
 
+        # Remove label_column, annotation_column, and unique_id_column from schema
+        # These are handled separately and should not be ingested as regular columns
+        table_schema = schema.copy()
+        if self.label_column and self.label_column in table_schema:
+            del table_schema[self.label_column]
+        if self.annotation_column and self.annotation_column in table_schema:
+            del table_schema[self.annotation_column]
+        if self.unique_id_column and self.unique_id_column in table_schema:
+            del table_schema[self.unique_id_column]
+
         # Ensure table exists
-        self.table = self.database.create_table(table_name, schema)
+        self.table = self.database.create_table(table_name, table_schema)
 
     def _map_unique_id(
         self, record: Dict[str, Any], cleaned_record: Dict[str, Any]
@@ -194,11 +204,19 @@ class BaseIngestor(ABC):
     def process_record(self, record: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Process a single record"""
         try:
-            # Clean data according to schema
+            # Clean data according to schema, excluding label_column, annotation_column, and unique_id_column
+            # These are handled separately and should not be ingested as regular columns
+            columns_to_exclude = set()
+            if self.label_column:
+                columns_to_exclude.add(self.label_column)
+            if self.annotation_column:
+                columns_to_exclude.add(self.annotation_column)
+            if self.unique_id_column:
+                columns_to_exclude.add(self.unique_id_column)
             cleaned_record = {
                 k.strip(): ("" if v is None else str(v).strip())
                 for k, v in record.items()
-                if k in self.schema
+                if k in self.schema and k not in columns_to_exclude
             }
             # Map unique ID if specified
             cleaned_record = self._map_unique_id(record, cleaned_record)

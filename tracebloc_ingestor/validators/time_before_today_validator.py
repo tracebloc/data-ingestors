@@ -25,13 +25,16 @@ class TimeBeforeTodayValidator(BaseValidator):
     Ensures all timestamps are before today's date.
     """
 
-    def __init__(self, name: str = "Time Before Today Validator"):
+    def __init__(
+        self,
+        name: str = "Time Before Today Validator",
+    ):
         super().__init__(name)
 
     def validate(self, data: Any, **kwargs) -> ValidationResult:
         """Validate timestamps are before today."""
         try:
-            df = self._load_data(data, kwargs.get("sample_size"))
+            df = self._load_data(data)
             if df is None or df.empty:
                 return self._create_result(is_valid=False, errors=["No data found to validate"])
 
@@ -70,18 +73,17 @@ class TimeBeforeTodayValidator(BaseValidator):
             logger.error(f"Time before today validation error: {e}")
             return self._create_result(is_valid=False, errors=[f"Validation error: {str(e)}"])
 
-    def _load_data(self, data: Any, sample_size: Optional[int]) -> Optional[pd.DataFrame]:
-        """Load data from input source."""
+    def _load_data(self, data: Any) -> Optional[pd.DataFrame]:
+        """Load complete data from file path for timestamp validation."""
         try:
-            if isinstance(data, pd.DataFrame):
-                return data.head(sample_size) if sample_size else data
-            
-            if isinstance(data, (str, Path)) and hasattr(config, 'LABEL_FILE') and config.LABEL_FILE:
-                label_file = Path(config.LABEL_FILE).expanduser()
-                if label_file.exists() and label_file.suffix.lower() == ".csv":
-                    return pd.read_csv(label_file, nrows=sample_size, encoding="utf-8", on_bad_lines="warn")
+            if isinstance(data, (str, Path)):
+                file_path = Path(data).expanduser()
+                if file_path.exists() and file_path.suffix.lower() == ".csv":
+                    # Always load complete file for timestamp validation
+                    return pd.read_csv(file_path, encoding="utf-8", on_bad_lines="warn")
             
             return None
         except Exception as e:
             logger.error(f"Error loading data: {e}")
             return None
+
