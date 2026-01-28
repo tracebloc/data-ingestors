@@ -13,6 +13,7 @@ from sqlalchemy import (
     Float,
     Boolean,
     inspect,
+
 )
 from sqlalchemy.engine import Engine
 from sqlalchemy.dialects.mysql import insert, LONGBLOB, BLOB
@@ -73,6 +74,7 @@ class Database:
             "DATE": Date,
             "DATETIME": DateTime,
             "TIMESTAMP": DateTime,
+            "TIME": Time,
             "BLOB": BLOB,
             "LONGBLOB": LONGBLOB,
         }

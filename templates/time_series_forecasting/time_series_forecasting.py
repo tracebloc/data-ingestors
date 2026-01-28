@@ -29,7 +29,7 @@ def main():
         # Schema definition for time series data
         # Schema should contain feature columns only (excluding the target/label column)
         schema = {
-            "timestamp": "DATE",
+            "timestamp": "TIMESTAMP",
             "eq_count": "INT",
             "avg_magnitude": "FLOAT",
             "median_magnitude": "FLOAT",
