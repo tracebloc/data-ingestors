@@ -10,6 +10,7 @@ from tracebloc_ingestor.validators.time_to_event_validator import TimeToEventVal
 from tracebloc_ingestor.validators.time_format_validator import TimeFormatValidator
 from tracebloc_ingestor.validators.time_ordered_validator import TimeOrderedValidator
 from tracebloc_ingestor.validators.time_before_today_validator import TimeBeforeTodayValidator
+from tracebloc_ingestor.validators.numeric_columns_validator import NumericColumnsValidator
 from tracebloc_ingestor.utils.constants import TaskCategory, FileExtension
 
 
@@ -64,9 +65,11 @@ def map_validators(
         validators = []
 
         schema = options.get("schema", {})
+        
         validators.append(TimeFormatValidator(schema=schema))
         validators.append(TimeOrderedValidator())
         validators.append(TimeBeforeTodayValidator())
+        validators.append(NumericColumnsValidator())
         
         if options.get("schema"):
             schema_without_timestamp = {
