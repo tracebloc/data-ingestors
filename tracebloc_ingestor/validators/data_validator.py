@@ -11,13 +11,7 @@ from pathlib import Path
 from typing import Any, List, Dict, Optional, Union
 from datetime import datetime
 
-try:
-    import pandas as pd
-
-    PANDAS_AVAILABLE = True
-except ImportError:
-    PANDAS_AVAILABLE = False
-    pd = None
+import pandas as pd
 
 from .base import BaseValidator, ValidationResult
 from ..config import Config
@@ -87,15 +81,6 @@ class DataValidator(BaseValidator):
             ValidationResult containing validation status and messages
         """
         try:
-            if not PANDAS_AVAILABLE:
-                return self._create_result(
-                    is_valid=False,
-                    errors=[
-                        "Pandas not available. Cannot perform data type validation."
-                    ],
-                    metadata={"pandas_available": False},
-                )
-
             if not self.schema:
                 return self._create_result(
                     is_valid=True,

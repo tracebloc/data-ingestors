@@ -1,7 +1,7 @@
 """CSV Ingestion Example.
 
 This example demonstrates how to ingest data from a CSV file into a database
-for time series forecasting tasks. It includes data validation, proper error handling,
+for time to event prediction tasks. It includes data validation, proper error handling,
 and supports various CSV formats with comprehensive configuration options.
 """
 
@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 
 def main():
-    """Run the time series forecasting data ingestion example."""
+    """Run the time to event prediction data ingestion example."""
     try:
 
         # Initialize components
@@ -26,19 +26,20 @@ def main():
         # Initialize API client
         api_client = APIClient(config)
 
-        # Schema definition for time series data
-        # Schema should contain feature columns only (excluding the target/label column)
+        # Schema definition for tabular data
         schema = {
-            "timestamp": "TIMESTAMP",
-            "eq_count": "INT",
-            "avg_magnitude": "FLOAT",
-            "median_magnitude": "FLOAT",
-            "dayofweek": "INT",
-            "is_weekend": "INT",
-            "dayofyear": "INT",
-            "month": "INT",
-            "sin_dayofyear": "FLOAT",
-            "cos_dayofyear": "FLOAT",
+            "age": "FLOAT",
+            "anaemia": "INT",
+            "creatinine_phosphokinase": "FLOAT",
+            "diabetes": "INT",
+            "ejection_fraction": "FLOAT",
+            "high_blood_pressure": "INT",
+            "platelets": "FLOAT",
+            "serum_creatinine": "FLOAT",
+            "serum_sodium": "FLOAT",
+            "sex": "INT",
+            "smoking": "INT",
+            "time": "INT",
         }
 
         # CSV specific options
@@ -53,22 +54,26 @@ def main():
             "na_values": ["", "NA", "NULL", "None"],
         }
 
-        # Create ingestor for time series forecasting data with validators
+        # Create ingestor for time to event prediction data with validators
         ingestor = CSVIngestor(
             database=database,
             api_client=api_client,
             table_name=config.TABLE_NAME,
             schema=schema,
             data_format=DataFormat.TABULAR,
-            category=TaskCategory.TIME_SERIES_FORECASTING,
+            category=TaskCategory.TIME_TO_EVENT_PREDICTION,
             csv_options=csv_options,
-            file_options={"number_of_columns": len(schema)},
-            label_column="max_magnitude",
+            file_options={
+                "number_of_columns": len(schema),
+                "schema": schema,
+                "time_column": "time",  # Specify the time column name
+            },
+            label_column="DEATH_EVENT",  # The event column is the target
             intent=Intent.TRAIN,  # Is the data for training or testing
         )
 
         # Ingest data with validation
-        logger.info("Starting time series forecasting data ingestion with data validation...")
+        logger.info("Starting time to event prediction data ingestion with data validation...")
         with ingestor:
             failed_records = ingestor.ingest(
                 config.LABEL_FILE, batch_size=config.BATCH_SIZE
