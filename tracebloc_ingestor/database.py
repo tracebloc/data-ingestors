@@ -6,6 +6,7 @@ from sqlalchemy import (
     BigInteger,
     DateTime,
     Date,
+    Time,
     text,
     Text,
     Integer,
@@ -283,6 +284,7 @@ class Database:
             "Date": "DATE",
             "DateTime": "DATETIME",
             "Timestamp": "TIMESTAMP",
+            "Time": "TIME",
             "BLOB": "BLOB",
             "LONGBLOB": "LONGBLOB",
         }
