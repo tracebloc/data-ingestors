@@ -62,8 +62,7 @@ class NumericColumnsValidator(BaseValidator):
             non_numeric_columns = []
             null_columns = []
             for column in columns_to_validate:
-                # Check for null values
-                null_mask = df[column].isna()
+                null_mask = pd.isna(df[column])
                 null_count = null_mask.sum()
                 
                 if null_count > 0:
@@ -80,9 +79,8 @@ class NumericColumnsValidator(BaseValidator):
                     metadata[f"{column}_null_count"] = null_count
                     metadata[f"{column}_null_rows"] = null_rows[:10]
 
-                # Try to convert to numeric (only check non-null values)
                 numeric_series = pd.to_numeric(df[column], errors="coerce")
-                non_numeric_mask = numeric_series.isna() & ~df[column].isna()
+                non_numeric_mask = numeric_series.isna() & ~pd.isna(df[column]) & (df[column].astype(str).str.strip() != "")
                 non_numeric_count = non_numeric_mask.sum()
 
                 if non_numeric_count > 0:
