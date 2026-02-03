@@ -34,9 +34,13 @@ class NumericColumnsValidator(BaseValidator):
         super().__init__(name)
 
     def validate(self, data: Any, **kwargs) -> ValidationResult:
-        """Validate that all columns (except timestamp) are numeric and non-null.
+        """Validate that all columns (except timestamp) are numeric and contain no null values.
         
-        This includes both feature columns and the label column (if specified).
+        Simple validation logic:
+        1. Load CSV file
+        2. Check if any column (except timestamp) has null/NaN values -> error
+        3. Check if any schema column datatype is non-numeric -> error
+        4. If no errors -> pass
         """
         try:
             df = self._load_data(data)
@@ -44,13 +48,10 @@ class NumericColumnsValidator(BaseValidator):
                 return self._create_result(is_valid=False, errors=["No data found to validate"])
 
             errors = []
-            metadata = {"rows_checked": len(df)}
+            metadata = {"rows_checked": len(df), "columns_checked": len(df.columns)}
 
-            # Only exclude timestamp from numeric validation
-            # Label column should also be numeric for time series forecasting
+            # Exclude timestamp column from validation
             excluded_columns = {"timestamp"}
-
-            # Get columns to validate (all columns except timestamp)
             columns_to_validate = [col for col in df.columns if col not in excluded_columns]
 
             if not columns_to_validate:
@@ -59,49 +60,44 @@ class NumericColumnsValidator(BaseValidator):
                     metadata={**metadata, "message": "No columns to validate (only timestamp column present)"},
                 )
 
-            non_numeric_columns = []
-            null_columns = []
+            # Step 1: Check for null values in all columns (except timestamp)
             for column in columns_to_validate:
-                null_mask = pd.isna(df[column])
-                null_count = null_mask.sum()
+                null_count = df[column].isna().sum()
                 
                 if null_count > 0:
-                    null_columns.append(column)
-                    null_rows = [i+1 for i in df.index[null_mask][:10]]
+                    null_rows = [i+1 for i in df.index[df[column].isna()][:10]]
                     error_msg = (
                         f"Column '{column}' contains {null_count} null/missing value(s). "
-                        f"For time series forecasting, all columns (except timestamp) must be non-null. "
                         f"Null values found at rows: {null_rows}"
                     )
                     if null_count > 10:
                         error_msg += f" (and {null_count - 10} more)"
                     errors.append(error_msg)
                     metadata[f"{column}_null_count"] = null_count
-                    metadata[f"{column}_null_rows"] = null_rows[:10]
 
+            # Step 2: Check if all columns are numeric
+            for column in columns_to_validate:
+                # Try to convert entire column to numeric
                 numeric_series = pd.to_numeric(df[column], errors="coerce")
-                non_numeric_mask = numeric_series.isna() & ~pd.isna(df[column]) & (df[column].astype(str).str.strip() != "")
-                non_numeric_count = non_numeric_mask.sum()
-
-                if non_numeric_count > 0:
-                    non_numeric_columns.append(column)
-                    # Get sample of non-numeric values for error message
-                    non_numeric_values = df[column][non_numeric_mask].head(10).tolist()
-                    error_msg = (
-                        f"Column '{column}' contains {non_numeric_count} non-numeric value(s). "
-                        f"For time series forecasting, all columns (except timestamp) must be numeric. "
-                        f"Sample invalid values: {non_numeric_values}"
-                    )
-                    if non_numeric_count > 10:
-                        error_msg += f" (and {non_numeric_count - 10} more)"
-                    errors.append(error_msg)
-                    metadata[f"{column}_non_numeric_count"] = non_numeric_count
-                    metadata[f"{column}_non_numeric_sample"] = non_numeric_values
-
-            if non_numeric_columns:
-                metadata["non_numeric_columns"] = non_numeric_columns
-            if null_columns:
-                metadata["null_columns"] = null_columns
+                # Count how many values couldn't be converted to numeric
+                non_numeric_count = numeric_series.isna().sum()
+                
+                # Get the original non-null count
+                original_non_null = df[column].notna().sum()
+                
+                # If some non-null values couldn't be converted, they're non-numeric
+                if non_numeric_count > 0 and original_non_null > 0:
+                    # Only report non-numeric if original data had non-null values that couldn't convert
+                    non_numeric_actual = (numeric_series.isna() & df[column].notna()).sum()
+                    
+                    if non_numeric_actual > 0:
+                        non_numeric_values = df[column][numeric_series.isna() & df[column].notna()].head(10).tolist()
+                        error_msg = (
+                            f"Column '{column}' contains {non_numeric_actual} non-numeric value(s). "
+                            f"Sample invalid values: {non_numeric_values}"
+                        )
+                        errors.append(error_msg)
+                        metadata[f"{column}_non_numeric_count"] = non_numeric_actual
 
             return self._create_result(
                 is_valid=len(errors) == 0,
