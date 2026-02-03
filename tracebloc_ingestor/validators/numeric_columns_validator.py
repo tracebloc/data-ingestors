@@ -30,17 +30,20 @@ class NumericColumnsValidator(BaseValidator):
     def __init__(
         self,
         name: str = "Numeric Columns Validator",
+        schema: Optional[dict] = None,
     ):
         super().__init__(name)
+        self.schema = schema or {}
 
     def validate(self, data: Any, **kwargs) -> ValidationResult:
-        """Validate that all columns (except timestamp) are numeric and contain no null values.
+        """Validate that all schema columns (except timestamp) are numeric and contain no null values.
         
         Simple validation logic:
         1. Load CSV file
-        2. Check if any column (except timestamp) has null/NaN values -> error
-        3. Check if any schema column datatype is non-numeric -> error
-        4. If no errors -> pass
+        2. Get schema from self.schema (only validate columns present in schema)
+        3. Check if any schema column (except timestamp) has null/NaN values -> error
+        4. Check if any schema column datatype is non-numeric -> error
+        5. If no errors -> pass
         """
         try:
             df = self._load_data(data)
@@ -48,16 +51,30 @@ class NumericColumnsValidator(BaseValidator):
                 return self._create_result(is_valid=False, errors=["No data found to validate"])
 
             errors = []
-            metadata = {"rows_checked": len(df), "columns_checked": len(df.columns)}
+            metadata = {"rows_checked": len(df), "columns_in_csv": len(df.columns)}
+
+            # Use self.schema - only validate columns that are in the schema
+            if not self.schema:
+                return self._create_result(
+                    is_valid=True,
+                    metadata={**metadata, "message": "No schema provided, skipping validation"},
+                )
 
             # Exclude timestamp column from validation
             excluded_columns = {"timestamp"}
-            columns_to_validate = [col for col in df.columns if col not in excluded_columns]
+            # Only validate columns that are BOTH in schema AND in CSV (excluding timestamp)
+            columns_to_validate = [
+                col for col in df.columns 
+                if col in self.schema and col not in excluded_columns
+            ]
+
+            metadata["columns_in_schema"] = len(self.schema)
+            metadata["columns_to_validate"] = len(columns_to_validate)
 
             if not columns_to_validate:
                 return self._create_result(
                     is_valid=True,
-                    metadata={**metadata, "message": "No columns to validate (only timestamp column present)"},
+                    metadata={**metadata, "message": "No schema columns to validate (only timestamp or non-existent columns)"},
                 )
 
             # Step 1: Check for null values in all columns (except timestamp)

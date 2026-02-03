@@ -69,7 +69,7 @@ def map_validators(
         validators.append(TimeFormatValidator(schema=schema))
         validators.append(TimeOrderedValidator())
         validators.append(TimeBeforeTodayValidator())
-        validators.append(NumericColumnsValidator())
+        validators.append(NumericColumnsValidator(schema=schema))
         
         if options.get("schema"):
             schema_without_timestamp = {
