@@ -5,13 +5,17 @@ from sqlalchemy import (
     Column,
     BigInteger,
     DateTime,
+    Date,
+    Time,
     text,
     Text,
     Integer,
     String,
     Float,
     Boolean,
+    Double,
     inspect,
+
 )
 from sqlalchemy.engine import Engine
 from sqlalchemy.dialects.mysql import insert, LONGBLOB, BLOB
@@ -57,25 +61,45 @@ class Database:
         return create_engine(connection_string, pool_pre_ping=True)
 
     def _get_sqlalchemy_type(self, mysql_type: str):
+        """Convert MySQL type to SQLAlchemy type.
+        
+        Extracts the base type (before parentheses) and matches exactly to avoid
+        substring issues (e.g., "DATE" matching "DATETIME").
+        """
         type_mapping = {
             "VARCHAR": String,
             "TEXT": Text,
             "INT": Integer,
+            "INTEGER": Integer,
+            "TINYINT": Integer,
+            "SMALLINT": Integer,
+            "MEDIUMINT": Integer,
             "BIGINT": BigInteger,
             "FLOAT": Float,
+            "DOUBLE": Double,
             "BOOLEAN": Boolean,
+            "BOOL": Boolean,
+            "DATE": Date,
             "DATETIME": DateTime,
             "TIMESTAMP": DateTime,
+            "TIME": Time,
             "BLOB": BLOB,
             "LONGBLOB": LONGBLOB,
         }
-
-        for sql_type, alchemy_type in type_mapping.items():
-            if sql_type in mysql_type.upper():
-                length = None
-                if "(" in mysql_type:
-                    length = int(mysql_type.split("(")[1].split(")")[0])
-                return alchemy_type(length) if length else alchemy_type
+        
+        mysql_type_upper = mysql_type.upper().strip()
+        base_type = mysql_type_upper.split("(")[0].split()[0]
+        
+        if base_type in type_mapping:
+            alchemy_type = type_mapping[base_type]
+            # Extract length for VARCHAR types
+            length = None
+            if "(" in mysql_type_upper:
+                try:
+                    length = int(mysql_type_upper.split("(")[1].split(")")[0])
+                except (ValueError, IndexError):
+                    pass
+            return alchemy_type(length) if length else alchemy_type
 
         raise ValueError(f"Unsupported MySQL type: {mysql_type}")
 
@@ -263,8 +287,12 @@ class Database:
             "Integer": "INT",
             "BigInteger": "BIGINT",
             "Float": "FLOAT",
+            "Double": "DOUBLE",
             "Boolean": "BOOLEAN",
+            "Date": "DATE",
             "DateTime": "DATETIME",
+            "Timestamp": "TIMESTAMP",
+            "Time": "TIME",
             "BLOB": "BLOB",
             "LONGBLOB": "LONGBLOB",
         }

@@ -14,7 +14,7 @@ spec:
           - name: shared-volume
             mountPath: "/data/shared/" # Storage path within the client cluster (not the ingestor path). The data ingestor will copy all images and text files to that location.
         env:
-        # Client credentials 
+        # Client credentials
         - name: CLIENT_ID
           value: "08ec78b9-871c-4fe1-8414-6a0ab3d268e3"
         - name: CLIENT_PASSWORD

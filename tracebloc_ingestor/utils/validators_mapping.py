@@ -6,7 +6,11 @@ from tracebloc_ingestor.validators.data_validator import DataValidator
 from tracebloc_ingestor.validators.table_name_validator import TableNameValidator
 from tracebloc_ingestor.validators.duplicate_validator import DuplicateValidator
 from tracebloc_ingestor.validators.xml_validator import PascalVOCXMLValidator
-from tracebloc_ingestor.validators.time_series_validator import TimeSeriesValidator
+from tracebloc_ingestor.validators.time_to_event_validator import TimeToEventValidator
+from tracebloc_ingestor.validators.time_format_validator import TimeFormatValidator
+from tracebloc_ingestor.validators.time_ordered_validator import TimeOrderedValidator
+from tracebloc_ingestor.validators.time_before_today_validator import TimeBeforeTodayValidator
+from tracebloc_ingestor.validators.numeric_columns_validator import NumericColumnsValidator
 from tracebloc_ingestor.utils.constants import TaskCategory, FileExtension
 
 
@@ -60,19 +64,27 @@ def map_validators(
     elif task_category == TaskCategory.TIME_SERIES_FORECASTING:
         validators = []
 
-        # Add time series validator with schema to identify date column
+        schema = options.get("schema", {})
+        
+        validators.append(TimeFormatValidator(schema=schema))
+        validators.append(TimeOrderedValidator())
+        validators.append(TimeBeforeTodayValidator())
+        validators.append(NumericColumnsValidator(schema=schema))
+        
         if options.get("schema"):
-            validators.append(
-                TimeSeriesValidator(
-                    schema=options["schema"],
-                    date_column=options.get("date_column"),
-                )
-            )
-        else:
-            # If no schema, use default date column name
-            validators.append(
-                TimeSeriesValidator(date_column=options.get("date_column", "date"))
-            )
+            schema_without_timestamp = {
+                k: v for k, v in options["schema"].items() 
+                if k.lower() != "timestamp"
+            }
+            if schema_without_timestamp:
+                validators.append(DataValidator(schema=schema_without_timestamp))
+        
+        validators.append(TableNameValidator())
+        validators.append(DuplicateValidator())
+
+        return validators
+    elif task_category == TaskCategory.TABULAR_REGRESSION:
+        validators = []
 
         # Add data validator if schema is provided
         if options.get("schema"):
@@ -81,8 +93,22 @@ def map_validators(
         validators.append(DuplicateValidator())
 
         return validators
-    elif task_category == TaskCategory.TABULAR_REGRESSION:
+    elif task_category == TaskCategory.TIME_TO_EVENT_PREDICTION:
         validators = []
+
+        # Add time to event validator with schema to identify time column
+        if options.get("schema"):
+            validators.append(
+                TimeToEventValidator(
+                    schema=options["schema"],
+                    time_column=options.get("time_column"),
+                )
+            )
+        else:
+            # If no schema, use default time column name
+            validators.append(
+                TimeToEventValidator(time_column=options.get("time_column", "time"))
+            )
 
         # Add data validator if schema is provided
         if options.get("schema"):
