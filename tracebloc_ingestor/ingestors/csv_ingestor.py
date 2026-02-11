@@ -118,7 +118,7 @@ class CSVIngestor(BaseIngestor):
                     df[column] = pd.to_numeric(df[column], downcast="float")
                 elif "BOOL" in dtype.upper():
                     df[column] = df[column].astype("boolean")
-                elif "DATE" in dtype.upper() or "DATETIME" in dtype.upper() or "TIMESTAMP" in dtype.upper():
+                elif "DATE" in dtype.upper() or "DATETIME" in dtype.upper() or "TIMESTAMP" in dtype.upper() or "TIME" in dtype.upper():
                     df[column] = pd.to_datetime(df[column], errors="coerce", format='mixed')
                 elif "STRING" in dtype.upper() or "TEXT" in dtype.upper():
                     df[column] = df[column].astype("string")

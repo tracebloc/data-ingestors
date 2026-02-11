@@ -50,8 +50,11 @@ class TimeFormatValidator(BaseValidator):
                     )
                     return self._create_result(is_valid=False, errors=errors)
                 
-                timestamp_type = self.schema["timestamp"].upper()
-                if timestamp_type not in ["TIMESTAMP"]:
+                # Extract base type (before parentheses) to handle precision specifiers like TIMESTAMP(6)
+                timestamp_type = self.schema["timestamp"].upper().strip()
+                base_type = timestamp_type.split("(")[0].split()[0]
+                
+                if base_type not in ["TIMESTAMP"]:
                     errors.append(
                         f"Timestamp column in schema must be of type 'TIMESTAMP', "
                         f"but found '{self.schema['timestamp']}'. "
