@@ -124,21 +124,35 @@ class BaseIngestor(ABC):
         self.file_options = file_options or {}
         
         # Add schema to file_options for validators if not already present
+        schema = self._clean_schema(schema)
         if schema and "schema" not in self.file_options:
             self.file_options["schema"] = schema
 
-        # Remove label_column, annotation_column, and unique_id_column from schema
-        # These are handled separately and should not be ingested as regular columns
-        table_schema = schema.copy()
-        if self.label_column and self.label_column in table_schema:
-            del table_schema[self.label_column]
-        if self.annotation_column and self.annotation_column in table_schema:
-            del table_schema[self.annotation_column]
-        if self.unique_id_column and self.unique_id_column in table_schema:
-            del table_schema[self.unique_id_column]
-
         # Ensure table exists
-        self.table = self.database.create_table(table_name, table_schema)
+        self.table = self.database.create_table(table_name, schema)
+
+    def _clean_schema(self, schema: Dict[str, str]) -> Dict[str, str]:
+        """
+        Removes label_column, annotation_column, and unique_id_column from schema.
+        These columns are handled separately and should not be sent to the API.
+
+        Args:
+            schema: Original schema dictionary
+
+        Returns:
+            Cleaned schema dictionary with special columns removed
+        """
+        cleaned_schema = schema.copy()
+        
+        # Remove special columns from schema
+        if self.label_column and self.label_column in cleaned_schema:
+            del cleaned_schema[self.label_column]
+        if self.annotation_column and self.annotation_column in cleaned_schema:
+            del cleaned_schema[self.annotation_column]
+        if self.unique_id_column and self.unique_id_column in cleaned_schema:
+            del cleaned_schema[self.unique_id_column]
+        
+        return cleaned_schema
 
     def _map_unique_id(
         self, record: Dict[str, Any], cleaned_record: Dict[str, Any]
