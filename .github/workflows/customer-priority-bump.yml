@@ -1,0 +1,10 @@
+name: Customer priority bump
+
+on:
+  issues:
+    types: [labeled]
+
+jobs:
+  bump:
+    uses: tracebloc/.github/.github/workflows/customer-priority-bump.yml@main
+    secrets: inherit
