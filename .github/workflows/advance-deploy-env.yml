@@ -1,0 +1,14 @@
+name: Advance deploy env
+
+# Calls the reusable workflow in tracebloc/.github.
+# When this branch (develop/staging/master/main) receives a merge,
+# updates each contained PR's Deploy environment field on the engineer kanban.
+
+on:
+  push:
+    branches: [develop, staging, master, main]
+
+jobs:
+  advance:
+    uses: tracebloc/.github/.github/workflows/advance-deploy-env.yml@main
+    secrets: inherit
