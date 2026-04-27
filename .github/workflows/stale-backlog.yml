@@ -1,0 +1,33 @@
+name: Close stale backlog issues
+
+on:
+  schedule:
+    - cron: '0 0 * * 1'  # Mondays 00:00 UTC
+  workflow_dispatch: {}
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  stale:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/stale@v9
+        with:
+          days-before-issue-stale: 42  # 6 weeks of no activity → warning
+          days-before-issue-close: 14  # +2 weeks of silence → close
+          stale-issue-label: 'stale'
+          stale-issue-message: |
+            👋 This issue has had no activity for 6 weeks.
+
+            If it's still relevant, please leave a comment with current context (or assign someone). Otherwise it will auto-close in 2 weeks.
+
+            To exempt permanently, add the `keep-open` label.
+          close-issue-message: |
+            Closing due to 8+ weeks of inactivity. Please reopen with current context if relevant.
+          exempt-issue-labels: 'keep-open,blocked'
+          # PRs: don't auto-stale — branch protection + active reviews govern those
+          days-before-pr-stale: -1
+          days-before-pr-close: -1
+          operations-per-run: 50
