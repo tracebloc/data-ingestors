@@ -1,0 +1,10 @@
+name: Set PR Status
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review, converted_to_draft]
+
+jobs:
+  set-status:
+    uses: tracebloc/.github/.github/workflows/set-pr-status.yml@main
+    secrets: inherit
