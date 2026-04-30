@@ -1,6 +1,0 @@
-# Default reviewer: each PR auto-requests the squad lead listed here.
-# Either reviewer can approve to satisfy branch protection (1 approval required).
-# Specific paths below override this default for security-sensitive code.
-
-*    @divyasinghds @shujaatTracebloc
-
