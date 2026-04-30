@@ -1,0 +1,10 @@
+name: WIP limit check
+
+on:
+  pull_request:
+    types: [opened, ready_for_review]
+
+jobs:
+  check:
+    uses: tracebloc/.github/.github/workflows/wip-limit-check.yml@main
+    secrets: inherit
