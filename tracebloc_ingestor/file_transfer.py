@@ -164,7 +164,7 @@ def text_transfer(record: Dict[str, Any], options: Dict[str, Any]) -> Dict[str, 
 
     Args:
         record: Dictionary containing filename and other record data
-        options: Dictionary containing transfer options like allowed_extension
+        options: Dictionary containing transfer options like extension
 
     Returns:
         Updated record dictionary
@@ -175,7 +175,7 @@ def text_transfer(record: Dict[str, Any], options: Dict[str, Any]) -> Dict[str, 
     try:
         # Get the filename from the record
         filename = record.get("filename")
-        extension = options.get("allowed_extension")
+        extension = options.get("extension")
         if not filename:
             logger.error(f"{RED}No filename found in record{RESET}")
             return record
