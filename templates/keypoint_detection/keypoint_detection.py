@@ -40,7 +40,7 @@ keypoints = [
 keypoint_detection_options = {
     "target_size": (448, 448),  # image size. Height = Width
     "extension": FileExtension.JPG,  # allowed extension for images: jpeg, jpg, png
-    "num_keypoints": len(keypoints),  # number of keypoints per sample
+    "number_of_keypoints": len(keypoints),  # number of keypoints per sample
 }
 
 # CSV specific options
@@ -72,7 +72,7 @@ def main():
             file_options=keypoint_detection_options,
             label_column="image_label",
             annotation_column="Annotation",
-            intent=Intent.TEST,  # Is the data for training or testing
+            intent=Intent.TRAIN,  # Is the data for training or testing
         )
 
         # Ingest data with validation

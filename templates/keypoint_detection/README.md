@@ -102,7 +102,7 @@ keypoints = [
 ]
 ```
 
-The `num_keypoints` option is derived from this list (`len(keypoints)`) and passed to the ingestor for validation.
+The `number_of_keypoints` option is derived from this list (`len(keypoints)`) and passed to the backend as metadata for model-dataset compatibility checks.
 
 ## Sample Data
 
