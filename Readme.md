@@ -79,6 +79,46 @@ The Job needs these environment variables (set in [`ingestor-job.yaml`](ingestor
 | `TITLE` | *(optional)* Human-readable dataset name |
 | `LOG_LEVEL` | *(optional)* `INFO`, `WARNING`, `ERROR` |
 
+### Running under Pod Security Standards (`restricted`)
+
+If the namespace you're deploying into enforces the [`restricted`](https://kubernetes.io/docs/concepts/security/pod-security-standards/) Pod Security Standard (OpenShift, hardened clusters, many managed-Kubernetes namespaces), the stock [`Dockerfile`](Dockerfile) and [`ingestor-job.yaml`](ingestor-job.yaml) won't admit. Two changes are needed.
+
+Check first:
+
+```bash
+kubectl get ns <namespace> -o jsonpath='{.metadata.labels}' | jq
+```
+
+Look for `pod-security.kubernetes.io/enforce: restricted`. If absent, the stock files admit fine and you can skip this section.
+
+**1. `Dockerfile` — drop root.** Append before `ENTRYPOINT`:
+
+```dockerfile
+# OpenShift-compatible: grant group write via GID 0
+RUN chgrp -R 0 /app && chmod -R g=u /app
+USER 1001
+```
+
+**2. `ingestor-job.yaml` — add a hardened `securityContext`.** Both pod-level and container-level:
+
+```yaml
+spec:
+  template:
+    spec:
+      securityContext:                    # pod-level
+        runAsNonRoot: true
+        runAsUser: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: api
+        # ... existing container spec ...
+        securityContext:                  # container-level
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+```
+
 ## Writing a custom ingestor
 
 For data that doesn't fit a template, subclass `BaseIngestor`:
