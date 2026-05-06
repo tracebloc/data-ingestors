@@ -49,7 +49,7 @@ pip install tracebloc-ingestor
 ## Prerequisites
 
 - Python 3.8+
-- A [tracebloc account](https://ai.tracebloc.io/signup) with an active use case
+- A [tracebloc account](https://ai.tracebloc.io/signup)
 - A running [tracebloc client](https://github.com/tracebloc/client) on your infrastructure
 
 For step-by-step data preparation instructions → [Prepare Data guide](https://docs.tracebloc.io/create-use-case/prepare-dataset)
