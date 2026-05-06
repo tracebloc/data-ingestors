@@ -22,10 +22,25 @@ config = Config()
 setup_logging(config)
 logger = logging.getLogger(__name__)
 
+# Keypoint schema definition
+# Define the expected keypoints for the dataset
+keypoints = [
+    "nose",
+    "left_eye",
+    "right_eye",
+    "left_shoulder",
+    "right_shoulder",
+    "left_elbow",
+    "right_elbow",
+    "left_wrist",
+    "right_wrist",
+]
+
 # Keypoint detection specific options
 keypoint_detection_options = {
     "target_size": (448, 448),  # image size. Height = Width
     "extension": FileExtension.JPG,  # allowed extension for images: jpeg, jpg, png
+    "num_keypoints": len(keypoints),  # number of keypoints per sample
 }
 
 # CSV specific options
@@ -56,7 +71,8 @@ def main():
             csv_options=csv_options,
             file_options=keypoint_detection_options,
             label_column="image_label",
-            intent=Intent.TRAIN,  # Is the data for training or testing
+            annotation_column="Annotation",
+            intent=Intent.TEST,  # Is the data for training or testing
         )
 
         # Ingest data with validation

@@ -1,4 +1,4 @@
-data_id,mask_id,image_label
+filename,mask_id,image_label
 image_001,image_001_mask,road
 image_001,image_001_mask,car
 image_001,image_001_mask,sidewalk

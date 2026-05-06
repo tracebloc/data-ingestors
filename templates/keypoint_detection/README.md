@@ -25,7 +25,7 @@ keypoint_detection/
 
 ### CSV Labels File
 The CSV file contains the following columns:
-- `data_id`: Name of the image file (without extension)
+- `filename`: Name of the image file (without extension)
 - `Annotation`: JSON string with keypoint coordinates as `{"joint_name": [x, y]}` pairs
 - `Visibility`: JSON string with per-keypoint visibility flags as `{"joint_name": 0|1}` (1=visible, 0=occluded/out-of-frame)
 - `image_label`: Class label for the image
@@ -79,9 +79,30 @@ The script uses the following configuration:
 - **Target Size**: (448, 448) - Images will be resized to this dimension
 - **Extension**: JPG - Expected image file extension
 - **Chunk Size**: 100 - Number of records to process in each batch
+- **Number of Keypoints**: 9 - Must match the number of keypoints in each Annotation JSON
 - **Category**: KEYPOINT_DETECTION
 - **Data Format**: IMAGE
 - **Intent**: TRAIN
+
+### Keypoint Definition
+
+The `keypoints` list in the script defines the expected keypoints for the dataset. Update this list to match your data:
+
+```python
+keypoints = [
+    "nose",
+    "left_eye",
+    "right_eye",
+    "left_shoulder",
+    "right_shoulder",
+    "left_elbow",
+    "right_elbow",
+    "left_wrist",
+    "right_wrist",
+]
+```
+
+The `num_keypoints` option is derived from this list (`len(keypoints)`) and passed to the ingestor for validation.
 
 ## Sample Data
 
