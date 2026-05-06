@@ -50,8 +50,10 @@ pip install tracebloc-ingestor
 
 ### 2. Pick a template
 
+Copy the template you want into the build context root as `ingestor.py` — that's the path the [`Dockerfile`](Dockerfile) expects.
+
 ```bash
-cp templates/image_classification/ingestor.py .
+cp templates/image_classification/image_classification.py ./ingestor.py
 ```
 
 Each template builds on the same primitives — `BaseIngestor`, `CSVIngestor`, validators — and overrides the parts that vary by data type.
