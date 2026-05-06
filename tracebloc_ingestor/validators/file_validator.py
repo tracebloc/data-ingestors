@@ -76,7 +76,7 @@ class FileTypeValidator(BaseValidator):
             ValidationResult containing validation status and messages
         """
         try:
-            data = f"{path}/{self.path}"
+            data = f"{config.SRC_PATH}/{self.path}"
             recursive = kwargs.get("recursive", True)
             ignore_hidden = kwargs.get("ignore_hidden", True)
 

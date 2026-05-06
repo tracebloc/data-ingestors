@@ -83,9 +83,9 @@ class PascalVOCXMLValidator(BaseValidator):
         try:
             recursive = kwargs.get("recursive", True)
             ignore_hidden = kwargs.get("ignore_hidden", True)
-
+    
             # Get list of XML files to validate
-            files_to_validate = self._get_xml_files(data, recursive, ignore_hidden)
+            files_to_validate = self._get_xml_files(config.SRC_PATH, recursive, ignore_hidden)
 
             if not files_to_validate:
                 return self._create_result(

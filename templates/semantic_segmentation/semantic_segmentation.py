@@ -1,12 +1,11 @@
-"""Text Classification Data Ingestion Example.
+"""Semantic Segmentation Data Ingestion Example.
 
-This example demonstrates how to ingest text classification data with text files and labels
-into a database and optionally send it to an API. It processes both the text files and their
-corresponding labels from a CSV file, similar to object detection format.
+This example demonstrates how to ingest semantic segmentation data with images and
+corresponding mask files into a database and optionally send it to an API. It processes
+both the image files and their corresponding mask annotation files.
 """
 
 import logging
-import os
 from typing import Dict, Any
 
 from tracebloc_ingestor import Config, Database, APIClient, CSVIngestor
@@ -23,12 +22,15 @@ config = Config()
 setup_logging(config)
 logger = logging.getLogger(__name__)
 
-# Text specific options including CSV options
-text_options = {"extension": FileExtension.TXT}  # Allowed text file extensions
+# Semantic segmentation specific options
+semantic_segmentation_options = {
+    "target_size": (512, 512),  # image size. Height = Width
+    "extension": FileExtension.PNG,  # allowed extension for images: jpeg, jpg, png
+}
 
 # CSV specific options
 csv_options = {
-    "chunk_size": 100,  # Smaller chunk size due to text processing
+    "chunk_size": 100,  # Smaller chunk size due to larger data
     "delimiter": ",",
     "quotechar": '"',
     "escapechar": "\\",
@@ -38,27 +40,27 @@ csv_options = {
 
 
 def main():
-    """Run the text classification ingestion example."""
+    """Run the semantic segmentation ingestion example."""
     try:
         # Initialize components
         database = Database(config)
         api_client = APIClient(config)
 
-        # Create ingestor for text classification data with validators
+        # Create ingestor for semantic segmentation data with validators
         ingestor = CSVIngestor(
             database=database,
             api_client=api_client,
             table_name=config.TABLE_NAME,
-            data_format=DataFormat.TEXT,
-            category=TaskCategory.TEXT_CLASSIFICATION,
+            data_format=DataFormat.IMAGE,
+            category=TaskCategory.SEMANTIC_SEGMENTATION,
             csv_options=csv_options,
-            file_options=text_options,
-            label_column="label",
-            intent=Intent.TRAIN,  # Is the data for training or testing
+            file_options=semantic_segmentation_options,
+            label_column="image_label",
+            intent=Intent.TEST,  # Is the data for training or testing
         )
 
         # Ingest data with validation
-        logger.info("Starting text classification ingestion with data validation...")
+        logger.info("Starting semantic segmentation ingestion with data validation...")
         with ingestor:
             failed_records = ingestor.ingest(
                 config.LABEL_FILE, batch_size=config.BATCH_SIZE
@@ -67,7 +69,7 @@ def main():
                 logger.warning(f"Failed to process {len(failed_records)} records")
                 for record in failed_records:
                     logger.warning(
-                        f"Failed record: {record.get('filename', 'Unknown')}"
+                        f"Failed record: {record.get('image_id', 'Unknown')}"
                     )
                     logger.warning(
                         f"Error details: {record.get('error', 'Unknown error')}"
