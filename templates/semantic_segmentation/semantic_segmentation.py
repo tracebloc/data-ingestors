@@ -56,7 +56,7 @@ def main():
             csv_options=csv_options,
             file_options=semantic_segmentation_options,
             label_column="image_label",
-            intent=Intent.TRAIN,  # Is the data for training or testing
+            intent=Intent.TEST,  # Is the data for training or testing
         )
 
         # Ingest data with validation
