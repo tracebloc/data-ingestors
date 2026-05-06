@@ -121,7 +121,7 @@ def map_validators(
     elif task_category == TaskCategory.SEMANTIC_SEGMENTATION:
         return [
             FileTypeValidator(allowed_extension=options["extension"], path="images"),
-            FileTypeValidator(allowed_extension=options["extension"], path="masks"),
+            FileTypeValidator(allowed_extension=FileExtension.PNG, path="masks"),
             ImageResolutionValidator(expected_resolution=options["target_size"]),
             TableNameValidator(),
             DuplicateValidator(),
