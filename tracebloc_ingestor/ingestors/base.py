@@ -20,6 +20,7 @@ from ..utils.constants import (
     BLUE,
     CYAN,
 )
+from ..utils import label_policy as label_policy_module
 from ..utils.validators_mapping import map_validators
 from ..file_transfer import map_file_transfer
 
@@ -86,6 +87,7 @@ class BaseIngestor(ABC):
         category: Optional[str] = None,
         data_format: Optional[str] = None,
         file_options: Optional[Dict[str, Any]] = None,
+        label_policy: str = label_policy_module.PASSTHROUGH,
     ):
         """Initialize the base ingestor.
 
@@ -102,6 +104,13 @@ class BaseIngestor(ABC):
             category: Category of the data
             data_format: Format of the data
             file_options: File options to run before ingestion
+            label_policy: ``"passthrough"`` (default; classification — the
+                label value crosses the cluster boundary unchanged) or
+                ``"bucket"`` (regression-class — each label is replaced
+                with a stable hash-bucket ID before the API payload is
+                built, so raw target values never leak). Schema-validated
+                upstream by the YAML entrypoint; templates pass the
+                appropriate constant from :mod:`tracebloc_ingestor.utils.label_policy`.
         Raises:
             ValueError: If unique_id_column is not provided
         """
@@ -119,6 +128,7 @@ class BaseIngestor(ABC):
         self.category = category
         self.data_format = data_format
         self.file_options = file_options or {}
+        self.label_policy = label_policy
 
         # Default behavior is UUID-generated data_id (no source column leaves
         # the cluster). Opting into source-column mapping is allowed but loud:
@@ -190,7 +200,15 @@ class BaseIngestor(ABC):
             )
 
         if self.label_column:
-            cleaned_record["label"] = record.get(self.label_column)
+            # Apply the configured label policy at the latest possible moment
+            # before the API client builds its payload. For classification-class
+            # categories ``label_policy="passthrough"`` is a no-op; for
+            # regression-class categories ``"bucket"`` replaces the raw target
+            # with a stable hash-bucket ID so the value never leaks to the
+            # central backend (#44 / parent client#85).
+            cleaned_record["label"] = label_policy_module.apply(
+                record.get(self.label_column), self.label_policy
+            )
 
         if self.intent:
             cleaned_record["data_intent"] = self.intent

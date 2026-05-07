@@ -222,6 +222,7 @@ def _build_ingestor(
         annotation_column=resolved.annotation_column,
         category=resolved.category,
         data_format=resolved.data_format,
+        label_policy=resolved.label_policy,
     )
 
     if resolved.source_type == "csv":
