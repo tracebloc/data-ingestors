@@ -142,7 +142,7 @@ The package exports `BaseIngestor`, `CSVIngestor`, `JSONIngestor`, plus validato
 ## Prerequisites
 
 - Python 3.8+
-- A [tracebloc account](https://ai.tracebloc.io/signup) with an active use case
+- A [tracebloc account](https://ai.tracebloc.io/signup)
 - A running [tracebloc client](https://github.com/tracebloc/client) on your infrastructure
 
 ## Links
