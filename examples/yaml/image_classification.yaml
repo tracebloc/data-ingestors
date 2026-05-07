@@ -1,0 +1,15 @@
+# The dominant case: 8 lines, no `spec` block needed.
+# `category: image_classification` implies:
+#   - data_format: image
+#   - default file_options: target_size [512, 512], extension .jpg
+#   - default validators: [FileTypeValidator(images), ImageResolutionValidator,
+#                         TableNameValidator, DuplicateValidator]
+#   - default columns: image_id (data_id source), label (the column you set below)
+apiVersion: tracebloc.io/v1
+kind: IngestConfig
+table: chest_xrays_train
+intent: train
+category: image_classification
+csv: /data/labels.csv
+images: /data/images/
+label: image_label

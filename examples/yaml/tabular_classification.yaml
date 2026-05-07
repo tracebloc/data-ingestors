@@ -1,0 +1,15 @@
+# Tabular classification: CSV only, no sidecar files.
+# `schema:` types every column; DataValidator enforces them on read.
+apiVersion: tracebloc.io/v1
+kind: IngestConfig
+table: churn_train
+intent: train
+category: tabular_classification
+csv: /data/customers.csv
+schema:
+  age: INT
+  tenure_months: INT
+  monthly_charge: FLOAT
+  contract_type: VARCHAR(64)
+  churned: VARCHAR(8)
+label: churned

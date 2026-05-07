@@ -1,0 +1,19 @@
+# Tabular regression: a regression-class task, so `label.policy` is REQUIRED.
+# `bucket` bins the target value before the central backend ever sees it,
+# preventing raw target leakage. `passthrough` is allowed but only after the
+# customer has cleared compliance — schema validation does not enforce this.
+apiVersion: tracebloc.io/v1
+kind: IngestConfig
+table: house_prices_train
+intent: train
+category: tabular_regression
+csv: /data/houses.csv
+schema:
+  square_feet: FLOAT
+  bedrooms: INT
+  bathrooms: FLOAT
+  age_years: INT
+  price: FLOAT
+label:
+  column: price
+  policy: bucket
