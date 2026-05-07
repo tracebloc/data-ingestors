@@ -118,5 +118,20 @@ def map_validators(
         validators.append(DuplicateValidator())
 
         return validators
+    elif task_category == TaskCategory.SEMANTIC_SEGMENTATION:
+        return [
+            FileTypeValidator(allowed_extension=options["extension"], path="images"),
+            FileTypeValidator(allowed_extension=FileExtension.PNG, path="masks"),
+            ImageResolutionValidator(expected_resolution=options["target_size"]),
+            TableNameValidator(),
+            DuplicateValidator(),
+        ]
+    elif task_category == TaskCategory.KEYPOINT_DETECTION:
+        return [
+            FileTypeValidator(allowed_extension=options["extension"], path="images"),
+            ImageResolutionValidator(expected_resolution=options["target_size"]),
+            TableNameValidator(),
+            DuplicateValidator(),
+        ]
     else:
         return []

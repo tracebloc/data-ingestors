@@ -1,0 +1,4 @@
+filename,mask_id,image_label
+image_001,image_001_mask,road
+image_002,image_002_mask,building
+image_003,image_003_mask,person

@@ -1,8 +1,8 @@
-"""Semantic Segmentation Data Ingestion Example.
+"""Keypoint Detection Data Ingestion Example.
 
-This example demonstrates how to ingest semantic segmentation data with images and
-corresponding mask files into a database and optionally send it to an API. It processes
-both the image files and their corresponding mask annotation files.
+This example demonstrates how to ingest keypoint detection data with images and
+corresponding keypoint annotations into a database and optionally send it to an API.
+It processes image files along with JSON-based keypoint coordinate annotations.
 """
 
 import logging
@@ -22,16 +22,25 @@ config = Config()
 setup_logging(config)
 logger = logging.getLogger(__name__)
 
-# Schema definition for semantic segmentation
-# mask_id column is required by the client to locate mask files
-schema = {
-    "mask_id": "VARCHAR(255)",
-}
+# Keypoint schema definition
+# Define the expected keypoints for the dataset
+keypoints = [
+    "nose",
+    "left_eye",
+    "right_eye",
+    "left_shoulder",
+    "right_shoulder",
+    "left_elbow",
+    "right_elbow",
+    "left_wrist",
+    "right_wrist",
+]
 
-# Semantic segmentation specific options
-semantic_segmentation_options = {
-    "target_size": (512, 512),  # image size. Height = Width
+# Keypoint detection specific options
+keypoint_detection_options = {
+    "target_size": (448, 448),  # image size. Height = Width
     "extension": FileExtension.JPG,  # allowed extension for images: jpeg, jpg, png
+    "number_of_keypoints": len(keypoints),  # number of keypoints per sample
 }
 
 # CSV specific options
@@ -46,29 +55,29 @@ csv_options = {
 
 
 def main():
-    """Run the semantic segmentation ingestion example."""
+    """Run the keypoint detection ingestion example."""
     try:
         # Initialize components
         database = Database(config)
         api_client = APIClient(config)
 
-        # Create ingestor for semantic segmentation data with validators
+        # Create ingestor for keypoint detection data with validators
         ingestor = CSVIngestor(
             database=database,
             api_client=api_client,
             table_name=config.TABLE_NAME,
-            schema=schema,
             data_format=DataFormat.IMAGE,
-            category=TaskCategory.SEMANTIC_SEGMENTATION,
+            category=TaskCategory.KEYPOINT_DETECTION,
             csv_options=csv_options,
-            file_options=semantic_segmentation_options,
+            file_options=keypoint_detection_options,
             label_column="image_label",
+            annotation_column="Annotation",
             unique_id_column="filename",
             intent=Intent.TRAIN,  # Is the data for training or testing
         )
 
         # Ingest data with validation
-        logger.info("Starting semantic segmentation ingestion with data validation...")
+        logger.info("Starting keypoint detection ingestion with data validation...")
         with ingestor:
             failed_records = ingestor.ingest(
                 config.LABEL_FILE, batch_size=config.BATCH_SIZE
