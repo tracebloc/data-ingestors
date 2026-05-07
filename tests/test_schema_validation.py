@@ -30,7 +30,7 @@ from jsonschema import Draft7Validator, ValidationError
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-SCHEMA_PATH = REPO_ROOT / "schema" / "ingest.v1.json"
+SCHEMA_PATH = REPO_ROOT / "tracebloc_ingestor" / "schema" / "ingest.v1.json"
 EXAMPLES_DIR = REPO_ROOT / "examples" / "yaml"
 
 
