@@ -164,7 +164,7 @@ def text_transfer(record: Dict[str, Any], options: Dict[str, Any]) -> Dict[str, 
 
     Args:
         record: Dictionary containing filename and other record data
-        options: Dictionary containing transfer options like allowed_extension
+        options: Dictionary containing transfer options like extension
 
     Returns:
         Updated record dictionary
@@ -175,7 +175,7 @@ def text_transfer(record: Dict[str, Any], options: Dict[str, Any]) -> Dict[str, 
     try:
         # Get the filename from the record
         filename = record.get("filename")
-        extension = options.get("allowed_extension")
+        extension = options.get("extension")
         if not filename:
             logger.error(f"{RED}No filename found in record{RESET}")
             return record
@@ -207,6 +207,47 @@ def text_transfer(record: Dict[str, Any], options: Dict[str, Any]) -> Dict[str, 
         raise ValueError(f"{RED}Error processing text file: {str(e)}{RESET}")
 
 
+def mask_transfer(record: Dict[str, Any]) -> Dict[str, Any]:
+    """Transfer mask files for semantic segmentation tasks.
+
+    Copies mask from SRC_PATH/masks/ to DEST_PATH/.
+    Searches for the mask with common image extensions (.jpg, .jpeg, .png).
+    """
+    os.makedirs(config.DEST_PATH, exist_ok=True)
+
+    try:
+        mask_id = record.get("mask_id")
+        if not mask_id:
+            logger.error(f"{RED}No mask_id found in record{RESET}")
+            return record
+
+        # Strip extension if present
+        mask_name = mask_id.split(".")[0] if "." in mask_id else mask_id
+
+        # Search for mask file with common extensions
+        mask_src_path = None
+        mask_ext = None
+        for ext in [".png", ".jpg", ".jpeg"]:
+            candidate = os.path.join(config.SRC_PATH, "masks", f"{mask_name}{ext}")
+            if os.path.exists(candidate):
+                mask_src_path = candidate
+                mask_ext = ext
+                break
+
+        if mask_src_path is None:
+            logger.error(f"{RED}Source mask not found: {mask_name} in {config.SRC_PATH}/masks/{RESET}")
+            return record
+
+        mask_dest_path = os.path.join(config.DEST_PATH, f"{mask_name}{mask_ext}")
+        _copy_file_with_retry(mask_src_path, mask_dest_path)
+
+        logger.info(f"{GREEN}Successfully copied mask: {mask_name}{RESET}")
+        return record
+
+    except Exception as e:
+        raise ValueError(f"{RED}Error processing mask file: {str(e)}{RESET}")
+
+
 def map_file_transfer(
     task_category: TaskCategory, record: Dict[str, Any], options: Dict[str, Any]
 ) -> Dict[str, Any]:
@@ -229,6 +270,13 @@ def map_file_transfer(
         return result
     elif task_category == TaskCategory.TEXT_CLASSIFICATION:
         result = text_transfer(record, options)
+        return result
+    elif task_category == TaskCategory.SEMANTIC_SEGMENTATION:
+        record = image_transfer(record, options)
+        record = mask_transfer(record)
+        return record
+    elif task_category == TaskCategory.KEYPOINT_DETECTION:
+        result = image_transfer(record, options)
         return result
     else:
         return None
