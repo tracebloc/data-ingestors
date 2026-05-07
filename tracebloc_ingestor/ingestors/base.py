@@ -8,7 +8,6 @@ import uuid
 
 from ..database import Database
 from ..api.client import APIClient
-from ..utils.logging import setup_logging
 from ..config import Config
 from ..utils.constants import (
     Intent,
@@ -24,11 +23,9 @@ from ..utils.constants import (
 from ..utils.validators_mapping import map_validators
 from ..file_transfer import map_file_transfer
 
-# Configure unified logging with config
-config = Config()
-setup_logging(config)
+# Logger for this module. Level is set by `setup_logging()` on the root
+# logger when the user script calls it; child loggers inherit that level.
 logger = logging.getLogger(__name__)
-logger.setLevel(config.LOG_LEVEL)
 
 __all__ = ["BaseIngestor", "IngestionSummary"]
 
@@ -122,6 +119,19 @@ class BaseIngestor(ABC):
         self.category = category
         self.data_format = data_format
         self.file_options = file_options or {}
+
+        # Default behavior is UUID-generated data_id (no source column leaves
+        # the cluster). Opting into source-column mapping is allowed but loud:
+        # warn at startup naming the column whose values will be sent to the
+        # central backend, so reviewers can audit the privacy implication.
+        if self.unique_id_column:
+            logger.warning(
+                f"{YELLOW}Source-column data_id mapping enabled: values from "
+                f"column '{self.unique_id_column}' will be sent to the central "
+                f"backend as 'data_id'. To prevent source PII leakage (e.g. "
+                f"patient_id, user_id), omit unique_id_column to use "
+                f"server-side UUIDs instead.{RESET}"
+            )
         
         # Add schema to file_options for validators if not already present
         if schema and "schema" not in self.file_options:
