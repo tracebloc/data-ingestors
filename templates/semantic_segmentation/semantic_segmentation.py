@@ -22,10 +22,16 @@ config = Config()
 setup_logging(config)
 logger = logging.getLogger(__name__)
 
+# Schema definition for semantic segmentation
+# mask_id column is required by the client to locate mask files
+schema = {
+    "mask_id": "VARCHAR(255)",
+}
+
 # Semantic segmentation specific options
 semantic_segmentation_options = {
     "target_size": (512, 512),  # image size. Height = Width
-    "extension": FileExtension.PNG,  # allowed extension for images: jpeg, jpg, png
+    "extension": FileExtension.JPG,  # allowed extension for images: jpeg, jpg, png
 }
 
 # CSV specific options
@@ -51,11 +57,13 @@ def main():
             database=database,
             api_client=api_client,
             table_name=config.TABLE_NAME,
+            schema=schema,
             data_format=DataFormat.IMAGE,
             category=TaskCategory.SEMANTIC_SEGMENTATION,
             csv_options=csv_options,
             file_options=semantic_segmentation_options,
             label_column="image_label",
+            unique_id_column="filename",
             intent=Intent.TRAIN,  # Is the data for training or testing
         )
 

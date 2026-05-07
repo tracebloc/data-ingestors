@@ -72,6 +72,7 @@ def main():
             file_options=keypoint_detection_options,
             label_column="image_label",
             annotation_column="Annotation",
+            unique_id_column="filename",
             intent=Intent.TRAIN,  # Is the data for training or testing
         )
 

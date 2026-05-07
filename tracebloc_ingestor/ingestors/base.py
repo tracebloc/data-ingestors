@@ -365,6 +365,8 @@ class BaseIngestor(ABC):
                                 TaskCategory.IMAGE_CLASSIFICATION,
                                 TaskCategory.OBJECT_DETECTION,
                                 TaskCategory.TEXT_CLASSIFICATION,
+                                TaskCategory.SEMANTIC_SEGMENTATION,
+                                TaskCategory.KEYPOINT_DETECTION,
                             ]:
                                 processed_record = map_file_transfer(
                                     self.category, processed_record, self.file_options

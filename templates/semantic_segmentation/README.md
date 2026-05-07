@@ -10,9 +10,9 @@ semantic_segmentation/
 ├── README.md                    # This file
 └── data/
     ├── images/                  # Source image files
-    │   ├── image_001.png
-    │   ├── image_002.png
-    │   └── image_003.png
+    │   ├── image_001.jpg
+    │   ├── image_002.jpg
+    │   └── image_003.jpg
     ├── masks/                   # Mask annotation files
     │   ├── image_001_mask.png
     │   ├── image_002_mask.png
@@ -68,7 +68,7 @@ python semantic_segmentation.py
 
 The script uses the following configuration:
 - **Target Size**: (512, 512) - Images and masks will be resized to this dimension
-- **Extension**: PNG - Expected image file extension
+- **Extension**: JPG - Expected image file extension (masks are always PNG)
 - **Chunk Size**: 100 - Number of records to process in each batch
 - **Category**: SEMANTIC_SEGMENTATION
 - **Data Format**: IMAGE
@@ -77,7 +77,7 @@ The script uses the following configuration:
 ## Sample Data
 
 The template includes sample data with:
-- 3 images (image_001.png, image_002.png, image_003.png)
+- 3 images (image_001.jpg, image_002.jpg, image_003.jpg)
 - 3 mask files (image_001_mask.png, image_002_mask.png, image_003_mask.png)
 - 10 total label entries across all images
 - Classes: road, car, sidewalk, building, sky, tree, person, traffic_sign
