@@ -82,9 +82,23 @@ DEFAULT_CSV_OPTIONS: Dict[str, Any] = {
     "escapechar": "\\",
 }
 
-DEFAULT_IMAGE_FILE_OPTIONS: Dict[str, Any] = {
-    "target_size": [512, 512],
-    "extension": ".jpg",
+# Per-category image defaults. The values match what the existing templates
+# in ``templates/*`` set explicitly, so YAML-driven runs default-equivalent
+# to script-driven runs (verified by the equivalence harness in
+# ``tests/test_template_equivalence.py``).
+#
+# The asymmetry across categories — 512×512 for classification / segmentation,
+# 448×448 for detection / keypoints — is inherited from the templates'
+# customer-tuned values. Refining these defaults after first customer
+# migrations is explicitly out-of-scope for #44 per the ticket.
+DEFAULT_IMAGE_FILE_OPTIONS_BY_CATEGORY: Dict[str, Dict[str, Any]] = {
+    TaskCategory.IMAGE_CLASSIFICATION:    {"target_size": [512, 512], "extension": ".jpg"},
+    TaskCategory.SEMANTIC_SEGMENTATION:   {"target_size": [512, 512], "extension": ".jpg"},
+    TaskCategory.OBJECT_DETECTION:        {"target_size": [448, 448], "extension": ".jpg"},
+    TaskCategory.KEYPOINT_DETECTION:      {"target_size": [448, 448], "extension": ".jpg"},
+    # No template exists yet for instance_segmentation; mirror semantic for
+    # forward-compatibility, revisit when the template lands.
+    TaskCategory.INSTANCE_SEGMENTATION:   {"target_size": [512, 512], "extension": ".jpg"},
 }
 
 DEFAULT_TEXT_FILE_OPTIONS: Dict[str, Any] = {
@@ -217,6 +231,13 @@ def resolve(config: Dict[str, Any]) -> ResolvedConfig:
     spec_file_options = (config.get("spec") or {}).get("file_options") or {}
     resolved.file_options = {**_default_file_options_for(category), **spec_file_options}
 
+    # 7a. For time_to_event_prediction the validator (TimeToEventValidator)
+    #     reads `time_column` from file_options. Bridge the top-level field
+    #     so the validator gets it without customers having to repeat the
+    #     value in spec.file_options.
+    if category == TaskCategory.TIME_TO_EVENT_PREDICTION and resolved.time_column:
+        resolved.file_options["time_column"] = resolved.time_column
+
     # 8. annotation_column — keypoint_detection's existing template uses
     #    column "Annotation" (the keypoint coords carried in the CSV). The
     #    YAML schema doesn't expose this directly in v1; we honour the
@@ -256,9 +277,15 @@ def _data_format_for(category: str) -> str:
 
 
 def _default_file_options_for(category: str) -> Dict[str, Any]:
-    """Return the default ``file_options`` dict for a category."""
+    """Return the default ``file_options`` dict for a category.
+
+    Image categories use per-category defaults to match the templates'
+    customer-tuned values (see ``DEFAULT_IMAGE_FILE_OPTIONS_BY_CATEGORY``);
+    text uses a single shared default; tabular / time-series carry no
+    ``file_options``.
+    """
     if category in IMAGE_CATEGORIES:
-        return dict(DEFAULT_IMAGE_FILE_OPTIONS)
+        return dict(DEFAULT_IMAGE_FILE_OPTIONS_BY_CATEGORY[category])
     if category in TEXT_CATEGORIES:
         return dict(DEFAULT_TEXT_FILE_OPTIONS)
     # Tabular / time-series categories don't carry file_options.
@@ -275,6 +302,6 @@ __all__ = [
     "TIME_TO_EVENT_CATEGORIES",
     "REGRESSION_CLASS_CATEGORIES",
     "DEFAULT_CSV_OPTIONS",
-    "DEFAULT_IMAGE_FILE_OPTIONS",
+    "DEFAULT_IMAGE_FILE_OPTIONS_BY_CATEGORY",
     "DEFAULT_TEXT_FILE_OPTIONS",
 ]

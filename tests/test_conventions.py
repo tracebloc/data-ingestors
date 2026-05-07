@@ -30,7 +30,7 @@ import yaml
 
 from tracebloc_ingestor.cli.conventions import (
     DEFAULT_CSV_OPTIONS,
-    DEFAULT_IMAGE_FILE_OPTIONS,
+    DEFAULT_IMAGE_FILE_OPTIONS_BY_CATEGORY,
     DEFAULT_TEXT_FILE_OPTIONS,
     IMAGE_CATEGORIES,
     REGRESSION_CLASS_CATEGORIES,
@@ -117,9 +117,29 @@ def test_semantic_segmentation_sidecars_set():
 # Default options
 # ---------------------------------------------------------------------------
 
-def test_image_categories_get_image_file_option_defaults():
+def test_image_classification_gets_512x512_default():
     r = resolve(_load("image_classification.yaml"))
-    assert r.file_options == DEFAULT_IMAGE_FILE_OPTIONS
+    assert r.file_options == DEFAULT_IMAGE_FILE_OPTIONS_BY_CATEGORY[
+        TaskCategory.IMAGE_CLASSIFICATION
+    ]
+
+
+def test_object_detection_gets_448x448_default():
+    """Object detection's template historically uses 448×448, not 512×512."""
+    r = resolve(_load("object_detection.yaml"))
+    assert r.file_options == DEFAULT_IMAGE_FILE_OPTIONS_BY_CATEGORY[
+        TaskCategory.OBJECT_DETECTION
+    ]
+    assert r.file_options["target_size"] == [448, 448]
+
+
+def test_keypoint_detection_gets_448x448_default():
+    """Keypoint detection's template also uses 448×448."""
+    r = resolve(_load("keypoint_detection.yaml"))
+    assert r.file_options == DEFAULT_IMAGE_FILE_OPTIONS_BY_CATEGORY[
+        TaskCategory.KEYPOINT_DETECTION
+    ]
+    assert r.file_options["target_size"] == [448, 448]
 
 
 def test_text_classification_gets_text_file_option_defaults():
@@ -154,7 +174,9 @@ def test_customer_file_options_override_defaults():
     r = resolve(config)
     assert r.file_options["target_size"] == [224, 224]
     # extension still defaulted.
-    assert r.file_options["extension"] == DEFAULT_IMAGE_FILE_OPTIONS["extension"]
+    assert r.file_options["extension"] == DEFAULT_IMAGE_FILE_OPTIONS_BY_CATEGORY[
+        TaskCategory.IMAGE_CLASSIFICATION
+    ]["extension"]
 
 
 # ---------------------------------------------------------------------------
