@@ -6,11 +6,16 @@ from .utils.constants import LogLevel
 
 @dataclass
 class Config:
+    # ===== Database =====
+    # The cluster-internal MySQL is bundled by the tracebloc client and ships
+    # with these credentials baked into its image. They never vary per customer,
+    # are not exposed outside the cluster, and are connection conventions rather
+    # than secrets. Override via env only if you've replaced the bundled MySQL.
     DB_HOST: str = os.getenv("MYSQL_HOST", "localhost")
-    DB_PORT: int = 3306
-    DB_USER: str = "edgeuser"
-    DB_PASSWORD: str = "Edg9@Tr@ce"
-    DB_NAME: str = "training_test_datasets"
+    DB_PORT: int = int(os.getenv("MYSQL_PORT", "3306"))
+    DB_USER: str = os.getenv("DB_USER", "edgeuser")
+    DB_PASSWORD: str = os.getenv("DB_PASSWORD", "Edg9@Tr@ce")
+    DB_NAME: str = os.getenv("DB_NAME", "training_test_datasets")
 
     BATCH_SIZE: int = int(os.getenv("BATCH_SIZE", "4000"))
 
@@ -23,12 +28,19 @@ class Config:
     }
     STORAGE_PATH = "/data/shared"
 
-    # Get environment and set appropriate API endpoint, default to dev
+    # Get environment and set appropriate API endpoint, default to prod
     EDGE_ENV: str = os.getenv("CLIENT_ENV", "prod")
     API_ENDPOINT: str = API_ENDPOINTS.get(EDGE_ENV, API_ENDPOINTS["dev"])
 
-    CLIENT_USERNAME: str = os.getenv("CLIENT_ID", "testedge")
-    CLIENT_PASSWORD: str = os.getenv("CLIENT_PASSWORD", "&6edg*D9e16")
+    # ===== Auth =====
+    # Preferred: pre-minted token from upstream (e.g. jobs-manager), passed via env.
+    # Mirrors the training-pod pattern; no long-lived credentials in the pod.
+    BACKEND_TOKEN: Optional[str] = os.getenv("BACKEND_TOKEN")
+
+    # Fallback: username/password. Deprecated — kept for one minor version while
+    # callers migrate to BACKEND_TOKEN, then removed in a follow-up.
+    CLIENT_USERNAME: Optional[str] = os.getenv("CLIENT_ID")
+    CLIENT_PASSWORD: Optional[str] = os.getenv("CLIENT_PASSWORD")
 
     SRC_PATH: str = os.getenv(
         "SRC_PATH",
@@ -46,3 +58,48 @@ class Config:
 
     # Logging configuration
     LOG_LEVEL: int = LogLevel.get_level_code(os.getenv("LOG_LEVEL", "WARNING"))
+
+    def validate(self) -> None:
+        """Fail fast on missing backend authentication.
+
+        Called explicitly by ``APIClient.__init__`` (the boot moment for a
+        real run) rather than from ``__post_init__`` so that incidental
+        module-level ``Config()`` instantiations elsewhere in the package
+        don't blow up at import time.
+
+        In any non-local environment, the pod must boot with either:
+          - ``BACKEND_TOKEN`` (preferred), or
+          - ``CLIENT_ID`` + ``CLIENT_PASSWORD`` (deprecated fallback).
+
+        Database credentials are intentionally **not** validated here: the
+        bundled MySQL container ships with fixed credentials that the ingestor
+        defaults match. They're a connection convention, not a secret, and
+        forcing customers to set them in env vars adds friction with no
+        security benefit.
+
+        Set ``CLIENT_ENV=local`` to bypass for development against a mock backend.
+
+        Raises:
+            ValueError: with a single, comma-joined list of missing vars,
+                including a hint about ``CLIENT_ENV=local``.
+        """
+        if self.EDGE_ENV == "local":
+            return
+
+        missing = []
+
+        # Backend auth: either pre-minted token, or the deprecated cred pair.
+        has_token = bool(self.BACKEND_TOKEN)
+        has_creds = bool(self.CLIENT_USERNAME and self.CLIENT_PASSWORD)
+        if not has_token and not has_creds:
+            missing.append(
+                "BACKEND_TOKEN (preferred) or CLIENT_ID + CLIENT_PASSWORD "
+                "(deprecated fallback)"
+            )
+
+        if missing:
+            raise ValueError(
+                "Missing required environment variables: "
+                + ", ".join(missing)
+                + ". Set CLIENT_ENV=local to bypass for development."
+            )

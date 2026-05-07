@@ -4,7 +4,6 @@ import logging
 from requests.adapters import HTTPAdapter
 from requests.packages.urllib3.util.retry import Retry
 from ..config import Config
-from ..utils.logging import setup_logging
 from ..utils.constants import (
     TaskCategory,
     API_TIMEOUT,
@@ -17,11 +16,9 @@ from ..utils.constants import (
     CYAN,
 )
 
-# Configure unified logging with config
-config = Config()
-setup_logging(config)
+# Logger for this module. Level is set by `setup_logging()` on the root
+# logger when the user script calls it; child loggers inherit that level.
 logger = logging.getLogger(__name__)
-logger.setLevel(config.LOG_LEVEL)
 
 
 class LoggingRetry(Retry):
@@ -36,14 +33,33 @@ class LoggingRetry(Retry):
 
 class APIClient:
     def __init__(self, config: Config):
+        # Fail fast on missing creds before any network or session setup.
+        # `validate()` is a no-op when EDGE_ENV == "local".
+        config.validate()
+
         self.config = config
         self.session = self._create_session()
-        # Only authenticate if not in local mode
-        if config.EDGE_ENV != "local":
-            self.token = self.authenticate()
-        else:
+
+        # Auth resolution order:
+        #   1. local mode  → mock token, no network call
+        #   2. BACKEND_TOKEN set → use it directly (preferred; mirrors the
+        #      training-pod pattern via jobs-manager)
+        #   3. CLIENT_ID + CLIENT_PASSWORD → fall back to /api-token-auth/
+        #      (deprecated; kept for one minor version while callers migrate)
+        if config.EDGE_ENV == "local":
             self.token = "mock_token"
             logger.info("Skipping API authentication for local mode")
+        elif config.BACKEND_TOKEN:
+            self.token = config.BACKEND_TOKEN
+            logger.info(
+                f"{GREEN}Using pre-minted BACKEND_TOKEN; skipping /api-token-auth/{RESET}"
+            )
+        else:
+            logger.warning(
+                f"{YELLOW}CLIENT_ID/CLIENT_PASSWORD auth is deprecated and will be "
+                f"removed in a future release. Inject BACKEND_TOKEN via env instead.{RESET}"
+            )
+            self.token = self.authenticate()
 
     def _create_session(self) -> requests.Session:
         session = requests.Session()
@@ -333,10 +349,10 @@ class APIClient:
 
         try:
             # Generate title from category and ingestor_id if not provided
-            if config.TITLE is None:
+            if self.config.TITLE is None:
                 title = f"{category}_{ingestor_id}"
             else:
-                title = config.TITLE  # Fallback to config title if no ingestor_id
+                title = self.config.TITLE  # Fallback to config title if no ingestor_id
 
             if category == TaskCategory.TABULAR_CLASSIFICATION:
                 allow_feature_modification = True
