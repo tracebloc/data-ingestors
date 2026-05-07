@@ -22,7 +22,12 @@ config = Config()
 setup_logging(config)
 logger = logging.getLogger(__name__)
 
-# Keypoint schema definition
+# Schema definition for keypoint detection
+# Visibility column is required by the client to determine keypoint visibility flags
+schema = {
+    "Visibility": "TEXT",
+}
+
 # Define the expected keypoints for the dataset
 keypoints = [
     "nose",
@@ -66,6 +71,7 @@ def main():
             database=database,
             api_client=api_client,
             table_name=config.TABLE_NAME,
+            schema=schema,
             data_format=DataFormat.IMAGE,
             category=TaskCategory.KEYPOINT_DETECTION,
             csv_options=csv_options,
