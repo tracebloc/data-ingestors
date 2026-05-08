@@ -127,11 +127,14 @@ def map_validators(
             DuplicateValidator(),
         ]
     elif task_category == TaskCategory.KEYPOINT_DETECTION:
-        return [
+        validators = [
             FileTypeValidator(allowed_extension=options["extension"], path="images"),
             ImageResolutionValidator(expected_resolution=options["target_size"]),
-            TableNameValidator(),
-            DuplicateValidator(),
         ]
+        if options.get("schema"):
+            validators.append(DataValidator(schema=options["schema"]))
+        validators.append(TableNameValidator())
+        validators.append(DuplicateValidator())
+        return validators
     else:
         return []
