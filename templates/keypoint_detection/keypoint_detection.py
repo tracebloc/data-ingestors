@@ -25,7 +25,6 @@ logger = logging.getLogger(__name__)
 # Schema definition for keypoint detection
 # Visibility column is required by the client to determine keypoint visibility flags
 schema = {
-    "Annotation": "TEXT",
     "Visibility": "TEXT",
 }
 
@@ -78,6 +77,7 @@ def main():
             csv_options=csv_options,
             file_options=keypoint_detection_options,
             label_column="image_label",
+            annotation_column="Annotation",
             unique_id_column="filename",
             intent=Intent.TRAIN,  # Is the data for training or testing
         )
