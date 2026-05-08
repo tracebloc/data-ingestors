@@ -79,7 +79,7 @@ def main():
             label_column="image_label",
             annotation_column="Annotation",
             unique_id_column="filename",
-            intent=Intent.TRAIN,  # Is the data for training or testing
+            intent=Intent.TEST,  # Is the data for training or testing
         )
 
         # Ingest data with validation

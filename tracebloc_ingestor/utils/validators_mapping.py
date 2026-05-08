@@ -11,6 +11,7 @@ from tracebloc_ingestor.validators.time_format_validator import TimeFormatValida
 from tracebloc_ingestor.validators.time_ordered_validator import TimeOrderedValidator
 from tracebloc_ingestor.validators.time_before_today_validator import TimeBeforeTodayValidator
 from tracebloc_ingestor.validators.numeric_columns_validator import NumericColumnsValidator
+from tracebloc_ingestor.validators.keypoint_annotation_validator import KeypointAnnotationValidator
 from tracebloc_ingestor.utils.constants import TaskCategory, FileExtension
 
 
@@ -130,6 +131,10 @@ def map_validators(
         validators = [
             FileTypeValidator(allowed_extension=options["extension"], path="images"),
             ImageResolutionValidator(expected_resolution=options["target_size"]),
+            KeypointAnnotationValidator(
+                target_size=options["target_size"],
+                num_keypoints=options.get("number_of_keypoints"),
+            ),
         ]
         if options.get("schema"):
             validators.append(DataValidator(schema=options["schema"]))
