@@ -135,7 +135,7 @@ class BaseValidator(ABC):
             return None
 
     @staticmethod
-    def _parse_json(row: Any, column: str, row_label: str) -> Optional[Any]:
+    def _parse_json(row: Any, column: str) -> Optional[Any]:
         """Parse a JSON string from a DataFrame row column. Returns None on failure."""
         import pandas as pd
 

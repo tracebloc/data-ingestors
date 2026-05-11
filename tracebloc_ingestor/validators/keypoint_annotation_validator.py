@@ -88,7 +88,7 @@ class KeypointAnnotationValidator(BaseValidator):
         row_label = f"Row {idx + 1}"
 
         # 1. Parse and validate Annotation JSON
-        annotation = self._parse_json(row, self.annotation_column, row_label)
+        annotation = self._parse_json(row, self.annotation_column)
         if annotation is None:
             errors.append(f"{row_label}: Invalid JSON in {self.annotation_column}")
             return errors
@@ -166,7 +166,7 @@ class KeypointAnnotationValidator(BaseValidator):
         reference_keys = None
 
         for idx, row in df.iterrows():
-            annotation = self._parse_json(row, self.annotation_column, f"Row {idx + 1}")
+            annotation = self._parse_json(row, self.annotation_column)
             if annotation is None or not isinstance(annotation, dict):
                 continue
 

@@ -82,7 +82,7 @@ class KeypointVisibilityValidator(BaseValidator):
         errors = []
         row_label = f"Row {idx + 1}"
 
-        visibility = self._parse_json(row, self.visibility_column, row_label)
+        visibility = self._parse_json(row, self.visibility_column)
         if visibility is None:
             errors.append(f"{row_label}: Invalid JSON in {self.visibility_column}")
             return errors
@@ -102,7 +102,7 @@ class KeypointVisibilityValidator(BaseValidator):
 
         # Check keys match annotation keys if annotation column exists
         if has_annotation:
-            annotation = self._parse_json(row, self.annotation_column, row_label)
+            annotation = self._parse_json(row, self.annotation_column)
             if annotation is not None and isinstance(annotation, dict):
                 annotation_keys = set(annotation.keys())
                 visibility_keys = set(visibility.keys())
