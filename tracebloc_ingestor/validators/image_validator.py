@@ -83,7 +83,7 @@ class ImageResolutionValidator(BaseValidator):
             ValidationResult containing validation status and messages
         """
         try:
-            data = f"{path}/images"
+            data = f"{config.SRC_PATH}/images"
             if not PIL_AVAILABLE:
                 return self._create_result(
                     is_valid=False,

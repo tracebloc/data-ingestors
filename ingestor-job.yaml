@@ -8,7 +8,7 @@ spec:
     spec:
       containers:
       - name: api
-        image: moritz000/csv-templates-ingestor-claims-train:latest # train/test switch
+        image: <docker-user>/<image-name>:latest # train/test switch
         imagePullPolicy: Always
         volumeMounts:
           - name: shared-volume
@@ -16,13 +16,13 @@ spec:
         env:
         # Client credentials
         - name: CLIENT_ID
-          value: "08ec78b9-871c-4fe1-8414-6a0ab3d268e3"
+          value: "<repalce_with_client_id>"
         - name: CLIENT_PASSWORD
-          value: "2unfcsowu4fh!8Uxz23fj"
+          value: "<replace_with_client_pass>"
         - name: CLIENT_PVC
           value: "client-pvc"
         - name: MYSQL_HOST
-          value: "mysql"
+          value: "mysql-client"
         - name: SRC_PATH
           value: "/data" # Source folder path whithin the data ingestor
         - name: LABEL_FILE
@@ -35,8 +35,6 @@ spec:
           value: "WARNING"
       imagePullSecrets:
       - name: regcred
-      nodeSelector:
-        type: system
       volumes:
         - name: shared-volume
           persistentVolumeClaim:

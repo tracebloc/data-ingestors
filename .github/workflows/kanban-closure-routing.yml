@@ -1,0 +1,12 @@
+name: Kanban closure routing
+
+on:
+  pull_request:
+    types: [closed]
+  issues:
+    types: [closed]
+
+jobs:
+  route:
+    uses: tracebloc/.github/.github/workflows/kanban-closure-router.yml@main
+    secrets: inherit

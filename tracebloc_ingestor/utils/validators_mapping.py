@@ -47,10 +47,11 @@ def map_validators(
         validators = []
 
         # Add text file validator
-        allowed_extension = options.get("allowed_extension", FileExtension.TXT)
-
         validators.append(
-            FileTypeValidator(allowed_extension=allowed_extension, path="texts"),
+            FileTypeValidator(
+                allowed_extension=options.get("extension", FileExtension.TXT),
+                path="texts",
+            ),
         )
 
         # Add data validator if schema is provided

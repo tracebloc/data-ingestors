@@ -24,7 +24,7 @@ setup_logging(config)
 logger = logging.getLogger(__name__)
 
 # Text specific options including CSV options
-text_options = {"allowed_extension": FileExtension.TXT}  # Allowed text file extensions
+text_options = {"extension": FileExtension.TXT}  # Allowed text file extensions
 
 # CSV specific options
 csv_options = {
