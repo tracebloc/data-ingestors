@@ -84,12 +84,12 @@ class JSONIngestor(BaseIngestor):
             annotation_column,
             category,
             data_format,
-            log_level,
-            validators,
             label_policy=label_policy,
         )
         self.json_options = json_options or {}
-        logger.setLevel(log_level)
+        self.validators = validators
+        if log_level is not None:
+            logger.setLevel(log_level)
 
     def _validate_record(self, record: Dict[str, Any]) -> None:
         """Validate JSON record against schema.
