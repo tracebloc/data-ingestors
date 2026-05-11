@@ -2,7 +2,7 @@
 
 Validates keypoint annotation data before ingestion to prevent training
 failures on the client side. Checks JSON structure, coordinate ranges,
-bounding box feasibility, visibility values, and keypoint count consistency.
+bounding box feasibility, and keypoint name consistency across records.
 """
 
 import json
@@ -25,30 +25,22 @@ logger.setLevel(config.LOG_LEVEL)
 class KeypointAnnotationValidator(BaseValidator):
     """Validator for keypoint annotation data.
 
-    Ensures annotation and visibility columns contain valid JSON with
-    correct structure, coordinates within expected range, and bounding
-    boxes with positive width and height.
+    Ensures annotation column contains valid JSON with correct structure,
+    numeric coordinates, non-negative values, and bounding boxes with
+    positive width and height. Checks keypoint name consistency across
+    all records.
 
     Attributes:
-        target_size: Expected image dimensions (height, width)
-        num_keypoints: Expected number of keypoints per record
         annotation_column: Name of the annotation column in CSV
-        visibility_column: Name of the visibility column in CSV
     """
 
     def __init__(
         self,
-        target_size: Tuple[int, int],
-        num_keypoints: Optional[int] = None,
         annotation_column: str = "Annotation",
-        visibility_column: str = "Visibility",
         name: str = "Keypoint Annotation",
     ):
         super().__init__(name)
-        self.target_size = target_size
-        self.num_keypoints = num_keypoints
         self.annotation_column = annotation_column
-        self.visibility_column = visibility_column
 
     def validate(self, data: Any, **kwargs) -> ValidationResult:
         try:
@@ -69,10 +61,8 @@ class KeypointAnnotationValidator(BaseValidator):
                     errors=[f"Missing required column: {self.annotation_column}"],
                 )
 
-            has_visibility = self.visibility_column in df.columns
-
             for idx, row in df.iterrows():
-                row_errors = self._validate_row(row, idx, has_visibility)
+                row_errors = self._validate_row(row, idx)
                 errors.extend(row_errors)
 
             # Check keypoint name consistency across all records
@@ -85,8 +75,6 @@ class KeypointAnnotationValidator(BaseValidator):
                 warnings=warnings,
                 metadata={
                     "rows_checked": len(df),
-                    "target_size": self.target_size,
-                    "num_keypoints": self.num_keypoints,
                 },
             )
 
@@ -110,9 +98,7 @@ class KeypointAnnotationValidator(BaseValidator):
             logger.error(f"Error loading data: {str(e)}")
             return None
 
-    def _validate_row(
-        self, row: pd.Series, idx: int, has_visibility: bool
-    ) -> List[str]:
+    def _validate_row(self, row: pd.Series, idx: int) -> List[str]:
         errors = []
         row_label = f"Row {idx + 1}"
 
@@ -129,14 +115,7 @@ class KeypointAnnotationValidator(BaseValidator):
             )
             return errors
 
-        # 2. Validate keypoint count
-        if self.num_keypoints is not None and len(annotation) != self.num_keypoints:
-            errors.append(
-                f"{row_label}: Expected {self.num_keypoints} keypoints, "
-                f"got {len(annotation)}"
-            )
-
-        # 3. Validate each keypoint coordinate
+        # 2. Validate each keypoint coordinate
         x_coords = []
         y_coords = []
         for kp_name, value in annotation.items():
@@ -148,7 +127,7 @@ class KeypointAnnotationValidator(BaseValidator):
                 x_coords.append(x)
                 y_coords.append(y)
 
-        # 4. Validate bounding box feasibility
+        # 3. Validate bounding box feasibility
         if len(x_coords) >= 2 and len(y_coords) >= 2:
             x_range = max(x_coords) - min(x_coords)
             y_range = max(y_coords) - min(y_coords)
@@ -158,13 +137,6 @@ class KeypointAnnotationValidator(BaseValidator):
                     f"(width={x_range:.4f}, height={y_range:.4f}). "
                     f"At least 2 keypoints must differ in both x and y coordinates."
                 )
-
-        # 5. Validate Visibility if present
-        if has_visibility:
-            vis_errors = self._validate_visibility(
-                row, annotation, row_label
-            )
-            errors.extend(vis_errors)
 
         return errors
 
@@ -203,40 +175,6 @@ class KeypointAnnotationValidator(BaseValidator):
             )
 
         return errors, float(x), float(y)
-
-    def _validate_visibility(
-        self, row: pd.Series, annotation: Dict, row_label: str
-    ) -> List[str]:
-        errors = []
-
-        visibility = self._parse_json(row, self.visibility_column, row_label)
-        if visibility is None:
-            errors.append(f"{row_label}: Invalid JSON in {self.visibility_column}")
-            return errors
-
-        if not isinstance(visibility, dict):
-            errors.append(
-                f"{row_label}: {self.visibility_column} must be a JSON object"
-            )
-            return errors
-
-        # Check keys match annotation keys
-        annotation_keys = set(annotation.keys())
-        visibility_keys = set(visibility.keys())
-        missing = annotation_keys - visibility_keys
-        if missing:
-            errors.append(
-                f"{row_label}: Visibility missing keys: {sorted(missing)}"
-            )
-
-        # Check values are 0 or 1
-        for key, val in visibility.items():
-            if val not in (0, 1):
-                errors.append(
-                    f"{row_label}: Visibility['{key}'] must be 0 or 1, got {val}"
-                )
-
-        return errors
 
     def _validate_keypoint_consistency(self, df: pd.DataFrame) -> List[str]:
         errors = []

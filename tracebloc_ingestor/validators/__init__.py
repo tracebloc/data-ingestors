@@ -18,6 +18,7 @@ from .time_format_validator import TimeFormatValidator
 from .time_ordered_validator import TimeOrderedValidator
 from .time_before_today_validator import TimeBeforeTodayValidator
 from .keypoint_annotation_validator import KeypointAnnotationValidator
+from .keypoint_visibility_validator import KeypointVisibilityValidator
 
 __all__ = [
     "BaseValidator",
@@ -33,4 +34,5 @@ __all__ = [
     "TimeOrderedValidator",
     "TimeBeforeTodayValidator",
     "KeypointAnnotationValidator",
+    "KeypointVisibilityValidator",
 ]

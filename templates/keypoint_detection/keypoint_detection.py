@@ -6,7 +6,6 @@ It processes image files along with JSON-based keypoint coordinate annotations.
 """
 
 import logging
-from typing import Dict, Any
 
 from tracebloc_ingestor import Config, Database, APIClient, CSVIngestor
 from tracebloc_ingestor.utils.logging import setup_logging
@@ -22,13 +21,9 @@ config = Config()
 setup_logging(config)
 logger = logging.getLogger(__name__)
 
-# Schema definition for keypoint detection
-# Visibility column is required by the client to determine keypoint visibility flags
-schema = {
-    "Visibility": "TEXT",
-}
-
 # Define the expected keypoints for the dataset
+# NOTE: This keypoint list is specific to the sample data provided.
+# Update this list to match your dataset's keypoint names.
 keypoints = [
     "nose",
     "left_eye",
@@ -41,8 +36,8 @@ keypoints = [
     "right_wrist",
 ]
 
-# Keypoint detection specific options
-keypoint_detection_options = {
+# File options for keypoint detection
+file_options = {
     "target_size": (256, 256),  # image size. Height = Width
     "extension": FileExtension.JPG,  # allowed extension for images: jpeg, jpg, png
     "number_of_keypoints": len(keypoints),  # number of keypoints per sample
@@ -71,15 +66,14 @@ def main():
             database=database,
             api_client=api_client,
             table_name=config.TABLE_NAME,
-            schema=schema,
             data_format=DataFormat.IMAGE,
             category=TaskCategory.KEYPOINT_DETECTION,
             csv_options=csv_options,
-            file_options=keypoint_detection_options,
+            file_options=file_options,
             label_column="image_label",
             annotation_column="Annotation",
             unique_id_column="filename",
-            intent=Intent.TEST,  # Is the data for training or testing
+            intent=Intent.TRAIN,  # Is the data for training or testing
         )
 
         # Ingest data with validation
