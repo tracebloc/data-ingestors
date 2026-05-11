@@ -5,10 +5,8 @@ visibility values are valid integers (0 or 1) and that visibility keys
 match the corresponding annotation keypoint names.
 """
 
-import json
 import logging
-from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, List, Optional
 
 import pandas as pd
 
@@ -78,19 +76,6 @@ class KeypointVisibilityValidator(BaseValidator):
                 errors=[f"Keypoint visibility validation error: {str(e)}"],
             )
 
-    def _load_data(self, data: Any) -> Optional[pd.DataFrame]:
-        try:
-            if isinstance(data, pd.DataFrame):
-                return data
-            elif isinstance(data, (str, Path)):
-                return pd.read_csv(
-                    data, encoding="utf-8", on_bad_lines="warn"
-                )
-            return None
-        except Exception as e:
-            logger.error(f"Error loading data: {str(e)}")
-            return None
-
     def _validate_row(
         self, row: pd.Series, idx: int, has_annotation: bool
     ) -> List[str]:
@@ -133,14 +118,3 @@ class KeypointVisibilityValidator(BaseValidator):
                     )
 
         return errors
-
-    def _parse_json(
-        self, row: pd.Series, column: str, row_label: str
-    ) -> Optional[Any]:
-        try:
-            value = row[column]
-            if pd.isna(value):
-                return None
-            return json.loads(str(value))
-        except (json.JSONDecodeError, TypeError):
-            return None

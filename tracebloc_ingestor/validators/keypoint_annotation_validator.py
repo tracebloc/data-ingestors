@@ -5,10 +5,8 @@ failures on the client side. Checks JSON structure, coordinate ranges,
 bounding box feasibility, and keypoint name consistency across records.
 """
 
-import json
 import logging
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
 import pandas as pd
 
@@ -84,19 +82,6 @@ class KeypointAnnotationValidator(BaseValidator):
                 is_valid=False,
                 errors=[f"Keypoint annotation validation error: {str(e)}"],
             )
-
-    def _load_data(self, data: Any) -> Optional[pd.DataFrame]:
-        try:
-            if isinstance(data, pd.DataFrame):
-                return data
-            elif isinstance(data, (str, Path)):
-                return pd.read_csv(
-                    data, encoding="utf-8", on_bad_lines="warn"
-                )
-            return None
-        except Exception as e:
-            logger.error(f"Error loading data: {str(e)}")
-            return None
 
     def _validate_row(self, row: pd.Series, idx: int) -> List[str]:
         errors = []
@@ -196,14 +181,3 @@ class KeypointAnnotationValidator(BaseValidator):
                 )
 
         return errors
-
-    def _parse_json(
-        self, row: pd.Series, column: str, row_label: str
-    ) -> Optional[Any]:
-        try:
-            value = row[column]
-            if pd.isna(value):
-                return None
-            return json.loads(str(value))
-        except (json.JSONDecodeError, TypeError):
-            return None
