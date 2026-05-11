@@ -15,7 +15,7 @@ time_series_forecasting/
 
 ### CSV File
 The sample CSV contains the following columns:
-- `date`: ISO date (YYYY-MM-DD)
+- `timestamp`: ISO date (YYYY-MM-DD) — required column for time series ingestion
 - `day_of_week`, `month`, `day_of_month`, `week_of_year`, `is_weekend`: Calendar features (INT)
 - `lag_1`: Previous timestep's value (FLOAT; blank for the first row)
 - `moving_avg_7`: 7-day moving average (FLOAT; blank until enough history accumulates)
@@ -54,5 +54,6 @@ The template includes sample data with:
 ## Notes
 
 - The `schema` dict defines feature columns only. The label column is supplied via `label_column`.
-- ⚠️ **Known mismatch:** the template script's `schema` (`timestamp`, `eq_count`, `avg_magnitude`, `median_magnitude`, `dayofweek`, `is_weekend`, `dayofyear`, `month`, `sin_dayofyear`, `cos_dayofyear`) and `label_column="max_magnitude"` describe a different dataset (earthquake magnitudes) than the bundled sample CSV (daily values with calendar features). Update the `schema` and `label_column` in the script to match whichever dataset you actually run against.
+- A column named `timestamp` is required for time series ingestion — keep this name even if you replace the sample CSV with your own data.
+- If you replace the sample CSV with your own data, update the `schema` dict and `label_column` in the script to match your CSV's columns.
 - Time series ingestion treats each row as a timestep; ensure your CSV is sorted chronologically.

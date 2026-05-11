@@ -1,4 +1,4 @@
-date,day_of_week,month,day_of_month,week_of_year,is_weekend,lag_1,moving_avg_7,value
+timestamp,day_of_week,month,day_of_month,week_of_year,is_weekend,lag_1,moving_avg_7,value
 2023-10-01,7,10,1,40,1,,,125.50
 2023-10-02,1,10,2,40,0,125.50,,132.30
 2023-10-03,2,10,3,40,0,132.30,,128.75

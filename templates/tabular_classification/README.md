@@ -60,5 +60,5 @@ The template includes sample data with:
 ## Notes
 
 - The `schema` dict defines feature columns only — do **not** include the label column in it.
-- ⚠️ **Known mismatch:** the template script currently sets `label_column="name"`, but the sample CSV has a `label` column and no `name` column. Update `label_column` to `"label"` (or to your CSV's actual target column) before running against this sample data.
+- If you replace the sample CSV with your own data, update `label_column` to match your CSV's target column.
 - The framework validates the number of CSV columns against the schema length plus the label column.
