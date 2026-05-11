@@ -245,6 +245,17 @@ def test_data_id_uuid_strategy_alone(validator):
     validator.validate(config)
 
 
+def test_data_id_column_without_strategy_rejected(validator):
+    # Guards against the vacuous-if/then bug: `{column: filename}` without
+    # `strategy` previously passed schema validation and was silently
+    # dropped by the resolver (which checks strategy=="column"), so the
+    # customer's explicit column selection was ignored.
+    config = _ic_base()
+    config["data_id"] = {"column": "filename"}
+    with pytest.raises(ValidationError):
+        validator.validate(config)
+
+
 def test_processor_requires_script_and_class(validator):
     config = _ic_base()
     config["spec"] = {"processors": [{"script": "/custom/x.py"}]}  # missing `class`

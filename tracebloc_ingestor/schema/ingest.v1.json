@@ -134,6 +134,7 @@
     "data_id": {
       "type": "object",
       "additionalProperties": false,
+      "required": ["strategy"],
       "properties": {
         "strategy": {
           "type": "string",
@@ -147,7 +148,7 @@
           "description": "Required when strategy=column. The source column whose values become `data_id`."
         }
       },
-      "if": { "properties": { "strategy": { "const": "column" } } },
+      "if": { "properties": { "strategy": { "const": "column" } }, "required": ["strategy"] },
       "then": { "required": ["column"] }
     },
 
