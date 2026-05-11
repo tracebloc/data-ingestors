@@ -15,7 +15,6 @@ from ..database import Database
 from ..api.client import APIClient
 from ..utils.constants import RESET, RED, YELLOW
 from ..utils import label_policy as label_policy_module
-from ..validators import BaseValidator
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +47,6 @@ class JSONIngestor(BaseIngestor):
         category: Optional[str] = None,
         data_format: Optional[str] = None,
         log_level: Optional[int] = None,
-        validators: Optional[List[BaseValidator]] = None,
         label_policy: str = label_policy_module.PASSTHROUGH,
     ):
         """Initialize JSON Ingestor.
@@ -67,7 +65,6 @@ class JSONIngestor(BaseIngestor):
             category: Category of the data
             data_format: Format of the data
             log_level: Level of the logger
-            validators: List of validators to run before ingestion
             label_policy: Bucketing policy for the label value before it's
                 sent to the central backend. ``"passthrough"`` (default)
                 for classification; ``"bucket"`` for regression-class.
@@ -87,7 +84,6 @@ class JSONIngestor(BaseIngestor):
             label_policy=label_policy,
         )
         self.json_options = json_options or {}
-        self.validators = validators
         if log_level is not None:
             logger.setLevel(log_level)
 

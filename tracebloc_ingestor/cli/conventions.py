@@ -157,6 +157,14 @@ class ResolvedConfig:
     # ----- Custom processors (specs only; entrypoint loads classes) -----
     processor_specs: List[Dict[str, Any]] = field(default_factory=list)
 
+    # ----- Deferred-feature passthroughs -----
+    # Schema-accepted in v1 for forward-compatibility, but the runtime path
+    # to honour them isn't built yet (validator-name resolution + the
+    # sidecar mounting story both wait for client#86). The entrypoint
+    # warns when these are non-empty so customers know the keys are inert.
+    validators_override: List[str] = field(default_factory=list)
+    sidecars: List[Dict[str, Any]] = field(default_factory=list)
+
 
 # ---------------------------------------------------------------------------
 # Resolver
@@ -248,7 +256,14 @@ def resolve(config: Dict[str, Any]) -> ResolvedConfig:
     # 9. Processor specs — pass through verbatim. The entrypoint will import
     #    the script and instantiate the named class. We don't do that here
     #    so the resolver stays I/O-free and unit-testable.
-    resolved.processor_specs = list((config.get("spec") or {}).get("processors") or [])
+    spec = config.get("spec") or {}
+    resolved.processor_specs = list(spec.get("processors") or [])
+
+    # 10. Deferred passthroughs — captured so the entrypoint can warn about
+    #     them. Honouring these is part of the v1.1 surface (validator-name
+    #     resolution and the sidecar mounting story from client#86).
+    resolved.validators_override = list(spec.get("validators") or [])
+    resolved.sidecars = list(spec.get("sidecars") or [])
 
     return resolved
 

@@ -244,6 +244,67 @@ def test_processors_trigger_warning_but_run_continues(
     )
 
 
+def test_validators_override_triggers_warning(
+    clean_env, mock_runtime, monkeypatch, caplog, tmp_path
+):
+    """spec.validators is schema-accepted but the runtime path isn't built
+    yet — the entrypoint must warn instead of silently dropping it."""
+    cfg = tmp_path / "ingest.yaml"
+    cfg.write_text(
+        "apiVersion: tracebloc.io/v1\n"
+        "kind: IngestConfig\n"
+        "category: image_classification\n"
+        "table: t\n"
+        "intent: train\n"
+        "csv: /data/labels.csv\n"
+        "images: /data/images/\n"
+        "label: image_label\n"
+        "spec:\n"
+        "  validators: [FileTypeValidator, TableNameValidator]\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("INGEST_CONFIG", str(cfg))
+
+    with caplog.at_level(logging.WARNING, logger="tracebloc_ingestor.cli.run"):
+        from tracebloc_ingestor.cli.run import main
+        rc = main()
+
+    assert rc == 0
+    assert mock_runtime["CSVIngestor"].call_count == 1
+    assert any("spec.validators" in r.message for r in caplog.records)
+
+
+def test_sidecars_triggers_warning(
+    clean_env, mock_runtime, monkeypatch, caplog, tmp_path
+):
+    """spec.sidecars is schema-accepted but the runtime path isn't built
+    yet — the entrypoint must warn instead of silently dropping it."""
+    cfg = tmp_path / "ingest.yaml"
+    cfg.write_text(
+        "apiVersion: tracebloc.io/v1\n"
+        "kind: IngestConfig\n"
+        "category: image_classification\n"
+        "table: t\n"
+        "intent: train\n"
+        "csv: /data/labels.csv\n"
+        "images: /data/images/\n"
+        "label: image_label\n"
+        "spec:\n"
+        "  sidecars:\n"
+        "    - {column: filename, source: /other/images/}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("INGEST_CONFIG", str(cfg))
+
+    with caplog.at_level(logging.WARNING, logger="tracebloc_ingestor.cli.run"):
+        from tracebloc_ingestor.cli.run import main
+        rc = main()
+
+    assert rc == 0
+    assert mock_runtime["CSVIngestor"].call_count == 1
+    assert any("spec.sidecars" in r.message for r in caplog.records)
+
+
 # ---------------------------------------------------------------------------
 # Legacy env-var bridge
 # ---------------------------------------------------------------------------

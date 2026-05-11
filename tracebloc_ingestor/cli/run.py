@@ -118,6 +118,24 @@ def main(argv: List[str] | None = None) -> int:  # pragma: no cover - thin shell
             len(resolved.processor_specs),
         )
 
+    if resolved.validators_override:
+        logger.warning(
+            "spec.validators is accepted by the schema but is not yet "
+            "honoured at runtime; the default validator set from "
+            "map_validators(category) will run instead. Ignoring %d "
+            "override(s).",
+            len(resolved.validators_override),
+        )
+
+    if resolved.sidecars:
+        logger.warning(
+            "spec.sidecars is accepted by the schema but is not yet "
+            "honoured at runtime; the framework's per-category sidecar "
+            "convention (images/, annotations/, masks/, texts/ under "
+            "SRC_PATH) will be used instead. Ignoring %d sidecar entry(s).",
+            len(resolved.sidecars),
+        )
+
     config = Config()
     setup_logging(config)
 
@@ -255,13 +273,11 @@ def _build_ingestor(
         )
 
     if resolved.source_type == "json":
-        # JSONIngestor has a slightly different surface than CSVIngestor:
-        # no `file_options`, accepts `validators=` explicitly. The schema
-        # doesn't expose json_options yet; defaults are fine for v1.
+        # JSONIngestor has no `file_options`. The schema doesn't expose
+        # json_options yet; defaults are fine for v1.
         return JSONIngestor(
             **common_kwargs,
             json_options={},
-            validators=None,
         )
 
     raise ValueError(
