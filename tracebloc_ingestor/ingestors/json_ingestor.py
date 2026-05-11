@@ -46,6 +46,7 @@ class JSONIngestor(BaseIngestor):
         annotation_column: Optional[str] = None,
         category: Optional[str] = None,
         data_format: Optional[str] = None,
+        file_options: Optional[Dict[str, Any]] = None,
         log_level: Optional[int] = None,
         label_policy: str = label_policy_module.PASSTHROUGH,
     ):
@@ -64,6 +65,10 @@ class JSONIngestor(BaseIngestor):
             annotation_column: Name of the column to use as annotation
             category: Category of the data
             data_format: Format of the data
+            file_options: Options passed to the validator set resolved by
+                ``map_validators(category, file_options)``. For
+                ``time_to_event_prediction`` this carries ``time_column``;
+                for image categories it carries ``target_size`` / ``extension``.
             log_level: Level of the logger
             label_policy: Bucketing policy for the label value before it's
                 sent to the central backend. ``"passthrough"`` (default)
@@ -81,6 +86,7 @@ class JSONIngestor(BaseIngestor):
             annotation_column,
             category,
             data_format,
+            file_options,
             label_policy=label_policy,
         )
         self.json_options = json_options or {}

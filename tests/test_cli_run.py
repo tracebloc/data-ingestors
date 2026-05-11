@@ -220,6 +220,38 @@ def test_json_happy_path(clean_env, mock_runtime, monkeypatch, tmp_path):
     json_instance.ingest.assert_called_once_with("/data/events.json", batch_size=4000)
 
 
+def test_json_receives_file_options_for_time_to_event(
+    clean_env, mock_runtime, monkeypatch, tmp_path
+):
+    """JSON source + time_to_event_prediction must propagate `time_column`
+    via file_options so map_validators picks up the right TimeToEventValidator
+    config. Regression guard for the dispatch-layer drop."""
+    cfg = tmp_path / "tte.yaml"
+    cfg.write_text(
+        "apiVersion: tracebloc.io/v1\n"
+        "kind: IngestConfig\n"
+        "category: time_to_event_prediction\n"
+        "table: tte_train\n"
+        "intent: train\n"
+        "json: /data/events.json\n"
+        "time_column: event_time\n"
+        "schema:\n"
+        "  event_time: DATETIME\n"
+        "  duration: FLOAT\n"
+        "label:\n"
+        "  column: duration\n"
+        "  policy: bucket\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("INGEST_CONFIG", str(cfg))
+
+    from tracebloc_ingestor.cli.run import main
+    main()
+
+    _, kwargs = mock_runtime["JSONIngestor"].call_args
+    assert kwargs["file_options"]["time_column"] == "event_time"
+
+
 # ---------------------------------------------------------------------------
 # Deferred-feature warning for processors
 # ---------------------------------------------------------------------------

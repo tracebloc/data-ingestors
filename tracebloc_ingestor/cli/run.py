@@ -273,11 +273,14 @@ def _build_ingestor(
         )
 
     if resolved.source_type == "json":
-        # JSONIngestor has no `file_options`. The schema doesn't expose
-        # json_options yet; defaults are fine for v1.
+        # The schema doesn't expose json_options yet; defaults are fine
+        # for v1. file_options carries category-specific knobs that
+        # BaseIngestor passes to map_validators (e.g. time_column for
+        # time_to_event_prediction, target_size for image categories).
         return JSONIngestor(
             **common_kwargs,
             json_options={},
+            file_options=resolved.file_options,
         )
 
     raise ValueError(
