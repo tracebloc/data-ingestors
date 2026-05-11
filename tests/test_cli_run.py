@@ -251,9 +251,8 @@ def test_processors_trigger_warning_but_run_continues(
 def test_legacy_env_vars_set_before_config_construction(
     clean_env, mock_runtime, monkeypatch
 ):
-    """``Config()`` reads env vars at construction. The entrypoint must set
-    SRC_PATH / TABLE_NAME / LABEL_FILE *before* Config() is called so the
-    legacy file_transfer.py path-resolution layer works."""
+    """The entrypoint must set SRC_PATH / TABLE_NAME / LABEL_FILE so any
+    downstream code that reads env lazily picks them up."""
     monkeypatch.setenv(
         "INGEST_CONFIG", str(EXAMPLES_DIR / "image_classification.yaml")
     )
@@ -276,6 +275,35 @@ def test_legacy_env_vars_set_before_config_construction(
     # SRC_PATH = parent of `images:` dir, since file_transfer.py joins
     # SRC_PATH/images/<filename>.
     assert captured_env["SRC_PATH"] == "/data"
+
+
+def test_file_transfer_config_patched_in_place(clean_env, mock_runtime, monkeypatch):
+    """``file_transfer`` holds a module-level ``config = Config()`` captured
+    at import time, before the entrypoint runs. Because ``Config`` is a
+    dataclass whose ``os.getenv`` defaults are evaluated at class-definition
+    time, neither setting env vars nor re-instantiating ``Config()`` would
+    reach that captured instance. The bridge must mutate it in place."""
+    monkeypatch.setenv(
+        "INGEST_CONFIG", str(EXAMPLES_DIR / "image_classification.yaml")
+    )
+
+    from tracebloc_ingestor import file_transfer
+
+    # Poison the captured config with values the entrypoint should overwrite.
+    monkeypatch.setattr(file_transfer.config, "TABLE_NAME", "STALE_TABLE")
+    monkeypatch.setattr(file_transfer.config, "LABEL_FILE", "/stale/labels.csv")
+    monkeypatch.setattr(file_transfer.config, "SRC_PATH", "/stale/src")
+    monkeypatch.setattr(file_transfer.config, "DEST_PATH", "/stale/dest")
+    storage_path = file_transfer.config.STORAGE_PATH
+
+    from tracebloc_ingestor.cli.run import main
+    main()
+
+    assert file_transfer.config.TABLE_NAME == "chest_xrays_train"
+    assert file_transfer.config.LABEL_FILE == "/data/labels.csv"
+    assert file_transfer.config.SRC_PATH == "/data"
+    # DEST_PATH is STORAGE_PATH/<table> — file_transfer joins onto it.
+    assert file_transfer.config.DEST_PATH == os.path.join(storage_path, "chest_xrays_train")
 
 
 # ---------------------------------------------------------------------------

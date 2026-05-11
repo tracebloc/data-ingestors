@@ -176,14 +176,20 @@ def _format_errors(errors: List[ValidationError]) -> str:
 # ---------------------------------------------------------------------------
 
 def _set_legacy_env_vars(resolved: ResolvedConfig) -> None:
-    """Set the env vars that ``file_transfer.py`` and the existing framework
-    code read off ``Config()`` at construction time.
+    """Bridge the resolved YAML config into the legacy env-var path layer
+    in ``file_transfer.py``.
 
     The ingestor's path-resolution layer was built around env vars
     (``SRC_PATH``, ``TABLE_NAME``, ``LABEL_FILE``). Refactoring it to take
-    paths as parameters is a follow-up; for v1 the entrypoint sets the env
-    vars from the resolved config so the rest of the framework keeps
-    working unchanged.
+    paths as parameters is a follow-up; for v1 we bridge in two steps:
+
+    1. Set the env vars so any downstream code that reads them lazily
+       picks up the resolved values.
+    2. Patch ``file_transfer.config`` (a module-level ``Config()`` instance
+       captured at import time, before this function runs) in place. The
+       ``Config`` dataclass evaluates its ``os.getenv`` defaults once when
+       the class body executes, so neither step (1) alone nor a fresh
+       ``Config()`` call would reach the already-constructed instance.
 
     ``SRC_PATH`` is derived from whichever sidecar directory is set, since
     ``file_transfer.py`` joins ``SRC_PATH/<subfolder>/<filename>`` for each
@@ -191,14 +197,30 @@ def _set_legacy_env_vars(resolved: ResolvedConfig) -> None:
     parent (``/data/images/``, ``/data/annotations/``, etc.) — for non-
     standard layouts, customers use ``spec.sidecars[]`` (also deferred).
     """
+    src_path = None
+    src_path_source = (
+        resolved.images or resolved.texts or resolved.masks or resolved.annotations
+    )
+    if src_path_source:
+        src_path = os.path.dirname(src_path_source.rstrip("/"))
+
     os.environ["TABLE_NAME"] = resolved.table_name
     os.environ["LABEL_FILE"] = resolved.source_path
+    if src_path:
+        os.environ["SRC_PATH"] = src_path
 
-    # Pick a sidecar dir to derive the parent from; the framework does its
-    # own subfolder joins (images/, annotations/, masks/, texts/) under it.
-    src_path_source = resolved.images or resolved.texts or resolved.masks or resolved.annotations
-    if src_path_source:
-        os.environ["SRC_PATH"] = os.path.dirname(src_path_source.rstrip("/"))
+    # Patch the already-constructed file_transfer.config in place. Its
+    # fields were frozen with stale env values at import time (long before
+    # we got here), and Config's dataclass defaults are evaluated at
+    # class-definition time, so re-instantiating wouldn't help either.
+    from .. import file_transfer
+    file_transfer.config.TABLE_NAME = resolved.table_name
+    file_transfer.config.LABEL_FILE = resolved.source_path
+    file_transfer.config.DEST_PATH = os.path.join(
+        file_transfer.config.STORAGE_PATH, resolved.table_name
+    )
+    if src_path:
+        file_transfer.config.SRC_PATH = src_path
 
 
 # ---------------------------------------------------------------------------
