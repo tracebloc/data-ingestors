@@ -11,6 +11,8 @@ from tracebloc_ingestor.validators.time_format_validator import TimeFormatValida
 from tracebloc_ingestor.validators.time_ordered_validator import TimeOrderedValidator
 from tracebloc_ingestor.validators.time_before_today_validator import TimeBeforeTodayValidator
 from tracebloc_ingestor.validators.numeric_columns_validator import NumericColumnsValidator
+from tracebloc_ingestor.validators.keypoint_annotation_validator import KeypointAnnotationValidator
+from tracebloc_ingestor.validators.keypoint_visibility_validator import KeypointVisibilityValidator
 from tracebloc_ingestor.utils.constants import TaskCategory, FileExtension
 
 
@@ -127,11 +129,14 @@ def map_validators(
             DuplicateValidator(),
         ]
     elif task_category == TaskCategory.KEYPOINT_DETECTION:
-        return [
+        validators = [
             FileTypeValidator(allowed_extension=options["extension"], path="images"),
             ImageResolutionValidator(expected_resolution=options["target_size"]),
+            KeypointAnnotationValidator(),
+            KeypointVisibilityValidator(),
             TableNameValidator(),
             DuplicateValidator(),
         ]
+        return validators
     else:
         return []
