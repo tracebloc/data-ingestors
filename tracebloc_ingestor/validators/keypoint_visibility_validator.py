@@ -122,9 +122,14 @@ class KeypointVisibilityValidator(BaseValidator):
                 annotation_keys = set(annotation.keys())
                 visibility_keys = set(visibility.keys())
                 missing = annotation_keys - visibility_keys
+                extra = visibility_keys - annotation_keys
                 if missing:
                     errors.append(
                         f"{row_label}: Visibility missing keys: {sorted(missing)}"
+                    )
+                if extra:
+                    errors.append(
+                        f"{row_label}: Visibility has extra keys not in Annotation: {sorted(extra)}"
                     )
 
         return errors
