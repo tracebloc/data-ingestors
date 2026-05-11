@@ -56,7 +56,7 @@ def main():
             category=TaskCategory.TABULAR_CLASSIFICATION,
             csv_options=csv_options,
             file_options={"number_of_columns": len(schema)},
-            label_column="name",
+            label_column="label",
             intent=Intent.TRAIN,  # Is the data for training or testing
         )
 
