@@ -1,0 +1,164 @@
+# Build, sign, and publish the official ingestor image to GHCR.
+#
+# Triggered by pushing a vX.Y.Z tag (or manually via workflow_dispatch).
+# Produces:
+#   - ghcr.io/tracebloc/ingestor:X.Y.Z, :X.Y, :X (deliberately no :latest per #45)
+#   - Cosign keyless signature on the image digest (Sigstore Rekor)
+#   - SBOM + SLSA provenance attached as OCI attestations (buildkit-native)
+#   - GitHub Release updated with the image digest for downstream pinning
+#
+# Downstream consumers pin by digest, not tag. The Helm subchart (client#86)
+# pulls the digest from the release notes and bakes it into its values.
+#
+# Verification:
+#   cosign verify ghcr.io/tracebloc/ingestor@<digest> \
+#     --certificate-identity-regexp \
+#       'https://github.com/tracebloc/data-ingestors/.github/workflows/release-image.yml@.*' \
+#     --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'
+
+name: Release image
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Tag to build (e.g. v0.3.0). Must already exist on origin.'
+        required: true
+        type: string
+
+permissions:
+  contents: write     # update release notes with the digest
+  packages: write     # push to GHCR
+  id-token: write     # cosign keyless OIDC + buildkit attestations
+  attestations: write # SBOM + provenance attestations
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: tracebloc/ingestor
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          # cosign + buildkit reproducibility benefit from full history.
+          fetch-depth: 0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          # Tag strategy: semver only. No :latest — downstream must pick a
+          # specific major or minor and accept the upgrade window explicitly.
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+          flavor: |
+            latest=false
+          labels: |
+            org.opencontainers.image.title=tracebloc-ingestor
+            org.opencontainers.image.description=Official tracebloc data-ingestor image (declarative YAML-driven, signed)
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.licenses=Apache-2.0
+            org.opencontainers.image.vendor=tracebloc
+
+      - name: Build and push image
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # SLSA provenance + SBOM as OCI attestations, attached at the image
+          # index level. Extractable with `docker buildx imagetools inspect`.
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: 'v2.4.0'
+
+      - name: Sign image (keyless OIDC)
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          # Sign each tag's digest separately so `cosign verify <tag>` works
+          # for all three (X.Y.Z, X.Y, X). All point to the same digest, so
+          # this is cheap.
+          echo "$TAGS" | while IFS= read -r tag; do
+            [ -z "$tag" ] && continue
+            echo "::group::Signing $tag@$DIGEST"
+            cosign sign --yes "$tag@$DIGEST"
+            echo "::endgroup::"
+          done
+
+      - name: Update release notes with digest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.ref || github.ref_name }}
+          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          # Indent each pushed tag two spaces for the markdown bullet list.
+          tag_list=$(echo "$TAGS" | sed 's/^/- `/; s/$/`/')
+
+          notes=$(cat <<EOF
+          ## Image
+
+          \`\`\`
+          ${IMAGE}@${DIGEST}
+          \`\`\`
+
+          ### Tags pushed
+
+          ${tag_list}
+
+          ### Verify signature
+
+          \`\`\`
+          cosign verify ${IMAGE}@${DIGEST} \\
+            --certificate-identity-regexp 'https://github.com/${{ github.repository }}/.github/workflows/release-image.yml@.*' \\
+            --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'
+          \`\`\`
+
+          ### Inspect SBOM / provenance
+
+          \`\`\`
+          docker buildx imagetools inspect ${IMAGE}@${DIGEST} --format '{{ json .SBOM }}'
+          docker buildx imagetools inspect ${IMAGE}@${DIGEST} --format '{{ json .Provenance }}'
+          \`\`\`
+          EOF
+          )
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Updating existing release $TAG"
+            gh release edit "$TAG" --notes "$notes"
+          else
+            echo "Creating new release $TAG"
+            gh release create "$TAG" --title "$TAG" --notes "$notes"
+          fi
