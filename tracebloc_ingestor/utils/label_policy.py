@@ -28,6 +28,7 @@ breaking ``passthrough`` / ``bucket`` consumers.
 from __future__ import annotations
 
 import hashlib
+import math
 from typing import Any
 
 
@@ -78,11 +79,15 @@ def apply(value: Any, policy: str) -> Any:
 def _bucket(value: Any) -> int:
     """Stable hash-bucket of ``str(value)``.
 
-    Empty / None / whitespace-only values produce ``MISSING_LABEL_BUCKET``
+    None / NaN / empty / whitespace-only values produce ``MISSING_LABEL_BUCKET``
     so the central backend can distinguish "no label" from "bucket 0"
-    without an extra flag.
+    without an extra flag. pandas reads missing numeric cells as
+    ``float('nan')``, which ``str()`` renders as ``"nan"`` — non-empty —
+    so it needs an explicit float-NaN check before stringification.
     """
     if value is None:
+        return MISSING_LABEL_BUCKET
+    if isinstance(value, float) and math.isnan(value):
         return MISSING_LABEL_BUCKET
     text = str(value).strip()
     if not text:

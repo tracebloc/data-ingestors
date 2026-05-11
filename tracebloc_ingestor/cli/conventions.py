@@ -242,9 +242,12 @@ def resolve(config: Dict[str, Any]) -> ResolvedConfig:
     # 7a. For time_to_event_prediction the validator (TimeToEventValidator)
     #     reads `time_column` from file_options. Bridge the top-level field
     #     so the validator gets it without customers having to repeat the
-    #     value in spec.file_options.
+    #     value in spec.file_options. ``setdefault`` so an explicit
+    #     spec.file_options.time_column (the advanced override) wins over
+    #     the documented top-level shorthand, consistent with how every
+    #     other spec.file_options key behaves.
     if category == TaskCategory.TIME_TO_EVENT_PREDICTION and resolved.time_column:
-        resolved.file_options["time_column"] = resolved.time_column
+        resolved.file_options.setdefault("time_column", resolved.time_column)
 
     # 8. annotation_column — keypoint_detection's existing template uses
     #    column "Annotation" (the keypoint coords carried in the CSV). The

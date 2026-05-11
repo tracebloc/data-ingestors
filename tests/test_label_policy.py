@@ -72,6 +72,12 @@ class TestBucketPolicy:
     def test_whitespace_string_returns_missing_sentinel(self):
         assert label_policy.apply("   ", BUCKET) == MISSING_LABEL_BUCKET
 
+    def test_nan_value_returns_missing_sentinel(self):
+        # pandas renders missing numeric cells as float('nan'). `str(nan)`
+        # is "nan" — non-empty — so an explicit isnan check is required
+        # to keep NaN labels out of the regular bucket space.
+        assert label_policy.apply(float("nan"), BUCKET) == MISSING_LABEL_BUCKET
+
     def test_missing_sentinel_outside_valid_range(self):
         # MISSING_LABEL_BUCKET must not collide with a real bucket.
         assert MISSING_LABEL_BUCKET < 0 or MISSING_LABEL_BUCKET >= NUM_BUCKETS

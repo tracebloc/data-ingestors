@@ -247,6 +247,19 @@ def test_tabular_schema_passes_through():
 def test_time_to_event_carries_time_column():
     r = resolve(_load("time_to_event_prediction.yaml"))
     assert r.time_column == "tenure_days"
+    # Step 7a bridges the top-level field into file_options where the
+    # validator expects it.
+    assert r.file_options["time_column"] == "tenure_days"
+
+
+def test_time_to_event_spec_file_options_time_column_wins_over_top_level():
+    """spec.file_options is the advanced override surface; an explicit
+    spec value must beat the top-level shorthand. Regression guard against
+    overwriting the spec value with the top-level field."""
+    config = _load("time_to_event_prediction.yaml")
+    config.setdefault("spec", {}).setdefault("file_options", {})["time_column"] = "override_time"
+    r = resolve(config)
+    assert r.file_options["time_column"] == "override_time"
 
 
 def test_processor_specs_pass_through_verbatim():
