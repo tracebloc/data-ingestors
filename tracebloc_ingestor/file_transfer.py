@@ -207,6 +207,20 @@ def text_transfer(record: Dict[str, Any], options: Dict[str, Any]) -> Dict[str, 
         raise ValueError(f"{RED}Error processing text file: {str(e)}{RESET}")
 
 
+def _find_mask_src(mask_id: str):
+    """Locate a mask file in SRC_PATH/masks/, trying common image extensions.
+
+    Returns (src_path, extension, mask_name) on success, or (None, None, mask_name)
+    if no matching file is found.
+    """
+    mask_name = mask_id.split(".")[0] if "." in mask_id else mask_id
+    for ext in [".png", ".jpg", ".jpeg"]:
+        candidate = os.path.join(config.SRC_PATH, "masks", f"{mask_name}{ext}")
+        if os.path.exists(candidate):
+            return candidate, ext, mask_name
+    return None, None, mask_name
+
+
 def mask_transfer(record: Dict[str, Any]) -> Dict[str, Any]:
     """Transfer mask files for semantic segmentation tasks.
 
@@ -221,19 +235,7 @@ def mask_transfer(record: Dict[str, Any]) -> Dict[str, Any]:
             logger.error(f"{RED}No mask_id found in record{RESET}")
             return record
 
-        # Strip extension if present
-        mask_name = mask_id.split(".")[0] if "." in mask_id else mask_id
-
-        # Search for mask file with common extensions
-        mask_src_path = None
-        mask_ext = None
-        for ext in [".png", ".jpg", ".jpeg"]:
-            candidate = os.path.join(config.SRC_PATH, "masks", f"{mask_name}{ext}")
-            if os.path.exists(candidate):
-                mask_src_path = candidate
-                mask_ext = ext
-                break
-
+        mask_src_path, mask_ext, mask_name = _find_mask_src(mask_id)
         if mask_src_path is None:
             logger.error(f"{RED}Source mask not found: {mask_name} in {config.SRC_PATH}/masks/{RESET}")
             return record
@@ -272,6 +274,18 @@ def map_file_transfer(
         result = text_transfer(record, options)
         return result
     elif task_category == TaskCategory.SEMANTIC_SEGMENTATION:
+        # Atomic: only copy image+mask together. If the mask is missing,
+        # skip the record entirely so we don't leave an orphan image on disk.
+        mask_id = record.get("mask_id")
+        if not mask_id:
+            logger.error(f"{RED}No mask_id found in record{RESET}")
+            return None
+        mask_src_path, _, mask_name = _find_mask_src(mask_id)
+        if mask_src_path is None:
+            logger.error(
+                f"{RED}Source mask not found: {mask_name} in {config.SRC_PATH}/masks/ — skipping record{RESET}"
+            )
+            return None
         record = image_transfer(record, options)
         record = mask_transfer(record)
         return record
