@@ -75,6 +75,24 @@ def _has_extension(filename: str) -> bool:
     return False
 
 
+def _find_image_src(filename: str, extension: str):
+    """Resolve the source path for an image in SRC_PATH/images/.
+
+    Returns (src_path, filename_with_ext) on success, or
+    (None, filename_with_ext) if the file does not exist. Centralising the
+    path/extension resolution keeps pre-checks (e.g. the atomic
+    SEMANTIC_SEGMENTATION branch in `map_file_transfer`) consistent with
+    what `image_transfer` actually copies.
+    """
+    filename_with_ext = (
+        filename if _has_extension(filename) else f"{filename}{extension}"
+    )
+    candidate = os.path.join(config.SRC_PATH, "images", filename_with_ext)
+    if os.path.exists(candidate):
+        return candidate, filename_with_ext
+    return None, filename_with_ext
+
+
 def image_transfer(record: Dict[str, Any], options: Dict[str, Any]) -> Dict[str, Any]:
     # Create destination directory if it doesn't exist
     os.makedirs(config.DEST_PATH, exist_ok=True)
@@ -87,16 +105,11 @@ def image_transfer(record: Dict[str, Any], options: Dict[str, Any]) -> Dict[str,
             logger.error(f"{RED}No filename found in record{RESET}")
             return record
 
-        # Add extension to filename if it doesn't have one
-        if not _has_extension(filename):
-            filename_with_ext = f"{filename}{extension}"
-        else:
-            filename_with_ext = filename
-
-        # Process the image
-        image_src_path = os.path.join(config.SRC_PATH, "images", filename_with_ext)
-        if not os.path.exists(image_src_path):
-            logger.error(f"{RED}Source image not found: {image_src_path}{RESET}")
+        image_src_path, filename_with_ext = _find_image_src(filename, extension)
+        if image_src_path is None:
+            logger.error(
+                f"{RED}Source image not found: {os.path.join(config.SRC_PATH, 'images', filename_with_ext)}{RESET}"
+            )
             return record
 
         # Save the resized image
@@ -274,19 +287,19 @@ def map_file_transfer(
         # before either copy, since image_transfer returns the record (not
         # None) when the source image is missing — without this pre-check
         # a missing image would still let mask_transfer leave an orphan
-        # mask on disk.
+        # mask on disk. Both sides resolve their source via shared helpers
+        # (_find_image_src / _find_mask_src) so the pre-check stays in
+        # lockstep with what the copy functions actually look for.
         filename = record.get("filename")
         if not filename:
             logger.error(f"{RED}No filename found in record{RESET}")
             return None
-        extension = options.get("extension")
-        image_filename = (
-            filename if _has_extension(filename) else f"{filename}{extension}"
+        image_src_path, image_filename = _find_image_src(
+            filename, options.get("extension")
         )
-        image_src_path = os.path.join(config.SRC_PATH, "images", image_filename)
-        if not os.path.exists(image_src_path):
+        if image_src_path is None:
             logger.error(
-                f"{RED}Source image not found: {image_src_path} — skipping record{RESET}"
+                f"{RED}Source image not found: {os.path.join(config.SRC_PATH, 'images', image_filename)} — skipping record{RESET}"
             )
             return None
 
