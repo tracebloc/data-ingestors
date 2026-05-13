@@ -270,8 +270,26 @@ def map_file_transfer(
         result = text_transfer(record, options)
         return result
     elif task_category == TaskCategory.SEMANTIC_SEGMENTATION:
-        # Atomic: only copy image+mask together. If the mask is missing,
-        # skip the record entirely so we don't leave an orphan image on disk.
+        # Atomic: only copy image+mask together. Pre-verify both sources
+        # before either copy, since image_transfer returns the record (not
+        # None) when the source image is missing — without this pre-check
+        # a missing image would still let mask_transfer leave an orphan
+        # mask on disk.
+        filename = record.get("filename")
+        if not filename:
+            logger.error(f"{RED}No filename found in record{RESET}")
+            return None
+        extension = options.get("extension")
+        image_filename = (
+            filename if _has_extension(filename) else f"{filename}{extension}"
+        )
+        image_src_path = os.path.join(config.SRC_PATH, "images", image_filename)
+        if not os.path.exists(image_src_path):
+            logger.error(
+                f"{RED}Source image not found: {image_src_path} — skipping record{RESET}"
+            )
+            return None
+
         mask_id = record.get("mask_id")
         if not mask_id:
             logger.error(f"{RED}No mask_id found in record{RESET}")
