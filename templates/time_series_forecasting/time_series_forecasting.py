@@ -30,15 +30,13 @@ def main():
         # Schema should contain feature columns only (excluding the target/label column)
         schema = {
             "timestamp": "TIMESTAMP",
-            "eq_count": "INT",
-            "avg_magnitude": "FLOAT",
-            "median_magnitude": "FLOAT",
-            "dayofweek": "INT",
-            "is_weekend": "INT",
-            "dayofyear": "INT",
+            "day_of_week": "INT",
             "month": "INT",
-            "sin_dayofyear": "FLOAT",
-            "cos_dayofyear": "FLOAT",
+            "day_of_month": "INT",
+            "week_of_year": "INT",
+            "is_weekend": "INT",
+            "lag_1": "FLOAT",
+            "moving_avg_7": "FLOAT",
         }
 
         # CSV specific options
@@ -63,7 +61,7 @@ def main():
             category=TaskCategory.TIME_SERIES_FORECASTING,
             csv_options=csv_options,
             file_options={"number_of_columns": len(schema)},
-            label_column="max_magnitude",
+            label_column="value",
             intent=Intent.TRAIN,  # Is the data for training or testing
         )
 

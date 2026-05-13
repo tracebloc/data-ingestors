@@ -7,6 +7,8 @@ for implementing data validation before ingestion.
 from abc import ABC, abstractmethod
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
+from pathlib import Path
+import json
 import logging
 
 from tqdm import tqdm
@@ -115,6 +117,35 @@ class BaseValidator(ABC):
             ncols=100,
             bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]",
         )
+
+    def _load_data(self, data: Any) -> Optional["pd.DataFrame"]:
+        """Load data as a DataFrame from a file path or pass through an existing DataFrame."""
+        import pandas as pd
+
+        try:
+            if isinstance(data, pd.DataFrame):
+                return data
+            elif isinstance(data, (str, Path)):
+                return pd.read_csv(
+                    data, encoding="utf-8", on_bad_lines="warn"
+                )
+            return None
+        except Exception as e:
+            logger.error(f"Error loading data: {str(e)}")
+            return None
+
+    @staticmethod
+    def _parse_json(row: Any, column: str) -> Optional[Any]:
+        """Parse a JSON string from a DataFrame row column. Returns None on failure."""
+        import pandas as pd
+
+        try:
+            value = row[column]
+            if pd.isna(value):
+                return None
+            return json.loads(str(value))
+        except (json.JSONDecodeError, TypeError, KeyError):
+            return None
 
     def __str__(self) -> str:
         """String representation of the validator."""
