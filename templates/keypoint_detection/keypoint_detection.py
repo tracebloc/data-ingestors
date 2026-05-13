@@ -61,6 +61,11 @@ def main():
         database = Database(config)
         api_client = APIClient(config)
 
+        # Visibility is kept in the schema so it survives process_record's
+        # schema-based filtering and is persisted alongside the annotation;
+        # without it the column is validated and then silently dropped.
+        schema = {"Visibility": "TEXT"}
+
         # Create ingestor for keypoint detection data with validators
         ingestor = CSVIngestor(
             database=database,
@@ -68,6 +73,7 @@ def main():
             table_name=config.TABLE_NAME,
             data_format=DataFormat.IMAGE,
             category=TaskCategory.KEYPOINT_DETECTION,
+            schema=schema,
             csv_options=csv_options,
             file_options=file_options,
             label_column="image_label",

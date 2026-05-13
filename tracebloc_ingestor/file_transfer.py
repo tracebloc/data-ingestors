@@ -221,25 +221,21 @@ def _find_mask_src(mask_id: str):
     return None, None, mask_name
 
 
-def mask_transfer(record: Dict[str, Any]) -> Dict[str, Any]:
-    """Transfer mask files for semantic segmentation tasks.
+def mask_transfer(
+    record: Dict[str, Any],
+    mask_src_path: str,
+    mask_ext: str,
+    mask_name: str,
+) -> Dict[str, Any]:
+    """Copy a pre-resolved mask file from SRC_PATH/masks/ to DEST_PATH/.
 
-    Copies mask from SRC_PATH/masks/ to DEST_PATH/.
-    Searches for the mask with common image extensions (.jpg, .jpeg, .png).
+    The caller is responsible for locating the mask via `_find_mask_src` and
+    passing the resolved path; this keeps the filesystem lookup to a single
+    call per record.
     """
     os.makedirs(config.DEST_PATH, exist_ok=True)
 
     try:
-        mask_id = record.get("mask_id")
-        if not mask_id:
-            logger.error(f"{RED}No mask_id found in record{RESET}")
-            return record
-
-        mask_src_path, mask_ext, mask_name = _find_mask_src(mask_id)
-        if mask_src_path is None:
-            logger.error(f"{RED}Source mask not found: {mask_name} in {config.SRC_PATH}/masks/{RESET}")
-            return record
-
         mask_dest_path = os.path.join(config.DEST_PATH, f"{mask_name}{mask_ext}")
         _copy_file_with_retry(mask_src_path, mask_dest_path)
 
@@ -280,14 +276,14 @@ def map_file_transfer(
         if not mask_id:
             logger.error(f"{RED}No mask_id found in record{RESET}")
             return None
-        mask_src_path, _, mask_name = _find_mask_src(mask_id)
+        mask_src_path, mask_ext, mask_name = _find_mask_src(mask_id)
         if mask_src_path is None:
             logger.error(
                 f"{RED}Source mask not found: {mask_name} in {config.SRC_PATH}/masks/ — skipping record{RESET}"
             )
             return None
         record = image_transfer(record, options)
-        record = mask_transfer(record)
+        record = mask_transfer(record, mask_src_path, mask_ext, mask_name)
         return record
     elif task_category == TaskCategory.KEYPOINT_DETECTION:
         result = image_transfer(record, options)
