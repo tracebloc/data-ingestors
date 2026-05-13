@@ -75,19 +75,20 @@ def _has_extension(filename: str) -> bool:
     return False
 
 
-def _find_image_src(filename: str, extension: str):
-    """Resolve the source path for an image in SRC_PATH/images/.
+def _find_src(subdirectory: str, filename: str, extension: str):
+    """Resolve a source file in `SRC_PATH/<subdirectory>/`.
 
     Returns (src_path, filename_with_ext) on success, or
-    (None, filename_with_ext) if the file does not exist. Centralising the
-    path/extension resolution keeps pre-checks (e.g. the atomic
-    SEMANTIC_SEGMENTATION branch in `map_file_transfer`) consistent with
-    what `image_transfer` actually copies.
+    (None, filename_with_ext) if the file does not exist. Centralising
+    the path/extension resolution keeps atomic pre-checks (e.g. the
+    OBJECT_DETECTION and SEMANTIC_SEGMENTATION branches in
+    `map_file_transfer`) consistent with what the corresponding
+    `*_transfer` function actually copies.
     """
     filename_with_ext = (
         filename if _has_extension(filename) else f"{filename}{extension}"
     )
-    candidate = os.path.join(config.SRC_PATH, "images", filename_with_ext)
+    candidate = os.path.join(config.SRC_PATH, subdirectory, filename_with_ext)
     if os.path.exists(candidate):
         return candidate, filename_with_ext
     return None, filename_with_ext
@@ -101,10 +102,10 @@ def image_transfer(
 ) -> Dict[str, Any]:
     """Copy an image from SRC_PATH/images/ to DEST_PATH/.
 
-    Callers that have already resolved the source via `_find_image_src`
-    (e.g. atomic multi-file branches that need to pre-check existence)
-    can pass `src_path` and `filename_with_ext` to skip the lookup; in
-    that mode no filesystem stat happens here.
+    Callers that have already resolved the source via `_find_src` (e.g.
+    atomic multi-file branches that need to pre-check existence) can
+    pass `src_path` and `filename_with_ext` to skip the lookup; in that
+    mode no filesystem stat happens here.
     """
     # Create destination directory if it doesn't exist
     os.makedirs(config.DEST_PATH, exist_ok=True)
@@ -118,7 +119,7 @@ def image_transfer(
             return record
 
         if src_path is None:
-            src_path, filename_with_ext = _find_image_src(filename, extension)
+            src_path, filename_with_ext = _find_src("images", filename, extension)
             if src_path is None:
                 logger.error(
                     f"{RED}Source image not found: {os.path.join(config.SRC_PATH, 'images', filename_with_ext)}{RESET}"
@@ -147,24 +148,6 @@ filename: file_name.png (or any other extension) file_name.xml
 """
 
 
-def _find_annotation_src(filename: str, extension: str):
-    """Resolve the source path for an annotation in SRC_PATH/annotations/.
-
-    Returns (src_path, filename_with_ext) on success, or
-    (None, filename_with_ext) if the file does not exist. Mirrors
-    `_find_image_src` / `_find_mask_src` so atomic pre-checks (e.g.
-    OBJECT_DETECTION) cannot drift from what `annotation_transfer` looks
-    for.
-    """
-    filename_with_ext = (
-        filename if _has_extension(filename) else f"{filename}{extension}"
-    )
-    candidate = os.path.join(config.SRC_PATH, "annotations", filename_with_ext)
-    if os.path.exists(candidate):
-        return candidate, filename_with_ext
-    return None, filename_with_ext
-
-
 def annotation_transfer(
     record: Dict[str, Any],
     options: Dict[str, Any],
@@ -174,9 +157,9 @@ def annotation_transfer(
 ) -> Dict[str, Any]:
     """Copy an annotation file from SRC_PATH/annotations/ to DEST_PATH/.
 
-    Callers that have already resolved the source via
-    `_find_annotation_src` can pass `src_path` and `filename_with_ext`
-    to skip the lookup; in that mode no filesystem stat happens here.
+    Callers that have already resolved the source via `_find_src` can
+    pass `src_path` and `filename_with_ext` to skip the lookup; in that
+    mode no filesystem stat happens here.
     """
     # Create destination directory if it doesn't exist
     os.makedirs(config.DEST_PATH, exist_ok=True)
@@ -189,7 +172,9 @@ def annotation_transfer(
             return record
 
         if src_path is None:
-            src_path, filename_with_ext = _find_annotation_src(filename, extension)
+            src_path, filename_with_ext = _find_src(
+                "annotations", filename, extension
+            )
             if src_path is None:
                 logger.error(
                     f"{RED}Source file not found: {os.path.join(config.SRC_PATH, 'annotations', filename_with_ext)}{RESET}"
@@ -320,16 +305,16 @@ def map_file_transfer(
         if not filename:
             logger.error(f"{RED}No filename found in record{RESET}")
             return None
-        image_src_path, image_filename = _find_image_src(
-            filename, options.get("extension")
+        image_src_path, image_filename = _find_src(
+            "images", filename, options.get("extension")
         )
         if image_src_path is None:
             logger.error(
                 f"{RED}Source image not found: {os.path.join(config.SRC_PATH, 'images', image_filename)} — skipping record{RESET}"
             )
             return None
-        annotation_src_path, annotation_filename = _find_annotation_src(
-            filename, ".xml"
+        annotation_src_path, annotation_filename = _find_src(
+            "annotations", filename, ".xml"
         )
         if annotation_src_path is None:
             logger.error(
@@ -349,15 +334,15 @@ def map_file_transfer(
         # before either copy, since image_transfer returns the record (not
         # None) when the source image is missing — without this pre-check
         # a missing image would still let mask_transfer leave an orphan
-        # mask on disk. Both sides resolve their source via shared helpers
-        # (_find_image_src / _find_mask_src) so the pre-check stays in
-        # lockstep with what the copy functions actually look for.
+        # mask on disk. Both sides resolve their source via shared
+        # helpers (`_find_src` / `_find_mask_src`) so the pre-check stays
+        # in lockstep with what the copy functions actually look for.
         filename = record.get("filename")
         if not filename:
             logger.error(f"{RED}No filename found in record{RESET}")
             return None
-        image_src_path, image_filename = _find_image_src(
-            filename, options.get("extension")
+        image_src_path, image_filename = _find_src(
+            "images", filename, options.get("extension")
         )
         if image_src_path is None:
             logger.error(
