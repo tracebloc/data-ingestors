@@ -93,7 +93,19 @@ def _find_image_src(filename: str, extension: str):
     return None, filename_with_ext
 
 
-def image_transfer(record: Dict[str, Any], options: Dict[str, Any]) -> Dict[str, Any]:
+def image_transfer(
+    record: Dict[str, Any],
+    options: Dict[str, Any],
+    src_path: str = None,
+    filename_with_ext: str = None,
+) -> Dict[str, Any]:
+    """Copy an image from SRC_PATH/images/ to DEST_PATH/.
+
+    Callers that have already resolved the source via `_find_image_src`
+    (e.g. atomic multi-file branches that need to pre-check existence)
+    can pass `src_path` and `filename_with_ext` to skip the lookup; in
+    that mode no filesystem stat happens here.
+    """
     # Create destination directory if it doesn't exist
     os.makedirs(config.DEST_PATH, exist_ok=True)
 
@@ -105,17 +117,18 @@ def image_transfer(record: Dict[str, Any], options: Dict[str, Any]) -> Dict[str,
             logger.error(f"{RED}No filename found in record{RESET}")
             return record
 
-        image_src_path, filename_with_ext = _find_image_src(filename, extension)
-        if image_src_path is None:
-            logger.error(
-                f"{RED}Source image not found: {os.path.join(config.SRC_PATH, 'images', filename_with_ext)}{RESET}"
-            )
-            return record
+        if src_path is None:
+            src_path, filename_with_ext = _find_image_src(filename, extension)
+            if src_path is None:
+                logger.error(
+                    f"{RED}Source image not found: {os.path.join(config.SRC_PATH, 'images', filename_with_ext)}{RESET}"
+                )
+                return record
 
         # Save the resized image
         image_dest_path = os.path.join(config.DEST_PATH, filename_with_ext)
         # Copy file with retry logic
-        _copy_file_with_retry(image_src_path, image_dest_path)
+        _copy_file_with_retry(src_path, image_dest_path)
 
         record["filename"] = os.path.splitext(filename_with_ext)[0]
         record["extension"] = extension
@@ -134,36 +147,59 @@ filename: file_name.png (or any other extension) file_name.xml
 """
 
 
+def _find_annotation_src(filename: str, extension: str):
+    """Resolve the source path for an annotation in SRC_PATH/annotations/.
+
+    Returns (src_path, filename_with_ext) on success, or
+    (None, filename_with_ext) if the file does not exist. Mirrors
+    `_find_image_src` / `_find_mask_src` so atomic pre-checks (e.g.
+    OBJECT_DETECTION) cannot drift from what `annotation_transfer` looks
+    for.
+    """
+    filename_with_ext = (
+        filename if _has_extension(filename) else f"{filename}{extension}"
+    )
+    candidate = os.path.join(config.SRC_PATH, "annotations", filename_with_ext)
+    if os.path.exists(candidate):
+        return candidate, filename_with_ext
+    return None, filename_with_ext
+
+
 def annotation_transfer(
-    record: Dict[str, Any], options: Dict[str, Any], extension: str
+    record: Dict[str, Any],
+    options: Dict[str, Any],
+    extension: str,
+    src_path: str = None,
+    filename_with_ext: str = None,
 ) -> Dict[str, Any]:
+    """Copy an annotation file from SRC_PATH/annotations/ to DEST_PATH/.
+
+    Callers that have already resolved the source via
+    `_find_annotation_src` can pass `src_path` and `filename_with_ext`
+    to skip the lookup; in that mode no filesystem stat happens here.
+    """
     # Create destination directory if it doesn't exist
     os.makedirs(config.DEST_PATH, exist_ok=True)
 
     try:
         # Get the filename from the record
         filename = record.get("filename")
-        extension = extension
         if not filename:
             logger.error(f"{RED}No filename found in record{RESET}")
             return record
 
-        # Add extension to filename if it doesn't have one
-        if not _has_extension(filename):
-            filename_with_ext = f"{filename}{extension}"
-        else:
-            filename_with_ext = filename
-
-        # Process the image
-        file_src_path = os.path.join(config.SRC_PATH, "annotations", filename_with_ext)
-        if not os.path.exists(file_src_path):
-            logger.error(f"{RED}Source file not found: {file_src_path}{RESET}")
-            return record
+        if src_path is None:
+            src_path, filename_with_ext = _find_annotation_src(filename, extension)
+            if src_path is None:
+                logger.error(
+                    f"{RED}Source file not found: {os.path.join(config.SRC_PATH, 'annotations', filename_with_ext)}{RESET}"
+                )
+                return record
 
         # Save the file
         file_dest_path = os.path.join(config.DEST_PATH, filename_with_ext)
         # Copy file with retry logic
-        _copy_file_with_retry(file_src_path, file_dest_path)
+        _copy_file_with_retry(src_path, file_dest_path)
 
         logger.info(f"{GREEN}Successfully copied file: {filename}{RESET}")
         return record
@@ -276,8 +312,34 @@ def map_file_transfer(
         result = image_transfer(record, options)
         return result
     elif task_category == TaskCategory.OBJECT_DETECTION:
-        record = image_transfer(record, options)
-        result = annotation_transfer(record, options, ".xml")
+        # Atomic: only copy image+annotation together. Pre-verify both
+        # sources so a missing image (image_transfer returns the record,
+        # not None, on missing source) doesn't let annotation_transfer
+        # leave an orphan annotation on disk — and vice versa.
+        filename = record.get("filename")
+        if not filename:
+            logger.error(f"{RED}No filename found in record{RESET}")
+            return None
+        image_src_path, image_filename = _find_image_src(
+            filename, options.get("extension")
+        )
+        if image_src_path is None:
+            logger.error(
+                f"{RED}Source image not found: {os.path.join(config.SRC_PATH, 'images', image_filename)} — skipping record{RESET}"
+            )
+            return None
+        annotation_src_path, annotation_filename = _find_annotation_src(
+            filename, ".xml"
+        )
+        if annotation_src_path is None:
+            logger.error(
+                f"{RED}Source annotation not found: {os.path.join(config.SRC_PATH, 'annotations', annotation_filename)} — skipping record{RESET}"
+            )
+            return None
+        record = image_transfer(record, options, image_src_path, image_filename)
+        result = annotation_transfer(
+            record, options, ".xml", annotation_src_path, annotation_filename
+        )
         return result
     elif task_category == TaskCategory.TEXT_CLASSIFICATION:
         result = text_transfer(record, options)
@@ -313,7 +375,7 @@ def map_file_transfer(
                 f"{RED}Source mask not found: {mask_name} in {config.SRC_PATH}/masks/ — skipping record{RESET}"
             )
             return None
-        record = image_transfer(record, options)
+        record = image_transfer(record, options, image_src_path, image_filename)
         record = mask_transfer(record, mask_src_path, mask_ext, mask_name)
         return record
     elif task_category == TaskCategory.KEYPOINT_DETECTION:
