@@ -35,10 +35,10 @@ class Config:
     # jobs-manager-deployment.yaml does (per tracebloc/client#118-120 and
     # tracebloc/client-runtime#33). Saves the chart from remapping a name the rest of
     # the cluster uses with a different one. An empty value falls back to CLIENT_ENV.
-    EDGE_ENV: str = os.getenv("CLIENT_ENV", "prod")
+    CLIENT_ENV: str = os.getenv("CLIENT_ENV", "prod")
     API_ENDPOINT: str = (
         os.getenv("REQUESTS_PROXY_URL")
-        or API_ENDPOINTS.get(EDGE_ENV, API_ENDPOINTS["dev"])
+        or API_ENDPOINTS.get(CLIENT_ENV, API_ENDPOINTS["dev"])
     )
 
     # ===== Auth =====
@@ -92,7 +92,7 @@ class Config:
             ValueError: with a single, comma-joined list of missing vars,
                 including a hint about ``CLIENT_ENV=local``.
         """
-        if self.EDGE_ENV == "local":
+        if self.CLIENT_ENV == "local":
             return
 
         missing = []

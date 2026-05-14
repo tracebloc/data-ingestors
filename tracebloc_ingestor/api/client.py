@@ -34,7 +34,7 @@ class LoggingRetry(Retry):
 class APIClient:
     def __init__(self, config: Config):
         # Fail fast on missing creds before any network or session setup.
-        # `validate()` is a no-op when EDGE_ENV == "local".
+        # `validate()` is a no-op when CLIENT_ENV == "local".
         config.validate()
 
         self.config = config
@@ -46,7 +46,7 @@ class APIClient:
         #      training-pod pattern via jobs-manager)
         #   3. CLIENT_ID + CLIENT_PASSWORD → fall back to /api-token-auth/
         #      (deprecated; kept for one minor version while callers migrate)
-        if config.EDGE_ENV == "local":
+        if config.CLIENT_ENV == "local":
             self.token = "mock_token"
             logger.info("Skipping API authentication for local mode")
         elif config.BACKEND_TOKEN:
@@ -122,7 +122,7 @@ class APIClient:
             bool: True if successful, False otherwise
         """
         # Skip API calls in local mode
-        if self.config.EDGE_ENV == "local":
+        if self.config.CLIENT_ENV == "local":
             logger.info(f"Mock: Would send {len(records)} records to API")
             return True
 
@@ -182,7 +182,7 @@ class APIClient:
             bool: True if successful, False otherwise
         """
         # Skip API calls in local mode
-        if self.config.EDGE_ENV == "local":
+        if self.config.CLIENT_ENV == "local":
             logger.info(f"Mock: Would send schema for {table_name}")
             return True
 
@@ -240,7 +240,7 @@ class APIClient:
             bool: True if successful, False otherwise
         """
         # Skip API calls in local mode
-        if self.config.EDGE_ENV == "local":
+        if self.config.CLIENT_ENV == "local":
             logger.info(f"Mock: Would generate edge labels for {table_name}")
             return True
 
@@ -286,7 +286,7 @@ class APIClient:
             bool: True if successful, False otherwise
         """
         # Skip API calls in local mode
-        if self.config.EDGE_ENV == "local":
+        if self.config.CLIENT_ENV == "local":
             logger.info(f"Mock: Would prepare dataset {category}")
             return True
 
@@ -343,7 +343,7 @@ class APIClient:
             requests.exceptions.RequestException: If the API request fails
         """
         # Skip API calls in local mode
-        if self.config.EDGE_ENV == "local":
+        if self.config.CLIENT_ENV == "local":
             logger.info(f"Mock: Would create dataset {category}")
             return {"id": "mock_dataset_id", "title": "Mock Dataset"}
 

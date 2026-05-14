@@ -39,7 +39,7 @@ def _make_config(**overrides) -> Config:
         BACKEND_TOKEN="test-token-abc",
         CLIENT_USERNAME=None,
         CLIENT_PASSWORD=None,
-        EDGE_ENV="prod",
+        CLIENT_ENV="prod",
     )
     defaults.update(overrides)
     return Config(**defaults)
@@ -164,7 +164,7 @@ class TestLocalModeBypassesValidation:
     def test_local_mode_skips_validation(self):
         # No backend auth — validate() must still pass under local mode.
         config = _make_config(
-            EDGE_ENV="local",
+            CLIENT_ENV="local",
             BACKEND_TOKEN=None,
             CLIENT_USERNAME=None,
             CLIENT_PASSWORD=None,
@@ -175,7 +175,7 @@ class TestLocalModeBypassesValidation:
 
     def test_local_mode_uses_mock_token(self):
         config = _make_config(
-            EDGE_ENV="local",
+            CLIENT_ENV="local",
             BACKEND_TOKEN=None,
             CLIENT_USERNAME=None,
             CLIENT_PASSWORD=None,
