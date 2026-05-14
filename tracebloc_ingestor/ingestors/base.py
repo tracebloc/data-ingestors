@@ -143,10 +143,6 @@ class BaseIngestor(ABC):
                 f"server-side UUIDs instead.{RESET}"
             )
         
-        # Add schema to file_options for validators if not already present
-        if schema and "schema" not in self.file_options:
-            self.file_options["schema"] = schema
-
         # Remove label_column, annotation_column, and unique_id_column from schema
         # These are handled separately and should not be ingested as regular columns
         table_schema = schema.copy()
@@ -156,6 +152,15 @@ class BaseIngestor(ABC):
             del table_schema[self.annotation_column]
         if self.unique_id_column and self.unique_id_column in table_schema:
             del table_schema[self.unique_id_column]
+
+        # Add cleaned schema to file_options for validators / downstream metadata.
+        # Always overwrite so a schema passed in by the template (which may still
+        # contain the label/annotation/unique_id columns) is sanitized before
+        # being sent to the backend as part of meta_data.
+        if schema:
+            self.file_options["schema"] = table_schema
+            if "number_of_columns" in self.file_options:
+                self.file_options["number_of_columns"] = len(table_schema)
 
         # Ensure table exists
         self.table = self.database.create_table(table_name, table_schema)
