@@ -1,0 +1,18 @@
+# Time-series forecasting: regression-class task, so `label.policy` is REQUIRED.
+# `schema:` must include a `timestamp` column (any case) — the framework
+# detects it via TimeFormatValidator and uses it for ordering.
+apiVersion: tracebloc.io/v1
+kind: IngestConfig
+table: energy_demand_train
+intent: train
+category: time_series_forecasting
+csv: /data/demand.csv
+schema:
+  timestamp: VARCHAR(64)
+  region: VARCHAR(32)
+  temperature_c: FLOAT
+  is_holiday: INT
+  demand_mw: FLOAT
+label:
+  column: demand_mw
+  policy: bucket

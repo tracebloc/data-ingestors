@@ -1,0 +1,19 @@
+# Time-to-event (survival) prediction: regression-class task, so `label.policy`
+# is REQUIRED. `time_column` names the column TimeToEventValidator treats as
+# the event-time field; falls back to `time` if unset.
+apiVersion: tracebloc.io/v1
+kind: IngestConfig
+table: customer_churn_survival_train
+intent: train
+category: time_to_event_prediction
+csv: /data/survival.csv
+time_column: tenure_days
+schema:
+  customer_id: VARCHAR(64)
+  tenure_days: INT
+  plan_tier: VARCHAR(32)
+  monthly_spend: FLOAT
+  churned: INT
+label:
+  column: churned
+  policy: bucket

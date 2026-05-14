@@ -22,8 +22,18 @@ setup(
     packages=find_packages(),
     package_data={
         "": ["Readme.md"],
+        "tracebloc_ingestor.schema": ["*.json"],
     },
     include_package_data=True,
+    entry_points={
+        # Registered as the official image's entrypoint (Ticket #45). The Helm
+        # subchart (Ticket client#86) sets INGEST_CONFIG to the path of the
+        # mounted ingest.yaml; this console script reads it, validates against
+        # schema/ingest.v1.json, and dispatches to the right ingestor.
+        "console_scripts": [
+            "tracebloc-ingest = tracebloc_ingestor.cli.run:main",
+        ],
+    },
     classifiers=[
         "Programming Language :: Python :: 3",
         "License :: OSI Approved :: Apache Software License",
