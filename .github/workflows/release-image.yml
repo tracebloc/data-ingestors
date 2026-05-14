@@ -95,11 +95,20 @@ jobs:
         # of bug above: if anyone refactors `tags:` and accidentally breaks
         # the value source, we fail loudly here instead of letting the build
         # succeed with nothing pushed.
+        #
+        # REF goes through the env: block, not inline `${{ … }}` in the run
+        # script. inputs.ref is user-controllable on workflow_dispatch, and
+        # inline interpolation would let a crafted value (e.g.
+        # `$(malicious command)`) execute inside the double-quoted echo.
+        # env-block values are passed via the environment and read by the
+        # shell at runtime — no substitution risk. Matches the pattern the
+        # release-notes step below uses for TAG / IMAGE / DIGEST / TAGS.
         env:
           TAGS: ${{ steps.meta.outputs.tags }}
+          REF: ${{ inputs.ref || github.ref_name }}
         run: |
           if [ -z "${TAGS//[[:space:]]/}" ]; then
-            echo "::error::docker/metadata-action produced no tags for ref '${{ inputs.ref || github.ref_name }}'. Aborting before the build silently pushes nothing." >&2
+            echo "::error::docker/metadata-action produced no tags for ref '${REF}'. Aborting before the build silently pushes nothing." >&2
             exit 1
           fi
           echo "Tags to publish:"
