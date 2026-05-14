@@ -28,9 +28,18 @@ class Config:
     }
     STORAGE_PATH = "/data/shared"
 
-    # Get environment and set appropriate API endpoint, default to prod
+    # Get environment and set appropriate API endpoint, default to prod.
+    # REQUESTS_PROXY_URL — when set, takes precedence over the CLIENT_ENV → API_ENDPOINTS
+    # mapping. Set inside the cluster by the Helm subchart (tracebloc/client#86) so the
+    # ingestor routes backend traffic through requests-proxy-service:8888 the same way
+    # jobs-manager-deployment.yaml does (per tracebloc/client#118-120 and
+    # tracebloc/client-runtime#33). Saves the chart from remapping a name the rest of
+    # the cluster uses with a different one. An empty value falls back to CLIENT_ENV.
     EDGE_ENV: str = os.getenv("CLIENT_ENV", "prod")
-    API_ENDPOINT: str = API_ENDPOINTS.get(EDGE_ENV, API_ENDPOINTS["dev"])
+    API_ENDPOINT: str = (
+        os.getenv("REQUESTS_PROXY_URL")
+        or API_ENDPOINTS.get(EDGE_ENV, API_ENDPOINTS["dev"])
+    )
 
     # ===== Auth =====
     # Preferred: pre-minted token from upstream (e.g. jobs-manager), passed via env.
