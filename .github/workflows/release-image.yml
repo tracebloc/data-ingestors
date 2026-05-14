@@ -68,10 +68,19 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           # Tag strategy: semver only. No :latest — downstream must pick a
           # specific major or minor and accept the upgrade window explicitly.
+          #
+          # The explicit `value=` is load-bearing for workflow_dispatch: by
+          # default docker/metadata-action reads github.ref, which on a
+          # workflow_dispatch event points at the *default branch* rather
+          # than the tag the user typed into `inputs.ref`. Without `value=`,
+          # the semver patterns produce zero tags, the build silently pushes
+          # nothing, and the cosign loop signs nothing. Pinning to
+          # `inputs.ref || github.ref_name` makes both trigger paths produce
+          # the same three tags from the same semver source.
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
+            type=semver,pattern={{version}},value=${{ inputs.ref || github.ref_name }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ inputs.ref || github.ref_name }}
+            type=semver,pattern={{major}},value=${{ inputs.ref || github.ref_name }}
           flavor: |
             latest=false
           labels: |
@@ -80,6 +89,21 @@ jobs:
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.licenses=Apache-2.0
             org.opencontainers.image.vendor=tracebloc
+
+      - name: Verify tags were produced
+        # Defense-in-depth against the workflow_dispatch / github.ref class
+        # of bug above: if anyone refactors `tags:` and accidentally breaks
+        # the value source, we fail loudly here instead of letting the build
+        # succeed with nothing pushed.
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          if [ -z "${TAGS//[[:space:]]/}" ]; then
+            echo "::error::docker/metadata-action produced no tags for ref '${{ inputs.ref || github.ref_name }}'. Aborting before the build silently pushes nothing." >&2
+            exit 1
+          fi
+          echo "Tags to publish:"
+          printf '  %s\n' "$TAGS"
 
       - name: Build and push image
         id: build
