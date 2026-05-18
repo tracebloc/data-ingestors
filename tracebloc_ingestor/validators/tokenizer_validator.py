@@ -132,10 +132,16 @@ class TokenizerValidator(BaseValidator):
         tokens = set()
 
         # model.vocab — the main vocabulary mapping
+        # WordLevel/WordPiece/BPE store vocab as {token: id} dict.
+        # Unigram stores vocab as [[token, score], ...] list.
         model = tokenizer_data.get("model", {})
         vocab = model.get("vocab")
         if isinstance(vocab, dict):
             tokens.update(vocab.keys())
+        elif isinstance(vocab, list):
+            for entry in vocab:
+                if isinstance(entry, (list, tuple)) and len(entry) >= 1:
+                    tokens.add(str(entry[0]))
 
         # added_tokens — special tokens registered separately
         added_tokens = tokenizer_data.get("added_tokens", [])
