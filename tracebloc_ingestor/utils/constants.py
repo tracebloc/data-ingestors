@@ -45,6 +45,7 @@ class TaskCategory:
     TIME_TO_EVENT_PREDICTION = "time_to_event_prediction"
     SEMANTIC_SEGMENTATION = "semantic_segmentation"
     INSTANCE_SEGMENTATION = "instance_segmentation"
+    MASKED_LANGUAGE_MODELING = "masked_language_modeling"
 
     @classmethod
     def get_all_categories(cls) -> list[str]:
@@ -65,6 +66,7 @@ class TaskCategory:
             cls.TIME_TO_EVENT_PREDICTION,
             cls.SEMANTIC_SEGMENTATION,
             cls.INSTANCE_SEGMENTATION,
+            cls.MASKED_LANGUAGE_MODELING,
         ]
 
     @classmethod

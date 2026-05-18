@@ -138,5 +138,24 @@ def map_validators(
             DuplicateValidator(),
         ]
         return validators
+    elif task_category == TaskCategory.MASKED_LANGUAGE_MODELING:
+        validators = []
+
+        # Validate text file extensions
+        validators.append(
+            FileTypeValidator(
+                allowed_extension=options.get("extension", FileExtension.TXT),
+                path="sequences",
+            ),
+        )
+
+        # Add data validator if schema is provided
+        if options.get("schema"):
+            validators.append(DataValidator(schema=options["schema"]))
+
+        validators.append(TableNameValidator())
+        validators.append(DuplicateValidator())
+
+        return validators
     else:
         return []

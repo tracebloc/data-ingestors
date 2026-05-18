@@ -1,0 +1,1 @@
+BRCA1 ppi RAD51 expression_present Breast_tissue interacts_with ESR1
