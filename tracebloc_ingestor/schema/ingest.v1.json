@@ -35,7 +35,8 @@
         "tabular_classification",
         "tabular_regression",
         "time_series_forecasting",
-        "time_to_event_prediction"
+        "time_to_event_prediction",
+        "masked_language_modeling"
       ],
       "description": "Task category. Drives convention defaults: validators, data_format, default columns, default file extensions, default validator set."
     },
@@ -86,6 +87,12 @@
       "type": "string",
       "minLength": 1,
       "description": "Directory holding text files referenced by the labels CSV. Required for text_classification."
+    },
+
+    "sequences": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Directory holding sequence text files (.txt). Required for masked_language_modeling."
     },
 
     "label": {
@@ -299,6 +306,14 @@
         "required": ["category"]
       },
       "then": { "required": ["texts"] }
+    },
+    {
+      "description": "masked_language_modeling requires `sequences`.",
+      "if": {
+        "properties": { "category": { "const": "masked_language_modeling" } },
+        "required": ["category"]
+      },
+      "then": { "required": ["sequences"] }
     },
     {
       "description": "tabular and time-series categories require `schema`.",
