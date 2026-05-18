@@ -13,6 +13,7 @@ from tracebloc_ingestor.validators.time_before_today_validator import TimeBefore
 from tracebloc_ingestor.validators.numeric_columns_validator import NumericColumnsValidator
 from tracebloc_ingestor.validators.keypoint_annotation_validator import KeypointAnnotationValidator
 from tracebloc_ingestor.validators.keypoint_visibility_validator import KeypointVisibilityValidator
+from tracebloc_ingestor.validators.tokenizer_validator import TokenizerValidator
 from tracebloc_ingestor.utils.constants import TaskCategory, FileExtension
 
 
@@ -148,6 +149,9 @@ def map_validators(
                 path="sequences",
             ),
         )
+
+        # Validate tokenizer.json has required special tokens ([MASK], [PAD])
+        validators.append(TokenizerValidator())
 
         # Add data validator if schema is provided
         if options.get("schema"):
