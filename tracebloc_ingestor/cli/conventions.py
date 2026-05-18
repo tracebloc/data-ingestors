@@ -60,6 +60,10 @@ TIME_TO_EVENT_CATEGORIES: FrozenSet[str] = frozenset({
     TaskCategory.TIME_TO_EVENT_PREDICTION,
 })
 
+MLM_CATEGORIES: FrozenSet[str] = frozenset({
+    TaskCategory.MASKED_LANGUAGE_MODELING,
+})
+
 # Categories where the label is a numeric prediction target rather than
 # class metadata. The schema requires `label.policy` for these so the raw
 # value never ships to the central backend by default.
@@ -105,6 +109,10 @@ DEFAULT_TEXT_FILE_OPTIONS: Dict[str, Any] = {
     "extension": ".txt",
 }
 
+DEFAULT_MLM_FILE_OPTIONS: Dict[str, Any] = {
+    "extension": ".txt",
+}
+
 
 # ---------------------------------------------------------------------------
 # Resolved configuration — what the entrypoint actually consumes.
@@ -137,6 +145,7 @@ class ResolvedConfig:
     annotations: Optional[str] = None
     masks: Optional[str] = None
     texts: Optional[str] = None
+    sequences: Optional[str] = None
 
     # ----- Tabular / time-series -----
     schema: Dict[str, str] = field(default_factory=dict)
@@ -203,7 +212,7 @@ def resolve(config: Dict[str, Any]) -> ResolvedConfig:
     # 2. Sidecar directories — set whatever the customer specified; the
     #    schema's conditional `if/then` already enforced that the right ones
     #    are present for each category.
-    for key in ("images", "annotations", "masks", "texts"):
+    for key in ("images", "annotations", "masks", "texts", "sequences"):
         if key in config:
             setattr(resolved, key, config[key])
 
@@ -287,6 +296,8 @@ def _data_format_for(category: str) -> str:
         or category in TIME_TO_EVENT_CATEGORIES
     ):
         return DataFormat.TABULAR
+    if category in MLM_CATEGORIES:
+        return DataFormat.TEXT
     raise ValueError(
         f"Unknown category {category!r}; cannot derive data_format. "
         "If this is a new category, add it to the relevant CATEGORY set "
@@ -306,6 +317,8 @@ def _default_file_options_for(category: str) -> Dict[str, Any]:
         return dict(DEFAULT_IMAGE_FILE_OPTIONS_BY_CATEGORY[category])
     if category in TEXT_CATEGORIES:
         return dict(DEFAULT_TEXT_FILE_OPTIONS)
+    if category in MLM_CATEGORIES:
+        return dict(DEFAULT_MLM_FILE_OPTIONS)
     # Tabular / time-series categories don't carry file_options.
     return {}
 
@@ -322,4 +335,6 @@ __all__ = [
     "DEFAULT_CSV_OPTIONS",
     "DEFAULT_IMAGE_FILE_OPTIONS_BY_CATEGORY",
     "DEFAULT_TEXT_FILE_OPTIONS",
+    "MLM_CATEGORIES",
+    "DEFAULT_MLM_FILE_OPTIONS",
 ]

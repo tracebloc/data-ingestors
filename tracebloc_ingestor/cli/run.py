@@ -217,7 +217,8 @@ def _set_legacy_env_vars(resolved: ResolvedConfig) -> None:
     """
     src_path = None
     src_path_source = (
-        resolved.images or resolved.texts or resolved.masks or resolved.annotations
+        resolved.images or resolved.texts or resolved.masks
+        or resolved.annotations or resolved.sequences
     )
     if src_path_source:
         src_path = os.path.dirname(src_path_source.rstrip("/"))
