@@ -63,14 +63,28 @@ def _copy_file_with_retry(src_path: str, dest_path: str) -> None:
 
 
 def _has_extension(filename: str) -> bool:
-    """Check if filename has an extension, handling multiple dots correctly."""
+    """Check if filename has an extension, handling multiple dots correctly.
+
+    ``FileExtension.get_all_extensions()`` returns values WITH the leading
+    dot (``".jpeg"`` etc.), but ``str.split(".")`` on a filename like
+    ``"cat1.jpeg"`` yields ``["cat1", "jpeg"]`` — the last part has no
+    leading dot. Without normalization, the membership check always
+    returned False, ``_find_src`` then appended the extension a second
+    time, and the resulting ``cat1.jpeg.jpeg`` path never existed on
+    disk. Surfaced during real-cluster ingestion (2026-05-19): all 576
+    sample records were ``Source image not found: ...jpeg.jpeg`` while
+    the ingestion summary still reported 100% success (which the
+    summary fix #99/#100 now addresses separately).
+    """
     if not filename:
         return False
 
     allowed_extensions = FileExtension.get_all_extensions()
-    parts = filename.split(".")
+    parts = filename.rsplit(".", 1)
     if len(parts) > 1:
-        ext = parts[len(parts) - 1]
+        # Compare with leading dot + case-insensitive so ``Cat1.JPEG``
+        # also resolves to a hit.
+        ext = "." + parts[-1].lower()
         return ext in allowed_extensions
     return False
 
