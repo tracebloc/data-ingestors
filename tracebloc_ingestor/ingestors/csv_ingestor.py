@@ -89,7 +89,6 @@ class CSVIngestor(BaseIngestor):
             label_policy=label_policy,
         )
         self.csv_options = csv_options or {}
-        self.file_options = file_options or {}
 
     def _validate_csv(self, df: pd.DataFrame) -> None:
         """Validate CSV data against schema using pandas functionality.
