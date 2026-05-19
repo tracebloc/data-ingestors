@@ -193,12 +193,19 @@ def annotation_transfer(
         raise ValueError(f"{RED}Error processing binary file: {str(e)}{RESET}")
 
 
-def text_transfer(record: Dict[str, Any], options: Dict[str, Any]) -> Dict[str, Any]:
-    """Transfer text files for text classification tasks.
+def text_transfer(
+    record: Dict[str, Any],
+    options: Dict[str, Any],
+    src_subdir: str = "texts",
+) -> Dict[str, Any]:
+    """Transfer text files for text-based tasks.
 
     Args:
         record: Dictionary containing filename and other record data
         options: Dictionary containing transfer options like extension
+        src_subdir: Subdirectory under SRC_PATH where source files live
+                    (``"texts"`` for text classification,
+                     ``"sequences"`` for masked language modeling)
 
     Returns:
         Updated record dictionary
@@ -221,7 +228,7 @@ def text_transfer(record: Dict[str, Any], options: Dict[str, Any]) -> Dict[str, 
             filename_with_ext = filename
 
         # Process the text file
-        text_src_path = os.path.join(config.SRC_PATH, "texts", filename_with_ext)
+        text_src_path = os.path.join(config.SRC_PATH, src_subdir, filename_with_ext)
         if not os.path.exists(text_src_path):
             logger.error(f"{RED}Source text file not found: {text_src_path}{RESET}")
             return record
@@ -328,6 +335,9 @@ def map_file_transfer(
         return result
     elif task_category == TaskCategory.TEXT_CLASSIFICATION:
         result = text_transfer(record, options)
+        return result
+    elif task_category == TaskCategory.MASKED_LANGUAGE_MODELING:
+        result = text_transfer(record, options, src_subdir="sequences")
         return result
     elif task_category == TaskCategory.SEMANTIC_SEGMENTATION:
         # Atomic: only copy image+mask together. Pre-verify both sources
