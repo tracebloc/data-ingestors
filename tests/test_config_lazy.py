@@ -102,6 +102,26 @@ def test_unknown_override_kwarg_raises(clean_env):
     assert "NOT_A_REAL_FIELD" in str(exc.value)
 
 
+@pytest.mark.parametrize("field", ["DB_PORT", "BATCH_SIZE"])
+def test_numeric_override_rejects_none_at_construction(clean_env, field):
+    """``None`` is a valid suppression for nullable fields (BACKEND_TOKEN
+    etc.) but is nonsensical for numeric ones whose properties do
+    ``int(...)``. The constructor must reject this with a helpful message
+    rather than deferring to a ``TypeError: int() argument must be a
+    string ...`` on first property access."""
+    with pytest.raises(TypeError) as exc:
+        Config(**{field: None})
+    msg = str(exc.value)
+    assert field in msg
+    assert "None" in msg
+
+
+@pytest.mark.parametrize("field,value", [("DB_PORT", 3307), ("BATCH_SIZE", "8000")])
+def test_numeric_override_accepts_ints_and_str_ints(clean_env, field, value):
+    config = Config(**{field: value})
+    assert getattr(config, field) == int(value)
+
+
 def test_laptop_path_defaults_are_gone(clean_env):
     """The pre-refactor defaults pointed at ``~/Downloads/data-ingestors/...``,
     which silently scanned a developer laptop dir on customer clusters."""

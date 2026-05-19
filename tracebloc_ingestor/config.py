@@ -44,12 +44,25 @@ class Config:
         "LOG_LEVEL",
     })
 
+    # Numeric fields whose properties unconditionally coerce via ``int(...)``.
+    # ``Config(FIELD=None)`` works for nullable fields (BACKEND_TOKEN etc.)
+    # but is nonsensical here — reject at construction with a clear message
+    # rather than letting ``int(None)`` blow up later at property access.
+    _NUMERIC_FIELDS = frozenset({"DB_PORT", "BATCH_SIZE"})
+
     def __init__(self, **overrides: Any) -> None:
         unknown = set(overrides) - self._ENV_FIELDS
         if unknown:
             raise TypeError(
                 f"Config got unexpected keyword arguments: {sorted(unknown)}"
             )
+        for field in self._NUMERIC_FIELDS & set(overrides):
+            if overrides[field] is None:
+                raise TypeError(
+                    f"Config({field}=None) is invalid: {field} is numeric "
+                    "and cannot be suppressed via None. Omit the kwarg to "
+                    "fall back to env / default."
+                )
         self._overrides: Dict[str, Any] = dict(overrides)
 
     def _override(self, name: str, default: Any = _MISSING) -> Any:
