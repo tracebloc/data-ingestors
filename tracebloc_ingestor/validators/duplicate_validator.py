@@ -62,9 +62,21 @@ class DuplicateValidator(BaseValidator):
             metadata["directory_exists"] = directory_exists
 
             if directory_exists:
-                errors.append(
-                    f"Destination directory '{self.dest_path}' already exists"
-                )
+                # An empty directory typically means a previous ingestion
+                # attempt aborted before any data landed. Reusing it is
+                # safe and lets customers rerun without manual PVC cleanup.
+                # A populated directory is treated as a real collision.
+                is_empty = self._is_directory_empty()
+                metadata["directory_empty"] = is_empty
+                if is_empty:
+                    warnings.append(
+                        f"Destination directory '{self.dest_path}' exists but "
+                        "is empty (likely from a previous failed run); reusing."
+                    )
+                else:
+                    errors.append(
+                        f"Destination directory '{self.dest_path}' already exists"
+                    )
 
             # Check if parent directory exists (for creating the destination)
             parent_dir = Path(self.dest_path).parent
@@ -101,6 +113,18 @@ class DuplicateValidator(BaseValidator):
             return dest_path.exists() and dest_path.is_dir()
         except Exception as e:
             logger.error(f"Error checking directory existence: {str(e)}")
+            return False
+
+    def _is_directory_empty(self) -> bool:
+        """Return True iff dest_path is an empty directory.
+
+        Returns False on any error so the validator falls back to the
+        existing "fail loudly" behavior rather than masking a real issue.
+        """
+        try:
+            return not any(Path(self.dest_path).iterdir())
+        except Exception as e:
+            logger.error(f"Error checking if directory is empty: {str(e)}")
             return False
 
     def _create_directory_if_needed(self) -> bool:
