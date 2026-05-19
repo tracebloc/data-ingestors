@@ -400,6 +400,7 @@ class BaseIngestor(ABC):
                                 TaskCategory.TEXT_CLASSIFICATION,
                                 TaskCategory.SEMANTIC_SEGMENTATION,
                                 TaskCategory.KEYPOINT_DETECTION,
+                                TaskCategory.MASKED_LANGUAGE_MODELING,
                             ]:
                                 processed_record = map_file_transfer(
                                     self.category, processed_record, self.file_options
