@@ -1,3 +1,10 @@
 include Readme.md
 include requirements.txt
-include LICENSE 
+include LICENSE
+# Bundle the v1 ingest schema with the sdist. The wheel picks it up via
+# setup.py's package_data once schema/__init__.py exists, but sdists go
+# through MANIFEST.in — without this line a source distribution would
+# be missing the schema and any consumer building from sdist (some
+# air-gapped pip installs do this) would hit the same FileNotFoundError
+# the wheel bug surfaced in cluster testing.
+recursive-include tracebloc_ingestor/schema *.json
