@@ -7,7 +7,7 @@ supporting both binary data and file-based image processing.
 
 import logging
 import os
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 import shutil
 import time
 
@@ -99,13 +99,19 @@ def image_transfer(
     options: Dict[str, Any],
     src_path: str = None,
     filename_with_ext: str = None,
-) -> Dict[str, Any]:
+) -> Optional[Dict[str, Any]]:
     """Copy an image from SRC_PATH/images/ to DEST_PATH/.
 
     Callers that have already resolved the source via `_find_src` (e.g.
     atomic multi-file branches that need to pre-check existence) can
     pass `src_path` and `filename_with_ext` to skip the lookup; in that
     mode no filesystem stat happens here.
+
+    Returns ``None`` if the source file cannot be located or the record
+    is missing a filename. The caller in ``BaseIngestor.ingest`` treats
+    ``None`` as a file-transfer skip — see issue #99 (silent data-loss
+    pattern: returning the record on a missing source let the DB/API
+    write succeed and falsely report 100% success).
     """
     # Create destination directory if it doesn't exist
     os.makedirs(config.DEST_PATH, exist_ok=True)
@@ -116,7 +122,7 @@ def image_transfer(
         extension = options.get("extension")
         if not filename:
             logger.error(f"{RED}No filename found in record{RESET}")
-            return record
+            return None
 
         if src_path is None:
             src_path, filename_with_ext = _find_src("images", filename, extension)
@@ -124,7 +130,7 @@ def image_transfer(
                 logger.error(
                     f"{RED}Source image not found: {os.path.join(config.SRC_PATH, 'images', filename_with_ext)}{RESET}"
                 )
-                return record
+                return None
 
         # Save the resized image
         image_dest_path = os.path.join(config.DEST_PATH, filename_with_ext)
@@ -154,12 +160,14 @@ def annotation_transfer(
     extension: str,
     src_path: str = None,
     filename_with_ext: str = None,
-) -> Dict[str, Any]:
+) -> Optional[Dict[str, Any]]:
     """Copy an annotation file from SRC_PATH/annotations/ to DEST_PATH/.
 
     Callers that have already resolved the source via `_find_src` can
     pass `src_path` and `filename_with_ext` to skip the lookup; in that
     mode no filesystem stat happens here.
+
+    Returns ``None`` on missing source (see issue #99).
     """
     # Create destination directory if it doesn't exist
     os.makedirs(config.DEST_PATH, exist_ok=True)
@@ -169,7 +177,7 @@ def annotation_transfer(
         filename = record.get("filename")
         if not filename:
             logger.error(f"{RED}No filename found in record{RESET}")
-            return record
+            return None
 
         if src_path is None:
             src_path, filename_with_ext = _find_src(
@@ -179,7 +187,7 @@ def annotation_transfer(
                 logger.error(
                     f"{RED}Source file not found: {os.path.join(config.SRC_PATH, 'annotations', filename_with_ext)}{RESET}"
                 )
-                return record
+                return None
 
         # Save the file
         file_dest_path = os.path.join(config.DEST_PATH, filename_with_ext)
@@ -197,7 +205,7 @@ def text_transfer(
     record: Dict[str, Any],
     options: Dict[str, Any],
     src_subdir: str = "texts",
-) -> Dict[str, Any]:
+) -> Optional[Dict[str, Any]]:
     """Transfer text files for text-based tasks.
 
     Args:
@@ -208,7 +216,7 @@ def text_transfer(
                      ``"sequences"`` for masked language modeling)
 
     Returns:
-        Updated record dictionary
+        Updated record dictionary, or ``None`` on missing source (see issue #99).
     """
     # Create destination directory if it doesn't exist
     os.makedirs(config.DEST_PATH, exist_ok=True)
@@ -219,7 +227,7 @@ def text_transfer(
         extension = options.get("extension")
         if not filename:
             logger.error(f"{RED}No filename found in record{RESET}")
-            return record
+            return None
 
         # Add extension to filename if it doesn't have one
         if not _has_extension(filename):
@@ -231,7 +239,7 @@ def text_transfer(
         text_src_path = os.path.join(config.SRC_PATH, src_subdir, filename_with_ext)
         if not os.path.exists(text_src_path):
             logger.error(f"{RED}Source text file not found: {text_src_path}{RESET}")
-            return record
+            return None
 
         # Save the text file
         text_dest_path = os.path.join(config.DEST_PATH, filename_with_ext)
