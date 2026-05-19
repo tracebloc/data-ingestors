@@ -370,23 +370,25 @@ def test_legacy_env_vars_set_before_config_construction(
     assert captured_env["SRC_PATH"] == "/data"
 
 
-def test_file_transfer_config_patched_in_place(clean_env, mock_runtime, monkeypatch):
+def test_file_transfer_config_reads_env_lazily(clean_env, mock_runtime, monkeypatch):
     """``file_transfer`` holds a module-level ``config = Config()`` captured
-    at import time, before the entrypoint runs. Because ``Config`` is a
-    dataclass whose ``os.getenv`` defaults are evaluated at class-definition
-    time, neither setting env vars nor re-instantiating ``Config()`` would
-    reach that captured instance. The bridge must mutate it in place."""
+    at import time, before the entrypoint runs. ``Config``'s env-driven
+    fields are lazy properties, so the bridge just needs to set env vars
+    — the captured instance reads them on next access.
+
+    This test pre-sets env to a stale value, runs the entrypoint (which
+    must overwrite env from the resolved YAML), and verifies the captured
+    ``file_transfer.config`` reflects the post-main env."""
     monkeypatch.setenv(
         "INGEST_CONFIG", str(EXAMPLES_DIR / "image_classification.yaml")
     )
 
     from tracebloc_ingestor import file_transfer
 
-    # Poison the captured config with values the entrypoint should overwrite.
-    monkeypatch.setattr(file_transfer.config, "TABLE_NAME", "STALE_TABLE")
-    monkeypatch.setattr(file_transfer.config, "LABEL_FILE", "/stale/labels.csv")
-    monkeypatch.setattr(file_transfer.config, "SRC_PATH", "/stale/src")
-    monkeypatch.setattr(file_transfer.config, "DEST_PATH", "/stale/dest")
+    # Pre-poison env so the entrypoint has to overwrite it.
+    monkeypatch.setenv("TABLE_NAME", "STALE_TABLE")
+    monkeypatch.setenv("LABEL_FILE", "/stale/labels.csv")
+    monkeypatch.setenv("SRC_PATH", "/stale/src")
     storage_path = file_transfer.config.STORAGE_PATH
 
     from tracebloc_ingestor.cli.run import main
@@ -395,7 +397,8 @@ def test_file_transfer_config_patched_in_place(clean_env, mock_runtime, monkeypa
     assert file_transfer.config.TABLE_NAME == "chest_xrays_train"
     assert file_transfer.config.LABEL_FILE == "/data/labels.csv"
     assert file_transfer.config.SRC_PATH == "/data"
-    # DEST_PATH is STORAGE_PATH/<table> — file_transfer joins onto it.
+    # DEST_PATH is derived from STORAGE_PATH/<table> via property — no
+    # in-place patching needed.
     assert file_transfer.config.DEST_PATH == os.path.join(storage_path, "chest_xrays_train")
 
 
