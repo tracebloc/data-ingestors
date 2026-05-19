@@ -46,6 +46,12 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 # Run as non-root. The process needs read access to /custom/ (processor
 # scripts mounted via ConfigMap by client#86) and write access to whatever
 # PVC the Helm chart mounts at the configured DEST_PATH.
-USER nobody
+#
+# Numeric UID (not the `nobody` name) is required so Pods with
+# securityContext.runAsNonRoot: true admit on clusters that enforce the
+# restricted Pod Security Standard — the kubelet can only verify
+# non-root at admission time when the image USER is numeric. 65534 is
+# the `nobody` UID on Debian/Ubuntu/Alpine.
+USER 65534
 
 ENTRYPOINT ["docker-entrypoint.sh"]
