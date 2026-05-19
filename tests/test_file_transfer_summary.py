@@ -169,6 +169,59 @@ def test_banner_drops_celebration_on_file_transfer_failure():
     assert "576" in out  # the failure count appears in the banner
 
 
+def test_banner_total_does_not_double_count_file_transfer(capsys):
+    """Bugbot caught this: when every record fails file_transfer, the
+    failure count must be 576, NOT 1152. The bug was summing
+    file_transfer_failures alongside (total_records - api_sent_records),
+    but file-transfer failures never reach the API so they were counted
+    in both terms.
+
+    The failure channels are mutually exclusive per record:
+        file_transfer_failures  — never reached DB
+        failed_records          — DB failures; never reached API
+        api_only_failures       — inserted to DB but didn't ship
+    """
+    s = _summary(
+        total_records=576,
+        processed_records=576,
+        inserted_records=0,
+        api_sent_records=0,
+        file_transfer_failures=576,
+    )
+    out = _capture_summary(s)
+
+    # The "Failed to Send to API" line previously read 576 here too —
+    # double-counting the same records. Should be 0: nothing was
+    # inserted, so nothing was eligible for the API ship step.
+    assert "❌ Failed to Send to API:" in out
+    api_line = next(
+        line for line in out.splitlines() if "Failed to Send to API" in line
+    )
+    # ANSI color codes wrap the count, so check the digits don't include 576.
+    assert "576" not in api_line
+    assert ">0<" in api_line.replace("\x1b[91m", ">").replace("\x1b[0m", "<")
+
+    # The banner total appears only once and equals the unique failures.
+    assert "1,152" not in out
+    assert "1152" not in out
+
+
+def test_banner_total_correct_with_mixed_failure_modes():
+    """Sanity check: the three failure channels add up cleanly when all
+    three are non-zero."""
+    s = _summary(
+        total_records=100,
+        processed_records=95,  # 5 generic skips (not failures)
+        inserted_records=80,   # 15 DB failures
+        api_sent_records=70,   # 10 API-only failures
+        failed_records=15,
+        file_transfer_failures=5,
+    )
+    # Expected unique failure count: 5 (file) + 15 (DB) + 10 (API) = 30.
+    out = _capture_summary(s)
+    assert "30 failure" in out
+
+
 def test_banner_shows_file_transfer_failures_line():
     s = _summary(file_transfer_failures=3, total_records=13, processed_records=10)
     out = _capture_summary(s)
@@ -213,7 +266,11 @@ def test_ingest_counts_file_transfer_failures_separately(monkeypatch):
       * NOT increment ``inserted_records`` / ``api_sent_records`` for the
         failed records,
       * increment ``file_transfer_failures`` (NOT ``skipped_records``),
-      * append the failures to the returned list so cli.run.main exits 1.
+      * append the failures to the returned list so cli.run.main exits 1,
+      * tick the tqdm progress bar for each failed record so an
+        all-transfer-failure run doesn't leave the bar stuck at 0/N
+        (bugbot regression — the `continue` previously skipped
+        ``pbar.update``).
     """
     records = [{"filename": f"row{i}", "extension": ".jpeg"} for i in range(5)]
 
@@ -222,6 +279,22 @@ def test_ingest_counts_file_transfer_failures_separately(monkeypatch):
         "tracebloc_ingestor.ingestors.base.map_file_transfer",
         lambda category, record, options: None,
     )
+
+    # Replace tqdm with a stub that records update() calls so we can
+    # assert the progress bar actually advances.
+    pbar_updates: list[int] = []
+
+    class _FakePbar:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def update(self, n):
+            pbar_updates.append(n)
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("tracebloc_ingestor.ingestors.base.tqdm", _FakePbar)
 
     captured = _Recorder()
     monkeypatch.setattr(BaseIngestor, "_log_summary", captured)
@@ -264,3 +337,7 @@ def test_ingest_counts_file_transfer_failures_separately(monkeypatch):
     # K8s job marker was Succeeded.
     assert len(failed) == 5
     assert all(f["error"] == "file_transfer_failed" for f in failed)
+
+    # Bugbot regression: the file-transfer skip branch must advance the
+    # progress bar. Sum of ticks must reach total_records (5).
+    assert sum(pbar_updates) == 5

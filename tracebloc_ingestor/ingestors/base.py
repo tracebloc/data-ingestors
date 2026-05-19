@@ -451,6 +451,12 @@ class BaseIngestor(ABC):
                                             "error": "file_transfer_failed",
                                         }
                                     )
+                                    # Advance the progress bar so an
+                                    # all-transfer-failure run doesn't leave
+                                    # tqdm stuck at 0/N — without this the
+                                    # `continue` skips the batch update that
+                                    # would normally tick the bar.
+                                    pbar.update(1)
                                     continue
 
                             batch.append(processed_record)
@@ -645,8 +651,15 @@ class BaseIngestor(ABC):
         print(
             f"{BOLD}❌ Failed DB Insertion:{RESET}     {RED}{summary.failed_records:,}{RESET}"
         )
+        # Only count records that made it to a DB insert but didn't ship
+        # to the API. Using `total_records - api_sent_records` would also
+        # include file-transfer failures and DB failures (which never had
+        # a chance to ship), giving an inflated, double-counted total.
+        api_only_failures = max(
+            0, summary.inserted_records - summary.api_sent_records
+        )
         print(
-            f"{BOLD}❌ Failed to Send to API:{RESET}   {RED}{(summary.total_records - summary.api_sent_records):,}{RESET}"
+            f"{BOLD}❌ Failed to Send to API:{RESET}   {RED}{api_only_failures:,}{RESET}"
         )
         print(f"{CYAN}{'─'*60}{RESET}")
 
@@ -663,12 +676,15 @@ class BaseIngestor(ABC):
         # Status banner. Any non-trivial failure (DB, API, or file-transfer)
         # disqualifies the "completed successfully" message — a customer
         # seeing 🎉 should be able to trust that no record was silently
-        # dropped. The total-failure count is summed across all failure
-        # channels so the operator can grep logs by the same number.
+        # dropped. The three failure channels are mutually exclusive per
+        # record (file-transfer failures never reach DB; DB failures never
+        # reach API; api_only_failures are records that hit DB but didn't
+        # ship), so summing them gives a clean unique count instead of
+        # the double-count `total_records - api_sent_records` would produce.
         total_failures = (
             summary.failed_records
             + summary.file_transfer_failures
-            + max(0, summary.total_records - summary.api_sent_records)
+            + api_only_failures
         )
         if not summary.has_failures:
             status_msg = "🎉 Ingestion completed successfully!"
