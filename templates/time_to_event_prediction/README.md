@@ -6,7 +6,7 @@ This template demonstrates how to ingest time-to-event (survival analysis) data 
 
 Ingest with ~13 lines of YAML using the official ingestor image (`ghcr.io/tracebloc/ingestor`). No Python edits, no Dockerfile to build.
 
-> **Prerequisite:** the chart doesn't transport data into the cluster. Stage your files on the cluster's shared PVC first — see the [data-staging recipe](https://github.com/tracebloc/client/blob/main/ingestor/README.md#stage-your-data-on-the-shared-pvc) in the chart docs (kubectl cp pattern for small datasets, init-container sync for production).
+> **Prerequisite:** the chart doesn't transport data into the cluster. Stage your files on the cluster's shared PVC first — see the [data-staging recipe](https://github.com/tracebloc/client/blob/develop/ingestor/README.md#stage-your-data-on-the-shared-pvc) in the chart docs (kubectl cp pattern for small datasets, init-container sync for production).
 
 **1. Stage the CSV** on the shared PVC at `/data/shared/<your-prefix>/<file>.csv`.
 
@@ -39,7 +39,7 @@ helm install my-survival-dataset tracebloc/ingestor \
   --set-file ingestConfig=./ingest.yaml
 ```
 
-`time_column:` names the column that holds the time-to-event value. `label.policy: bucket` is required so the central backend never sees raw target values. Canonical example: [`examples/yaml/time_to_event_prediction.yaml`](../../examples/yaml/time_to_event_prediction.yaml). Full chart docs: [`tracebloc/client/ingestor/README.md`](https://github.com/tracebloc/client/blob/main/ingestor/README.md).
+`time_column:` names the column that holds the time-to-event value. `label.policy: bucket` is required so the central backend never sees raw target values. Canonical example: [`examples/yaml/time_to_event_prediction.yaml`](../../examples/yaml/time_to_event_prediction.yaml). Full chart docs: [`tracebloc/client/ingestor/README.md`](https://github.com/tracebloc/client/blob/develop/ingestor/README.md).
 
 ## Directory Structure
 
