@@ -6,7 +6,9 @@ This template demonstrates how to ingest image classification data with images a
 
 Ingest with ~8 lines of YAML using the official ingestor image (`ghcr.io/tracebloc/ingestor`). No Python edits, no Dockerfile to build.
 
-**1. Stage the data** on your cluster's shared PVC at `/data/shared/<your-prefix>/`. The chart mounts this volume into the ingestor pod.
+> **Prerequisite:** the chart doesn't transport data into the cluster. Stage your files on the cluster's shared PVC first — see the [data-staging recipe](https://github.com/tracebloc/client/blob/main/ingestor/README.md#stage-your-data-on-the-shared-pvc) in the chart docs (kubectl cp pattern for small datasets, init-container sync for production).
+
+**1. Stage the data** on the shared PVC at `/data/shared/<your-prefix>/` per the recipe above. The chart mounts this volume into the ingestor pod.
 
 **2. Write `ingest.yaml`:**
 
