@@ -335,8 +335,19 @@ class ImageResolutionValidator(BaseValidator):
         Returns:
             True if resolutions match within tolerance, False otherwise
         """
+        # Normalize both sides to tuple before comparison. PIL returns
+        # ``image.size`` as a tuple; YAML/JSON parses ``target_size: [H, W]``
+        # as a list. Python's equality is type-strict (``(256, 256) ==
+        # [256, 256]`` is False), so without this normalization the
+        # tolerance==0 path falsely flags every image as mismatched even
+        # when dimensions are identical. Surfaced during real-cluster
+        # ingestion (2026-05-19): a 6-image cats/dogs sample at 256×256
+        # with explicit target_size=[256, 256] reported all 6 as
+        # "(256, 256) (expected: [256, 256])". The tolerance>0 branch
+        # accidentally avoided this by going through index access, which
+        # doesn't care about sequence type.
         if self.tolerance == 0:
-            return actual == expected
+            return tuple(actual) == tuple(expected)
 
         width_diff = abs(actual[0] - expected[0])
         height_diff = abs(actual[1] - expected[1])

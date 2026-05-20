@@ -25,9 +25,9 @@ spec:
         # Backend auth — deprecated fallback (slated for removal one minor
         # version after BACKEND_TOKEN support is wired up via client#86).
         - name: CLIENT_ID
-          value: "08ec78b9-871c-4fe1-8414-6a0ab3d268e3"
+          value: "<repalce_with_client_id>"
         - name: CLIENT_PASSWORD
-          value: "2unfcsowu4fh!8Uxz23fj"
+          value: "<replace_with_client_pass>"
         - name: CLIENT_PVC
           value: "client-pvc"
         - name: MYSQL_HOST
