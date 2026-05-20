@@ -1,0 +1,10 @@
+# Keypoint detection: image + per-image keypoint coordinates carried in the CSV.
+# Same validator surface as image_classification (no XML, no masks).
+apiVersion: tracebloc.io/v1
+kind: IngestConfig
+table: pose_train
+intent: train
+category: keypoint_detection
+csv: /data/labels.csv
+images: /data/images/
+label: image_label

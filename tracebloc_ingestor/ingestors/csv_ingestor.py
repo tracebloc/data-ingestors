@@ -13,6 +13,7 @@ from .base import BaseIngestor
 from ..database import Database
 from ..api.client import APIClient
 from ..utils.constants import RESET, RED, YELLOW, TaskCategory
+from ..utils import label_policy as label_policy_module
 from ..config import Config
 
 config = Config()
@@ -49,6 +50,7 @@ class CSVIngestor(BaseIngestor):
         annotation_column: Optional[str] = None,
         category: Optional[str] = None,
         data_format: Optional[str] = None,
+        label_policy: str = label_policy_module.PASSTHROUGH,
     ):
         """Initialize CSV Ingestor.
 
@@ -66,7 +68,10 @@ class CSVIngestor(BaseIngestor):
             annotation_column: Name of the column to use as annotation
             category: Category of the data
             data_format: Format of the data
-            log_level: Level of the logger
+            label_policy: Bucketing policy for the label value before it's
+                sent to the central backend. ``"passthrough"`` for
+                classification (default); ``"bucket"`` for regression-class
+                tasks so raw target values never leak.
         """
         super().__init__(
             database,
@@ -81,9 +86,9 @@ class CSVIngestor(BaseIngestor):
             category,
             data_format,
             file_options,
+            label_policy=label_policy,
         )
         self.csv_options = csv_options or {}
-        self.file_options = file_options or {}
 
     def _validate_csv(self, df: pd.DataFrame) -> None:
         """Validate CSV data against schema using pandas functionality.

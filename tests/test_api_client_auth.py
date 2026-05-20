@@ -33,7 +33,7 @@ def _make_config(**overrides) -> Config:
     Default: a valid prod-like config with BACKEND_TOKEN set so ``validate()``
     passes; tests override only the auth fields they care about. DB creds are
     not part of the validation surface (they're bundled-MySQL conventions),
-    so they're left at their dataclass defaults here.
+    so they're left to their env/property defaults here.
     """
     defaults = dict(
         BACKEND_TOKEN="test-token-abc",
