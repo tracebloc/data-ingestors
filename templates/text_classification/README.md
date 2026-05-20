@@ -2,6 +2,38 @@
 
 This template demonstrates how to ingest text classification data with `.txt` files and a CSV labels file into a database using the tracebloc_ingestor framework.
 
+## Quickstart — declarative (recommended)
+
+Ingest with ~10 lines of YAML using the official ingestor image (`ghcr.io/tracebloc/ingestor`). No Python edits, no Dockerfile to build.
+
+**1. Stage the data** on your cluster's shared PVC at `/data/shared/<your-prefix>/` with a `texts/` subdirectory holding the `.txt` files.
+
+**2. Write `ingest.yaml`:**
+
+```yaml
+apiVersion: tracebloc.io/v1
+kind: IngestConfig
+category: text_classification
+table: support_tickets_train
+intent: train
+csv: /data/shared/tickets/labels.csv
+texts: /data/shared/tickets/texts/
+schema:
+  text_id: VARCHAR(255)
+  label: VARCHAR(64)
+label: label
+```
+
+**3. Install:**
+
+```bash
+helm install my-text-dataset tracebloc/ingestor \
+  --namespace tracebloc \
+  --set-file ingestConfig=./ingest.yaml
+```
+
+Canonical example: [`examples/yaml/text_classification.yaml`](../../examples/yaml/text_classification.yaml). Full chart docs: [`tracebloc/client/ingestor/README.md`](https://github.com/tracebloc/client/blob/main/ingestor/README.md).
+
 ## Directory Structure
 
 ```

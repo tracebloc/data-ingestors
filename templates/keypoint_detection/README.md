@@ -2,6 +2,35 @@
 
 This template demonstrates how to ingest keypoint detection data with images and JSON-based keypoint annotations into a database using the tracebloc_ingestor framework.
 
+## Quickstart — declarative (recommended)
+
+Ingest with ~8 lines of YAML using the official ingestor image (`ghcr.io/tracebloc/ingestor`). No Python edits, no Dockerfile to build.
+
+**1. Stage the data** on your cluster's shared PVC at `/data/shared/<your-prefix>/` with an `images/` subdirectory; keypoint annotations are columns in the CSV.
+
+**2. Write `ingest.yaml`:**
+
+```yaml
+apiVersion: tracebloc.io/v1
+kind: IngestConfig
+category: keypoint_detection
+table: pose_train
+intent: train
+csv: /data/shared/pose/labels.csv
+images: /data/shared/pose/images/
+label: image_label
+```
+
+**3. Install:**
+
+```bash
+helm install my-keypoint-dataset tracebloc/ingestor \
+  --namespace tracebloc \
+  --set-file ingestConfig=./ingest.yaml
+```
+
+Canonical example: [`examples/yaml/keypoint_detection.yaml`](../../examples/yaml/keypoint_detection.yaml). Full chart docs: [`tracebloc/client/ingestor/README.md`](https://github.com/tracebloc/client/blob/main/ingestor/README.md).
+
 ## Directory Structure
 
 ```

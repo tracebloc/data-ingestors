@@ -2,6 +2,37 @@
 
 This template demonstrates how to ingest image classification data with images and a CSV labels file into a database using the tracebloc_ingestor framework.
 
+## Quickstart — declarative (recommended)
+
+Ingest with ~8 lines of YAML using the official ingestor image (`ghcr.io/tracebloc/ingestor`). No Python edits, no Dockerfile to build.
+
+**1. Stage the data** on your cluster's shared PVC at `/data/shared/<your-prefix>/`. The chart mounts this volume into the ingestor pod.
+
+**2. Write `ingest.yaml`:**
+
+```yaml
+apiVersion: tracebloc.io/v1
+kind: IngestConfig
+category: image_classification
+table: cats_dogs_train
+intent: train
+csv: /data/shared/cats-dogs/labels.csv
+images: /data/shared/cats-dogs/images/
+label: label
+```
+
+**3. Install:**
+
+```bash
+helm install my-cats-dogs tracebloc/ingestor \
+  --namespace tracebloc \
+  --set-file ingestConfig=./ingest.yaml
+```
+
+The ingestor validates the data, copies files into the destination directory on the PVC, inserts rows into MySQL, sends metadata to the backend, then exits.
+
+Canonical example: [`examples/yaml/image_classification.yaml`](../../examples/yaml/image_classification.yaml). Full chart docs: [`tracebloc/client/ingestor/README.md`](https://github.com/tracebloc/client/blob/main/ingestor/README.md).
+
 ## Directory Structure
 
 ```
@@ -31,7 +62,9 @@ The CSV contains the following columns:
 - `filename`: Image filename with extension, e.g. `cat1.jpeg`
 - `label`: Class label for the image, e.g. `cat`, `dog`
 
-## Usage
+## Advanced: custom processor script
+
+Use the Python+Dockerfile pattern when the declarative schema can't express your processing needs (custom validators, non-standard transforms, etc.). Otherwise prefer the Quickstart above.
 
 1. Place your images in the `data/images/` directory
 2. Update `labels_file_sample.csv` with your `(filename, label)` pairs

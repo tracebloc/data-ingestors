@@ -2,6 +2,42 @@
 
 This template demonstrates how to ingest time series forecasting data from a CSV file into a database using the tracebloc_ingestor framework.
 
+## Quickstart — declarative (recommended)
+
+Ingest with ~13 lines of YAML using the official ingestor image (`ghcr.io/tracebloc/ingestor`). No Python edits, no Dockerfile to build.
+
+**1. Stage the CSV** on your cluster's shared PVC at `/data/shared/<your-prefix>/<file>.csv`.
+
+**2. Write `ingest.yaml`:**
+
+```yaml
+apiVersion: tracebloc.io/v1
+kind: IngestConfig
+category: time_series_forecasting
+table: energy_demand_train
+intent: train
+csv: /data/shared/energy/demand.csv
+schema:
+  timestamp: VARCHAR(64)
+  region: VARCHAR(32)
+  temperature_c: FLOAT
+  is_holiday: INT
+  demand_mw: FLOAT
+label:
+  column: demand_mw
+  policy: bucket
+```
+
+**3. Install:**
+
+```bash
+helm install my-forecast-dataset tracebloc/ingestor \
+  --namespace tracebloc \
+  --set-file ingestConfig=./ingest.yaml
+```
+
+Forecasting is a regression-class task — `label.policy: bucket` is required so the central backend never sees raw target values. Canonical example: [`examples/yaml/time_series_forecasting.yaml`](../../examples/yaml/time_series_forecasting.yaml). Full chart docs: [`tracebloc/client/ingestor/README.md`](https://github.com/tracebloc/client/blob/main/ingestor/README.md).
+
 ## Directory Structure
 
 ```

@@ -2,6 +2,34 @@
 
 This template demonstrates how to ingest pre-tokenized text sequences for masked language modeling (MLM) into a database using the tracebloc_ingestor framework.
 
+## Quickstart — declarative (recommended)
+
+Ingest with ~7 lines of YAML using the official ingestor image (`ghcr.io/tracebloc/ingestor`). No Python edits, no Dockerfile to build.
+
+**1. Stage the data** on your cluster's shared PVC at `/data/shared/<your-prefix>/` with a `sequences/` subdirectory holding the per-record `.txt` sequence files.
+
+**2. Write `ingest.yaml`:**
+
+```yaml
+apiVersion: tracebloc.io/v1
+kind: IngestConfig
+category: masked_language_modeling
+table: primekg_mlm_train
+intent: train
+csv: /data/shared/primekg/labels_file.csv
+sequences: /data/shared/primekg/sequences/
+```
+
+**3. Install:**
+
+```bash
+helm install my-mlm-dataset tracebloc/ingestor \
+  --namespace tracebloc \
+  --set-file ingestConfig=./ingest.yaml
+```
+
+MLM is unsupervised — no `label:` field; the tokenizer validator checks that sequences match the configured vocabulary. Canonical example: [`examples/yaml/masked_language_modeling.yaml`](../../examples/yaml/masked_language_modeling.yaml). Full chart docs: [`tracebloc/client/ingestor/README.md`](https://github.com/tracebloc/client/blob/main/ingestor/README.md).
+
 ## Directory Structure
 
 ```
