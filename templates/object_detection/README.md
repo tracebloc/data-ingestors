@@ -2,6 +2,38 @@
 
 This template demonstrates how to ingest object detection data with images and XML annotations into a database using the tracebloc_ingestor framework.
 
+## Quickstart — declarative (recommended)
+
+Ingest with ~9 lines of YAML using the official ingestor image (`ghcr.io/tracebloc/ingestor`). No Python edits, no Dockerfile to build.
+
+> **Prerequisite:** the chart doesn't transport data into the cluster. Stage your files on the cluster's shared PVC first — see the [data-staging recipe](https://github.com/tracebloc/client/blob/main/ingestor/README.md#stage-your-data-on-the-shared-pvc) in the chart docs (kubectl cp pattern for small datasets, init-container sync for production).
+
+**1. Stage the data** on the shared PVC at `/data/shared/<your-prefix>/` with `images/` and `annotations/` (Pascal VOC XML) subdirectories.
+
+**2. Write `ingest.yaml`:**
+
+```yaml
+apiVersion: tracebloc.io/v1
+kind: IngestConfig
+category: object_detection
+table: visdrone_train
+intent: train
+csv: /data/shared/visdrone/labels.csv
+images: /data/shared/visdrone/images/
+annotations: /data/shared/visdrone/annotations/
+label: image_label
+```
+
+**3. Install:**
+
+```bash
+helm install my-od-dataset tracebloc/ingestor \
+  --namespace tracebloc \
+  --set-file ingestConfig=./ingest.yaml
+```
+
+Object detection uses atomic image+annotation transfer — a record is committed only when both files copy successfully. Canonical example: [`examples/yaml/object_detection.yaml`](../../examples/yaml/object_detection.yaml). Full chart docs: [`tracebloc/client/ingestor/README.md`](https://github.com/tracebloc/client/blob/main/ingestor/README.md).
+
 ## Directory Structure
 
 ```
@@ -73,7 +105,9 @@ Each XML file should contain:
 </annotation>
 ```
 
-## Usage
+## Advanced: custom processor script
+
+Use the Python+Dockerfile pattern when the declarative schema can't express your processing needs. Otherwise prefer the Quickstart above.
 
 1. Place your images in the `data/images/` directory
 2. Create corresponding XML annotation files in the `data/annotations/` directory

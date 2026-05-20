@@ -31,34 +31,80 @@ Only metadata (schema, statistics, structure) syncs to the web app. Raw data sta
 
 ## Supported data types
 
-| Type | Templates |
+| Type | Categories |
 |---|---|
-| **Image** | [`image_classification`](templates/image_classification), [`object_detection`](templates/object_detection) |
-| **Text / NLP** | [`text_classification`](templates/text_classification) |
+| **Image** | [`image_classification`](templates/image_classification), [`object_detection`](templates/object_detection), [`keypoint_detection`](templates/keypoint_detection), [`semantic_segmentation`](templates/semantic_segmentation) |
+| **Text / NLP** | [`text_classification`](templates/text_classification), [`masked_language_modeling`](templates/masked_language_modeling) |
 | **Tabular** | [`tabular_classification`](templates/tabular_classification), [`tabular_regression`](templates/tabular_regression) |
 | **Time series** | [`time_series_forecasting`](templates/time_series_forecasting), [`time_to_event_prediction`](templates/time_to_event_prediction) |
 
-Each template is a runnable starting point — copy it, point it at your data, ship it.
+Each template ships a sample dataset and an [example `ingest.yaml`](examples/yaml/) you can copy as a starting point.
 
-## Quickstart
+## Quickstart — declarative YAML (recommended)
 
-### 1. Install
+Describe your dataset in ~8 lines of YAML, then `helm install`. The official ingestor image (this package, signed + SBOM-attested, published as `ghcr.io/tracebloc/ingestor`) runs it. No Dockerfile, no Python script.
+
+**1. One-time: add the chart repo on your workstation.**
+
+```bash
+helm repo add tracebloc https://tracebloc.github.io/client
+helm repo update
+```
+
+The `tracebloc/client` parent chart bootstraps the cluster (jobs-manager, MySQL, RBAC). The `tracebloc/ingestor` subchart submits per-dataset ingestion runs against it.
+
+**2. Stage your data on the cluster's shared PVC.**
+
+The chart **doesn't transport data into the cluster** — it points at data already accessible to the cluster's shared PVC (`client-pvc` by default, mounted at `/data/shared/` inside the ingestor Pod). Before installing, get your raw files there. The simplest pattern for a small dataset is a throwaway `kubectl cp` Pod that mounts the PVC; for production you'd typically use an init container with cloud-storage sync. Full staging recipe + manifests → [`tracebloc/client/ingestor/README.md#stage-your-data-on-the-shared-pvc`](https://github.com/tracebloc/client/blob/main/ingestor/README.md#stage-your-data-on-the-shared-pvc).
+
+**3. Write your `ingest.yaml`.**
+
+```yaml
+apiVersion: tracebloc.io/v1
+kind: IngestConfig
+category: image_classification
+table: cats_dogs_train
+intent: train
+csv: /data/shared/cats-dogs/labels.csv
+images: /data/shared/cats-dogs/images/
+label: label
+```
+
+The schema is the same for every category; the `category` field picks the validator set, file-extension defaults, and column conventions. The `csv:` / `images:` (etc.) paths are *paths inside the ingestor Pod*, which is the PVC mount you populated in step 2. See [`examples/yaml/`](examples/yaml/) for a working example per category.
+
+**4. Install once per dataset.**
+
+```bash
+helm install my-cats-dogs tracebloc/ingestor \
+  --namespace tracebloc \
+  --set-file ingestConfig=./ingest.yaml
+```
+
+The ingestor runs once: validates your data, copies files into the destination directory on the PVC, inserts rows into MySQL, sends metadata to the tracebloc backend, then exits. Repeat per dataset. Customers never build an image, never write a Dockerfile, never track digest versions — the cluster's auto-upgrade flow keeps the official image current.
+
+Full chart docs (data-staging recipe, schema, every category, update model, verification, override knobs) → **[`tracebloc/client/ingestor/README.md`](https://github.com/tracebloc/client/blob/main/ingestor/README.md)**.
+
+## Advanced: custom processors (legacy Python pattern)
+
+Use this when the declarative schema can't express what your data needs — typically when you have non-trivial preprocessing logic, a custom validator, or a `BaseProcessor` subclass.
+
+**1. Install the package.**
 
 ```bash
 pip install tracebloc-ingestor
 ```
 
-### 2. Pick a template
+**2. Pick a template + adapt the script.**
 
 ```bash
-cp templates/image_classification/ingestor.py .
+cp templates/image_classification/image_classification.py .
 ```
 
-Each template builds on the same primitives — `BaseIngestor`, `CSVIngestor`, validators — and overrides the parts that vary by data type.
+The package exports `BaseIngestor`, `CSVIngestor`, `JSONIngestor`, plus validators (`FileTypeValidator`, `ImageResolutionValidator`, `TableNameValidator`, etc.) and the `Database` / `APIClient` helpers. See [`examples/`](examples) for working scripts.
 
-### 3. Deploy as a Kubernetes Job
+**3. Build + deploy as a Kubernetes Job.**
 
-The ingestor runs *inside* your cluster, next to a tracebloc client. The provided [`Dockerfile`](Dockerfile) and [`ingestor-job.yaml`](ingestor-job.yaml) are the canonical pattern:
+The legacy [`Dockerfile`](Dockerfile) and [`ingestor-job.yaml`](ingestor-job.yaml) remain the canonical pattern for custom-processor flows:
 
 ```bash
 docker build -t <your-registry>/<image-name>:latest .
@@ -79,9 +125,9 @@ The Job needs these environment variables (set in [`ingestor-job.yaml`](ingestor
 | `TITLE` | *(optional)* Human-readable dataset name |
 | `LOG_LEVEL` | *(optional)* `INFO`, `WARNING`, `ERROR` |
 
-### Running under Pod Security Standards (`restricted`)
+### Running custom-processor flows under Pod Security Standards (`restricted`)
 
-If the namespace you're deploying into enforces the [`restricted`](https://kubernetes.io/docs/concepts/security/pod-security-standards/) Pod Security Standard (OpenShift, hardened clusters, many managed-Kubernetes namespaces), the stock [`Dockerfile`](Dockerfile) and [`ingestor-job.yaml`](ingestor-job.yaml) won't admit. Two changes are needed.
+If the namespace you're deploying into enforces the [`restricted`](https://kubernetes.io/docs/concepts/security/pod-security-standards/) Pod Security Standard (OpenShift, hardened clusters, many managed-Kubernetes namespaces), the stock [`Dockerfile`](Dockerfile) and [`ingestor-job.yaml`](ingestor-job.yaml) won't admit. (The declarative path's image is already PSA-restricted-compatible; this section only applies to custom Dockerfiles built from this repo.) Two changes are needed.
 
 Check first:
 
@@ -119,9 +165,9 @@ spec:
             drop: ["ALL"]
 ```
 
-## Writing a custom ingestor
+### Subclassing BaseIngestor
 
-For data that doesn't fit a template, subclass `BaseIngestor`:
+For data that doesn't fit any of the existing templates, subclass `BaseIngestor`:
 
 ```python
 from tracebloc_ingestor import BaseIngestor, FileTypeValidator
@@ -136,8 +182,6 @@ class MyIngestor(BaseIngestor):
 if __name__ == "__main__":
     MyIngestor().ingest()
 ```
-
-The package exports `BaseIngestor`, `CSVIngestor`, `JSONIngestor`, plus validators (`FileTypeValidator`, `ImageResolutionValidator`, `TableNameValidator`) and the `Database` / `APIClient` helpers. See [`examples/`](examples) for working scripts.
 
 ## Prerequisites
 
