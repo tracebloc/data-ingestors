@@ -129,6 +129,46 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Smoke-test built image
+        # Runs against the digest produced by `Build and push image`, BEFORE
+        # cosign signing or release-notes update — so a packaging regression
+        # aborts the workflow with no signed image and no published release.
+        #
+        # First command: import _load_schema() and read it. Catches the
+        # v0.3.0-rc1 regression where tracebloc_ingestor/schema/ was missing
+        # from site-packages because the directory had no __init__.py and
+        # find_packages() silently dropped it.
+        #
+        # Second command: invoke the tracebloc-ingest console script. The
+        # CLI has no --help; main() expects INGEST_CONFIG and exits with a
+        # friendly message when it's absent. We run with no args, accept
+        # the non-zero exit, and grep for that message — which proves:
+        # console_scripts metadata was installed, the wrapper resolves
+        # `tracebloc_ingestor.cli.run:main`, and main() runs far enough to
+        # print its first error. A missing wrapper or import-time failure
+        # produces a different output and fails the grep.
+        #
+        # IMAGE/DIGEST go through the env: block (same security stance as
+        # the release-notes step) to keep ${{ ... }} out of inline shell.
+        #
+        # --entrypoint is load-bearing: the image's ENTRYPOINT is
+        # docker-entrypoint.sh, which exits 64 immediately if MYSQL_HOST
+        # is unset — before the shell ever reaches `exec tracebloc-ingest`.
+        # We're not testing the MySQL-wait wrapper here, we're testing the
+        # Python package; overriding the entrypoint lets the smoke probes
+        # run without standing up a MySQL sidecar for what should be a
+        # ~5-second sanity check.
+        env:
+          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          docker run --rm --entrypoint python "${IMAGE}@${DIGEST}" \
+            -c "from tracebloc_ingestor.cli.run import _load_schema; print(_load_schema()['title'])"
+          output=$(docker run --rm --entrypoint tracebloc-ingest "${IMAGE}@${DIGEST}" 2>&1 || true)
+          echo "$output"
+          echo "$output" | grep -q "INGEST_CONFIG"
+
       - name: Install cosign
         uses: sigstore/cosign-installer@v3
         with:
