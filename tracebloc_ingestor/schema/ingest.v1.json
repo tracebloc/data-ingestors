@@ -1,0 +1,380 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://tracebloc.io/schemas/ingest.v1.json",
+  "title": "tracebloc IngestConfig (v1)",
+  "description": "Declarative configuration for the tracebloc data ingestor. Replaces the per-customer Python script + Dockerfile pattern. Customers describe their dataset; the official image runs it.",
+  "type": "object",
+  "additionalProperties": false,
+
+  "required": [
+    "apiVersion",
+    "kind",
+    "category",
+    "table",
+    "intent"
+  ],
+
+  "properties": {
+    "apiVersion": {
+      "const": "tracebloc.io/v1",
+      "description": "Schema version. Breaking changes require v2."
+    },
+    "kind": {
+      "const": "IngestConfig"
+    },
+
+    "category": {
+      "type": "string",
+      "enum": [
+        "image_classification",
+        "object_detection",
+        "keypoint_detection",
+        "semantic_segmentation",
+        "instance_segmentation",
+        "text_classification",
+        "tabular_classification",
+        "tabular_regression",
+        "time_series_forecasting",
+        "time_to_event_prediction",
+        "masked_language_modeling"
+      ],
+      "description": "Task category. Drives convention defaults: validators, data_format, default columns, default file extensions, default validator set."
+    },
+
+    "table": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Destination table name in the cluster-internal MySQL. Used to identify the dataset in subsequent runs."
+    },
+
+    "intent": {
+      "type": "string",
+      "enum": ["train", "test"],
+      "description": "Whether this dataset is for training or held-out testing."
+    },
+
+    "csv": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Path to the labels CSV. Mutually exclusive with `json`. The dominant source type."
+    },
+
+    "json": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Path to a JSON dataset. Mutually exclusive with `csv`."
+    },
+
+    "images": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Directory holding the image files referenced by the labels CSV. Required for image-based categories."
+    },
+
+    "annotations": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Directory holding annotation files (e.g. Pascal VOC XML). Required for object_detection."
+    },
+
+    "masks": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Directory holding segmentation mask images (PNG). Required for semantic_segmentation."
+    },
+
+    "texts": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Directory holding text files referenced by the labels CSV. Required for text_classification."
+    },
+
+    "sequences": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Directory holding sequence text files (.txt). Required for masked_language_modeling."
+    },
+
+    "label": {
+      "oneOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "description": "Shorthand: column name in the CSV that holds the label. Implies policy=passthrough."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["column"],
+          "properties": {
+            "column": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Column name in the CSV that holds the label."
+            },
+            "policy": {
+              "type": "string",
+              "enum": ["passthrough", "bucket"],
+              "description": "How label values are sent to the central backend. `passthrough` (default for classification) sends the raw value. `bucket` (required for regression-class tasks) bins the value before send so the central backend never sees the raw target."
+            }
+          }
+        }
+      ],
+      "description": "Label specification. Can be a string (column name) for the common case, or an object for explicit policy control."
+    },
+
+    "schema": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "string"
+      },
+      "description": "Column → SQL type map (e.g. {'age': 'INT', 'name': 'VARCHAR(255)'}). Required for tabular and time-series categories."
+    },
+
+    "time_column": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Name of the time column for time_to_event_prediction. Falls back to a column named `time` if unset."
+    },
+
+    "data_id": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["strategy"],
+      "properties": {
+        "strategy": {
+          "type": "string",
+          "enum": ["uuid", "column"],
+          "default": "uuid",
+          "description": "How `data_id` is generated. `uuid` (default) generates a fresh UUID per record — no source column leaves the cluster. `column` maps a source column's value, which is louder (logged warning) and only safe when the column doesn't carry PII."
+        },
+        "column": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Required when strategy=column. The source column whose values become `data_id`."
+        }
+      },
+      "if": { "properties": { "strategy": { "const": "column" } }, "required": ["strategy"] },
+      "then": { "required": ["column"] }
+    },
+
+    "spec": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Advanced overrides. Most customers don't touch this; convention defaults from `category` cover the dominant case.",
+      "properties": {
+        "csv_options": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "chunk_size": { "type": "integer", "minimum": 1 },
+            "delimiter": { "type": "string", "minLength": 1 },
+            "quotechar": { "type": "string", "minLength": 1 },
+            "escapechar": { "type": "string", "minLength": 1 }
+          },
+          "description": "Pandas read_csv passthrough. Defaults: chunk_size=1000, delimiter=',', quotechar='\"', escapechar='\\\\'."
+        },
+        "file_options": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "target_size": {
+              "type": "array",
+              "items": { "type": "integer", "minimum": 1 },
+              "minItems": 2,
+              "maxItems": 2,
+              "description": "[height, width]. Image categories only. Default [512, 512]."
+            },
+            "extension": {
+              "type": "string",
+              "enum": [".jpg", ".jpeg", ".png", ".txt", ".text", ".xml"],
+              "description": "Allowed extension for sidecar files. Defaults: .jpg for image categories, .txt for text_classification."
+            }
+          }
+        },
+        "validators": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Override the default validator set resolved by `map_validators(category)`. Rarely needed."
+        },
+        "sidecars": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["column", "source"],
+            "properties": {
+              "column": { "type": "string", "minLength": 1 },
+              "source": { "type": "string", "minLength": 1 },
+              "dest": { "type": "string", "minLength": 1 },
+              "transform": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "resize": {
+                    "type": "array",
+                    "items": { "type": "integer", "minimum": 1 },
+                    "minItems": 2,
+                    "maxItems": 2
+                  }
+                }
+              },
+              "validators": {
+                "type": "array",
+                "items": { "type": "string" }
+              }
+            }
+          },
+          "description": "Advanced: explicit sidecar-file declaration when the convention defaults don't fit. Most users rely on `images`/`annotations`/`masks`/`texts` shorthand instead."
+        },
+        "processors": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["script", "class"],
+            "properties": {
+              "script": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Path inside the pod where the script body has been mounted (typically a ConfigMap mount under /custom/...)."
+              },
+              "class": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Class name within the script. Must subclass tracebloc_ingestor.processors.BaseProcessor."
+              },
+              "args": {
+                "type": "object",
+                "description": "Keyword arguments passed to the processor's constructor."
+              }
+            }
+          },
+          "description": "Custom-processor escape hatch. The Helm subchart (client#86) takes the script body as a chart value, writes a ConfigMap, mounts it. The official image dynamically imports the class and applies it to every record. No customer-built Docker image required."
+        }
+      }
+    }
+  },
+
+  "allOf": [
+    {
+      "description": "Exactly one data source: csv or json.",
+      "oneOf": [
+        { "required": ["csv"], "not": { "required": ["json"] } },
+        { "required": ["json"], "not": { "required": ["csv"] } }
+      ]
+    },
+    {
+      "description": "Image-based categories require `images`.",
+      "if": {
+        "properties": {
+          "category": {
+            "enum": [
+              "image_classification",
+              "object_detection",
+              "keypoint_detection",
+              "semantic_segmentation",
+              "instance_segmentation"
+            ]
+          }
+        },
+        "required": ["category"]
+      },
+      "then": { "required": ["images"] }
+    },
+    {
+      "description": "object_detection requires `annotations`.",
+      "if": {
+        "properties": { "category": { "const": "object_detection" } },
+        "required": ["category"]
+      },
+      "then": { "required": ["annotations"] }
+    },
+    {
+      "description": "semantic_segmentation requires `masks`.",
+      "if": {
+        "properties": { "category": { "const": "semantic_segmentation" } },
+        "required": ["category"]
+      },
+      "then": { "required": ["masks"] }
+    },
+    {
+      "description": "text_classification requires `texts`.",
+      "if": {
+        "properties": { "category": { "const": "text_classification" } },
+        "required": ["category"]
+      },
+      "then": { "required": ["texts"] }
+    },
+    {
+      "description": "masked_language_modeling requires `sequences`.",
+      "if": {
+        "properties": { "category": { "const": "masked_language_modeling" } },
+        "required": ["category"]
+      },
+      "then": { "required": ["sequences"] }
+    },
+    {
+      "description": "tabular and time-series categories require `schema`.",
+      "if": {
+        "properties": {
+          "category": {
+            "enum": [
+              "tabular_classification",
+              "tabular_regression",
+              "time_series_forecasting",
+              "time_to_event_prediction"
+            ]
+          }
+        },
+        "required": ["category"]
+      },
+      "then": { "required": ["schema"] }
+    },
+    {
+      "description": "Regression-class tasks require an explicit label.policy decision (must be the object form).",
+      "if": {
+        "properties": {
+          "category": {
+            "enum": [
+              "tabular_regression",
+              "time_series_forecasting",
+              "time_to_event_prediction"
+            ]
+          }
+        },
+        "required": ["category"]
+      },
+      "then": {
+        "properties": {
+          "label": {
+            "type": "object",
+            "required": ["column", "policy"]
+          }
+        },
+        "required": ["label"]
+      }
+    },
+    {
+      "description": "Most categories require `label`.",
+      "if": {
+        "properties": {
+          "category": {
+            "enum": [
+              "image_classification",
+              "object_detection",
+              "keypoint_detection",
+              "semantic_segmentation",
+              "instance_segmentation",
+              "text_classification",
+              "tabular_classification"
+            ]
+          }
+        },
+        "required": ["category"]
+      },
+      "then": { "required": ["label"] }
+    }
+  ]
+}

@@ -20,6 +20,7 @@ from ..utils.constants import (
     BLUE,
     CYAN,
 )
+from ..utils import label_policy as label_policy_module
 from ..utils.validators_mapping import map_validators
 from ..file_transfer import map_file_transfer
 
@@ -39,7 +40,13 @@ class IngestionSummary(NamedTuple):
         inserted_records: Number of records inserted into database
         api_sent_records: Number of records sent to API
         failed_records: Number of records that failed processing
-        skipped_records: Number of records that were skipped
+        skipped_records: Number of records that were skipped for non-file
+            reasons (e.g. missing label / invalid intent / processing error)
+        file_transfer_failures: Number of records whose source file (image,
+            annotation, mask, text) was missing or unreadable, so the
+            record was dropped before the DB / API write. Tracked
+            separately from ``skipped_records`` so operators can
+            distinguish data-loss from validation skips (issue #99).
     """
 
     ingestor_id: str
@@ -49,6 +56,21 @@ class IngestionSummary(NamedTuple):
     api_sent_records: int
     failed_records: int
     skipped_records: int
+    file_transfer_failures: int = 0
+
+    @property
+    def has_failures(self) -> bool:
+        """True if any non-trivial failure occurred — DB insert short of
+        total, API short of inserted, file-transfer skipped any record,
+        or processing errored. Used to gate the "completed successfully"
+        banner so customers can't mistake a partial run for a clean one.
+        """
+        return (
+            self.failed_records > 0
+            or self.file_transfer_failures > 0
+            or self.inserted_records < self.total_records
+            or self.api_sent_records < self.inserted_records
+        )
 
 
 class BaseIngestor(ABC):
@@ -86,6 +108,7 @@ class BaseIngestor(ABC):
         category: Optional[str] = None,
         data_format: Optional[str] = None,
         file_options: Optional[Dict[str, Any]] = None,
+        label_policy: str = label_policy_module.PASSTHROUGH,
     ):
         """Initialize the base ingestor.
 
@@ -102,6 +125,13 @@ class BaseIngestor(ABC):
             category: Category of the data
             data_format: Format of the data
             file_options: File options to run before ingestion
+            label_policy: ``"passthrough"`` (default; classification — the
+                label value crosses the cluster boundary unchanged) or
+                ``"bucket"`` (regression-class — each label is replaced
+                with a stable hash-bucket ID before the API payload is
+                built, so raw target values never leak). Schema-validated
+                upstream by the YAML entrypoint; templates pass the
+                appropriate constant from :mod:`tracebloc_ingestor.utils.label_policy`.
         Raises:
             ValueError: If unique_id_column is not provided
         """
@@ -119,6 +149,7 @@ class BaseIngestor(ABC):
         self.category = category
         self.data_format = data_format
         self.file_options = file_options or {}
+        self.label_policy = label_policy
 
         # Default behavior is UUID-generated data_id (no source column leaves
         # the cluster). Opting into source-column mapping is allowed but loud:
@@ -195,7 +226,15 @@ class BaseIngestor(ABC):
             )
 
         if self.label_column:
-            cleaned_record["label"] = record.get(self.label_column)
+            # Apply the configured label policy at the latest possible moment
+            # before the API client builds its payload. For classification-class
+            # categories ``label_policy="passthrough"`` is a no-op; for
+            # regression-class categories ``"bucket"`` replaces the raw target
+            # with a stable hash-bucket ID so the value never leaks to the
+            # central backend (#44 / parent client#85).
+            cleaned_record["label"] = label_policy_module.apply(
+                record.get(self.label_column), self.label_policy
+            )
 
         if self.intent:
             cleaned_record["data_intent"] = self.intent
@@ -358,6 +397,7 @@ class BaseIngestor(ABC):
             "api_sent_records": 0,
             "failed_records": 0,
             "skipped_records": 0,
+            "file_transfer_failures": 0,
         }
 
         # Try to get total count for progress bar
@@ -382,16 +422,41 @@ class BaseIngestor(ABC):
                                 TaskCategory.TEXT_CLASSIFICATION,
                                 TaskCategory.SEMANTIC_SEGMENTATION,
                                 TaskCategory.KEYPOINT_DETECTION,
+                                TaskCategory.MASKED_LANGUAGE_MODELING,
                             ]:
                                 processed_record = map_file_transfer(
                                     self.category, processed_record, self.file_options
                                 )
-                                # Skip record if file transfer failed
+                                # Skip record if file transfer failed. Tracked as
+                                # `file_transfer_failures` (not `skipped_records`)
+                                # so the summary can flag the silent-data-loss
+                                # pattern from issue #99 — a missing source
+                                # would otherwise let the DB / API write succeed
+                                # and falsely report 100% success.
                                 if processed_record is None:
-                                    stats["skipped_records"] += 1
+                                    stats["file_transfer_failures"] += 1
+                                    filename = record.get("filename", "Unknown")
                                     logger.warning(
-                                        f"Skipping record due to file transfer failure: {record.get('filename', 'Unknown')}"
+                                        f"Skipping record due to file transfer failure: {filename}"
                                     )
+                                    # Also surface the failure to the caller
+                                    # so cli.run.main exits non-zero — without
+                                    # this, a 100%-failed run would still
+                                    # return [] and the K8s job marker would
+                                    # be `Succeeded` (the silent-data-loss
+                                    # pattern from #99).
+                                    failed_records.append(
+                                        {
+                                            "record": record,
+                                            "error": "file_transfer_failed",
+                                        }
+                                    )
+                                    # Advance the progress bar so an
+                                    # all-transfer-failure run doesn't leave
+                                    # tqdm stuck at 0/N — without this the
+                                    # `continue` skips the batch update that
+                                    # would normally tick the bar.
+                                    pbar.update(1)
                                     continue
 
                             batch.append(processed_record)
@@ -528,16 +593,31 @@ class BaseIngestor(ABC):
             raise
 
     def _log_summary(self, summary: IngestionSummary):
-        """Log ingestion summary in a clear, formatted way with enhanced visual appeal"""
+        """Log ingestion summary in a clear, formatted way with enhanced visual appeal.
 
-        # Calculate success rate
+        A "success" here means the record was inserted to the DB, sent to
+        the API, AND its sidecar file (image / annotation / mask / text)
+        was copied to the destination. Records whose source file was
+        missing are subtracted from the success count even if the DB
+        row landed — see issue #99 for the silent-data-loss pattern that
+        motivated this.
+        """
+
+        # A successful record requires DB insert AND API send AND, where
+        # applicable, a successful file transfer. File-transfer failures
+        # short-circuit before the DB write (they're skipped from the
+        # batch), so subtracting them from total_records gives the
+        # denominator's effective ceiling. Use inserted_records (the
+        # actual durable outcome) as the numerator.
         success_rate = 0
         if summary.total_records > 0:
             success_rate = (summary.inserted_records / summary.total_records) * 100
 
         # Determine overall status color
         status_color = (
-            GREEN if success_rate >= 90 else YELLOW if success_rate >= 70 else RED
+            GREEN if success_rate >= 90 and not summary.has_failures
+            else YELLOW if success_rate >= 70
+            else RED
         )
 
         print(f"\n{CYAN}{'═'*60}{RESET}")
@@ -562,11 +642,24 @@ class BaseIngestor(ABC):
         print(
             f"{BOLD}⏭️  Skipped Records:{RESET}        {YELLOW}{summary.skipped_records:,}{RESET}"
         )
+        file_transfer_color = (
+            RED if summary.file_transfer_failures > 0 else GREEN
+        )
+        print(
+            f"{BOLD}📁 File Transfer Failures:{RESET}  {file_transfer_color}{summary.file_transfer_failures:,}{RESET}"
+        )
         print(
             f"{BOLD}❌ Failed DB Insertion:{RESET}     {RED}{summary.failed_records:,}{RESET}"
         )
+        # Only count records that made it to a DB insert but didn't ship
+        # to the API. Using `total_records - api_sent_records` would also
+        # include file-transfer failures and DB failures (which never had
+        # a chance to ship), giving an inflated, double-counted total.
+        api_only_failures = max(
+            0, summary.inserted_records - summary.api_sent_records
+        )
         print(
-            f"{BOLD}❌ Failed to Send to API:{RESET}   {RED}{(summary.total_records - summary.api_sent_records):,}{RESET}"
+            f"{BOLD}❌ Failed to Send to API:{RESET}   {RED}{api_only_failures:,}{RESET}"
         )
         print(f"{CYAN}{'─'*60}{RESET}")
 
@@ -580,15 +673,36 @@ class BaseIngestor(ABC):
                 f"{BOLD}📊 Success Rate:{RESET} [{status_color}{bar}{RESET}] {status_color}{success_rate:.1f}%{RESET}"
             )
 
-        # Status message
-        if success_rate >= 95:
+        # Status banner. Any non-trivial failure (DB, API, or file-transfer)
+        # disqualifies the "completed successfully" message — a customer
+        # seeing 🎉 should be able to trust that no record was silently
+        # dropped. The three failure channels are mutually exclusive per
+        # record (file-transfer failures never reach DB; DB failures never
+        # reach API; api_only_failures are records that hit DB but didn't
+        # ship), so summing them gives a clean unique count instead of
+        # the double-count `total_records - api_sent_records` would produce.
+        total_failures = (
+            summary.failed_records
+            + summary.file_transfer_failures
+            + api_only_failures
+        )
+        if not summary.has_failures:
             status_msg = "🎉 Ingestion completed successfully!"
         elif success_rate >= 80:
-            status_msg = "👍 Most records processed successfully."
+            status_msg = (
+                f"⚠️  Ingestion completed with {total_failures:,} failure(s), "
+                "see logs."
+            )
         elif success_rate >= 60:
-            status_msg = "⚠️  Some records failed to process."
+            status_msg = (
+                f"⚠️  Ingestion completed with {total_failures:,} failure(s); "
+                "many records failed to process — see logs."
+            )
         else:
-            status_msg = "❌ Critical! Many records failed to process."
+            status_msg = (
+                f"❌ Critical! Ingestion completed with {total_failures:,} "
+                "failure(s); most records failed — see logs."
+            )
 
         print(f"{CYAN}{'─'*60}{RESET}")
         print(f"{BOLD}{status_color}{status_msg}{RESET}")

@@ -14,7 +14,7 @@ from .base import BaseIngestor
 from ..database import Database
 from ..api.client import APIClient
 from ..utils.constants import RESET, RED, YELLOW
-from ..validators import BaseValidator
+from ..utils import label_policy as label_policy_module
 
 logger = logging.getLogger(__name__)
 
@@ -46,8 +46,9 @@ class JSONIngestor(BaseIngestor):
         annotation_column: Optional[str] = None,
         category: Optional[str] = None,
         data_format: Optional[str] = None,
+        file_options: Optional[Dict[str, Any]] = None,
         log_level: Optional[int] = None,
-        validators: Optional[List[BaseValidator]] = None,
+        label_policy: str = label_policy_module.PASSTHROUGH,
     ):
         """Initialize JSON Ingestor.
 
@@ -64,8 +65,14 @@ class JSONIngestor(BaseIngestor):
             annotation_column: Name of the column to use as annotation
             category: Category of the data
             data_format: Format of the data
+            file_options: Options passed to the validator set resolved by
+                ``map_validators(category, file_options)``. For
+                ``time_to_event_prediction`` this carries ``time_column``;
+                for image categories it carries ``target_size`` / ``extension``.
             log_level: Level of the logger
-            validators: List of validators to run before ingestion
+            label_policy: Bucketing policy for the label value before it's
+                sent to the central backend. ``"passthrough"`` (default)
+                for classification; ``"bucket"`` for regression-class.
         """
         super().__init__(
             database,
@@ -79,11 +86,12 @@ class JSONIngestor(BaseIngestor):
             annotation_column,
             category,
             data_format,
-            log_level,
-            validators,
+            file_options,
+            label_policy=label_policy,
         )
         self.json_options = json_options or {}
-        logger.setLevel(log_level)
+        if log_level is not None:
+            logger.setLevel(log_level)
 
     def _validate_record(self, record: Dict[str, Any]) -> None:
         """Validate JSON record against schema.

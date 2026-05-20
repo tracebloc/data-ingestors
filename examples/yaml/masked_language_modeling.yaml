@@ -1,0 +1,10 @@
+# Masked language modeling: CSV manifest + .txt sidecar files (one per sequence).
+# Self-supervised — no label column required.
+# `sequences:` directory holds space-separated token sequences from graph random walks.
+apiVersion: tracebloc.io/v1
+kind: IngestConfig
+table: primekg_mlm_train
+intent: train
+category: masked_language_modeling
+csv: /data/labels_file.csv
+sequences: /data/sequences/

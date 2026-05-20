@@ -21,4 +21,7 @@ var/
 .git
 .gitignore
 README.md
-*.md 
+*.md
+# setup.py reads Readme.md for long_description — must be in the build
+# context so the wheel build (Dockerfile #45) succeeds.
+!Readme.md 

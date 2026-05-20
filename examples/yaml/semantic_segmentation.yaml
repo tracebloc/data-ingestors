@@ -1,0 +1,12 @@
+# Semantic segmentation: image + per-image PNG mask.
+# `masks:` directory is convention-mapped one-mask-per-image; the mask file
+# extension is forced to .png by the default validator set.
+apiVersion: tracebloc.io/v1
+kind: IngestConfig
+table: tumors_train
+intent: train
+category: semantic_segmentation
+csv: /data/labels.csv
+images: /data/images/
+masks: /data/masks/
+label: image_label

@@ -1,0 +1,33 @@
+# Custom processor escape hatch: when convention defaults aren't enough,
+# customers can plug in a `BaseProcessor` subclass *without* building their
+# own Docker image.
+#
+# How it lands in the cluster:
+#   - The Helm subchart (client#86) takes the script body as a chart value.
+#   - The chart writes a ConfigMap holding the script.
+#   - The ingestor pod mounts the ConfigMap at /custom/.
+#   - The official image dynamically imports the file, instantiates the named
+#     class with `args`, and applies it to every record before persistence.
+#
+# Example use case below: a healthcare dataset where one column holds
+# AES-encrypted PHI that must be decrypted in the cluster before the schema
+# validator runs. The decryption logic lives in the customer's own script.
+apiVersion: tracebloc.io/v1
+kind: IngestConfig
+table: phi_records_train
+intent: train
+category: tabular_classification
+csv: /data/records.csv
+schema:
+  patient_id: VARCHAR(255)
+  age: INT
+  encrypted_diagnosis: VARCHAR(1024)
+  outcome: VARCHAR(64)
+label: outcome
+spec:
+  processors:
+    - script: /custom/decrypt.py
+      class: AESDecryptor
+      args:
+        column: encrypted_diagnosis
+        key_secret: phi-key

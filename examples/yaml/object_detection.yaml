@@ -1,0 +1,12 @@
+# Object detection: image + Pascal VOC XML annotations.
+# `category: object_detection` implies validators include PascalVOCXMLValidator
+# and a separate FileTypeValidator(.xml) for the annotations directory.
+apiVersion: tracebloc.io/v1
+kind: IngestConfig
+table: visdrone_train
+intent: train
+category: object_detection
+csv: /data/labels.csv
+images: /data/images/
+annotations: /data/annotations/
+label: image_label
