@@ -28,9 +28,13 @@ jobs:
         run: |
           pip install dist/*.tar.gz
 
-      - name: Run basic import test
+      - name: Smoke-test installed sdist
+        # Sdists go through MANIFEST.in, a different packaging code path
+        # from the wheel's package_data. The v0.3.0-rc1 schema-missing bug
+        # surfaced here too. _load_schema() reads schema/ingest.v1.json
+        # from site-packages and fails fast if the file wasn't installed.
         run: |
-          python -c "import tracebloc_ingestor"
+          python -c "from tracebloc_ingestor.cli.run import _load_schema; print(_load_schema()['title'])"
 
       - name: Publish to GitHub Packages
         run: |

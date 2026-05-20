@@ -2,6 +2,42 @@
 
 This template demonstrates how to ingest tabular classification data from a CSV file into a database using the tracebloc_ingestor framework.
 
+## Quickstart — declarative (recommended)
+
+Ingest with ~12 lines of YAML using the official ingestor image (`ghcr.io/tracebloc/ingestor`). No Python edits, no Dockerfile to build.
+
+> **Prerequisite:** the chart doesn't transport data into the cluster. Stage your files on the cluster's shared PVC first — see the [data-staging recipe](https://github.com/tracebloc/client/blob/develop/ingestor/README.md#stage-your-data-on-the-shared-pvc) in the chart docs (kubectl cp pattern for small datasets, init-container sync for production).
+
+**1. Stage the CSV** on the shared PVC at `/data/shared/<your-prefix>/<file>.csv`.
+
+**2. Write `ingest.yaml`:**
+
+```yaml
+apiVersion: tracebloc.io/v1
+kind: IngestConfig
+category: tabular_classification
+table: churn_train
+intent: train
+csv: /data/shared/churn/customers.csv
+schema:
+  age: INT
+  tenure_months: INT
+  monthly_charge: FLOAT
+  contract_type: VARCHAR(64)
+  churned: VARCHAR(8)
+label: churned
+```
+
+**3. Install:**
+
+```bash
+helm install my-tabular-dataset tracebloc/ingestor \
+  --namespace tracebloc \
+  --set-file ingestConfig=./ingest.yaml
+```
+
+The `schema:` block maps your CSV columns to SQL types — required for tabular categories. Canonical example: [`examples/yaml/tabular_classification.yaml`](../../examples/yaml/tabular_classification.yaml). Full chart docs: [`tracebloc/client/ingestor/README.md`](https://github.com/tracebloc/client/blob/develop/ingestor/README.md).
+
 ## Directory Structure
 
 ```
