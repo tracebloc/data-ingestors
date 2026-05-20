@@ -6,7 +6,7 @@ This template demonstrates how to ingest pre-tokenized text sequences for masked
 
 Ingest with ~7 lines of YAML using the official ingestor image (`ghcr.io/tracebloc/ingestor`). No Python edits, no Dockerfile to build.
 
-> **Prerequisite:** the chart doesn't transport data into the cluster. Stage your files on the cluster's shared PVC first — see the [data-staging recipe](https://github.com/tracebloc/client/blob/main/ingestor/README.md#stage-your-data-on-the-shared-pvc) in the chart docs (kubectl cp pattern for small datasets, init-container sync for production).
+> **Prerequisite:** the chart doesn't transport data into the cluster. Stage your files on the cluster's shared PVC first — see the [data-staging recipe](https://github.com/tracebloc/client/blob/develop/ingestor/README.md#stage-your-data-on-the-shared-pvc) in the chart docs (kubectl cp pattern for small datasets, init-container sync for production).
 
 **1. Stage the data** on the shared PVC at `/data/shared/<your-prefix>/` with a `sequences/` subdirectory holding the per-record `.txt` sequence files.
 
@@ -30,7 +30,7 @@ helm install my-mlm-dataset tracebloc/ingestor \
   --set-file ingestConfig=./ingest.yaml
 ```
 
-MLM is unsupervised — no `label:` field; the tokenizer validator checks that sequences match the configured vocabulary. Canonical example: [`examples/yaml/masked_language_modeling.yaml`](../../examples/yaml/masked_language_modeling.yaml). Full chart docs: [`tracebloc/client/ingestor/README.md`](https://github.com/tracebloc/client/blob/main/ingestor/README.md).
+MLM is unsupervised — no `label:` field; the tokenizer validator checks that sequences match the configured vocabulary. Canonical example: [`examples/yaml/masked_language_modeling.yaml`](../../examples/yaml/masked_language_modeling.yaml). Full chart docs: [`tracebloc/client/ingestor/README.md`](https://github.com/tracebloc/client/blob/develop/ingestor/README.md).
 
 ## Directory Structure
 
