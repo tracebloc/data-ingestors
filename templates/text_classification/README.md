@@ -6,7 +6,7 @@ This template demonstrates how to ingest text classification data with `.txt` fi
 
 Ingest with ~10 lines of YAML using the official ingestor image (`ghcr.io/tracebloc/ingestor`). No Python edits, no Dockerfile to build.
 
-> **Prerequisite:** the chart doesn't transport data into the cluster. Stage your files on the cluster's shared PVC first — see the [data-staging recipe](https://github.com/tracebloc/client/blob/main/ingestor/README.md#stage-your-data-on-the-shared-pvc) in the chart docs (kubectl cp pattern for small datasets, init-container sync for production).
+> **Prerequisite:** the chart doesn't transport data into the cluster. Stage your files on the cluster's shared PVC first — see the [data-staging recipe](https://github.com/tracebloc/client/blob/develop/ingestor/README.md#stage-your-data-on-the-shared-pvc) in the chart docs (kubectl cp pattern for small datasets, init-container sync for production).
 
 **1. Stage the data** on the shared PVC at `/data/shared/<your-prefix>/` with a `texts/` subdirectory holding the `.txt` files.
 
@@ -34,7 +34,7 @@ helm install my-text-dataset tracebloc/ingestor \
   --set-file ingestConfig=./ingest.yaml
 ```
 
-Canonical example: [`examples/yaml/text_classification.yaml`](../../examples/yaml/text_classification.yaml). Full chart docs: [`tracebloc/client/ingestor/README.md`](https://github.com/tracebloc/client/blob/main/ingestor/README.md).
+Canonical example: [`examples/yaml/text_classification.yaml`](../../examples/yaml/text_classification.yaml). Full chart docs: [`tracebloc/client/ingestor/README.md`](https://github.com/tracebloc/client/blob/develop/ingestor/README.md).
 
 ## Directory Structure
 

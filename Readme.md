@@ -55,7 +55,7 @@ The `tracebloc/client` parent chart bootstraps the cluster (jobs-manager, MySQL,
 
 **2. Stage your data on the cluster's shared PVC.**
 
-The chart **doesn't transport data into the cluster** — it points at data already accessible to the cluster's shared PVC (`client-pvc` by default, mounted at `/data/shared/` inside the ingestor Pod). Before installing, get your raw files there. The simplest pattern for a small dataset is a throwaway `kubectl cp` Pod that mounts the PVC; for production you'd typically use an init container with cloud-storage sync. Full staging recipe + manifests → [`tracebloc/client/ingestor/README.md#stage-your-data-on-the-shared-pvc`](https://github.com/tracebloc/client/blob/main/ingestor/README.md#stage-your-data-on-the-shared-pvc).
+The chart **doesn't transport data into the cluster** — it points at data already accessible to the cluster's shared PVC (`client-pvc` by default, mounted at `/data/shared/` inside the ingestor Pod). Before installing, get your raw files there. The simplest pattern for a small dataset is a throwaway `kubectl cp` Pod that mounts the PVC; for production you'd typically use an init container with cloud-storage sync. Full staging recipe + manifests → [`tracebloc/client/ingestor/README.md#stage-your-data-on-the-shared-pvc`](https://github.com/tracebloc/client/blob/develop/ingestor/README.md#stage-your-data-on-the-shared-pvc).
 
 **3. Write your `ingest.yaml`.**
 
@@ -82,7 +82,7 @@ helm install my-cats-dogs tracebloc/ingestor \
 
 The ingestor runs once: validates your data, copies files into the destination directory on the PVC, inserts rows into MySQL, sends metadata to the tracebloc backend, then exits. Repeat per dataset. Customers never build an image, never write a Dockerfile, never track digest versions — the cluster's auto-upgrade flow keeps the official image current.
 
-Full chart docs (data-staging recipe, schema, every category, update model, verification, override knobs) → **[`tracebloc/client/ingestor/README.md`](https://github.com/tracebloc/client/blob/main/ingestor/README.md)**.
+Full chart docs (data-staging recipe, schema, every category, update model, verification, override knobs) → **[`tracebloc/client/ingestor/README.md`](https://github.com/tracebloc/client/blob/develop/ingestor/README.md)**.
 
 ## Advanced: custom processors (legacy Python pattern)
 
