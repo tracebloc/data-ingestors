@@ -53,11 +53,21 @@ helm repo update
 
 The `tracebloc/client` parent chart bootstraps the cluster (jobs-manager, MySQL, RBAC). The `tracebloc/ingestor` subchart submits per-dataset ingestion runs against it.
 
+> **Already installed the client via the one-liner (`bash <(curl -fsSL https://tracebloc.io/i.sh)`)?** Use `--reset-then-reuse-values` so the helm upgrade doesn't drop the values the installer applied:
+>
+> ```bash
+> helm upgrade <workspace> tracebloc/client -n <namespace> --reset-then-reuse-values
+> ```
+>
+> Append `--version <version-number>` to pin a specific chart version.
+
 **2. Stage your data on the cluster's shared PVC.**
 
 The chart **doesn't transport data into the cluster** — it points at data already accessible to the cluster's shared PVC (`client-pvc` by default, mounted at `/data/shared/` inside the ingestor Pod). Before installing, get your raw files there. The simplest pattern for a small dataset is a throwaway `kubectl cp` Pod that mounts the PVC; for production you'd typically use an init container with cloud-storage sync. Full staging recipe + manifests → [`tracebloc/client/ingestor/README.md#stage-your-data-on-the-shared-pvc`](https://github.com/tracebloc/client/blob/develop/ingestor/README.md#stage-your-data-on-the-shared-pvc).
 
 **3. Write your `ingest.yaml`.**
+
+The example below is for `image_classification`. **Other categories require different fields** — e.g. `tabular_classification` has no `images:` and instead needs a typed `schema:` block. Don't copy this one blindly; grab the matching file from [`examples/yaml/`](examples/yaml/) (one per category) and edit from there. Per-category sample data and READMEs live under [`templates/`](https://github.com/tracebloc/data-ingestors/tree/master/templates).
 
 ```yaml
 apiVersion: tracebloc.io/v1
@@ -70,7 +80,7 @@ images: /data/shared/cats-dogs/images/
 label: label
 ```
 
-The schema is the same for every category; the `category` field picks the validator set, file-extension defaults, and column conventions. The `csv:` / `images:` (etc.) paths are *paths inside the ingestor Pod*, which is the PVC mount you populated in step 2. See [`examples/yaml/`](examples/yaml/) for a working example per category.
+The top-level shape (`apiVersion`, `kind`, `category`, `table`, `intent`, `label`) is the same for every category; the `category` field picks the validator set, file-extension defaults, and column conventions, and the data-source fields (`csv:`, `images:`, `schema:`, …) vary per category. The paths are *paths inside the ingestor Pod*, which is the PVC mount you populated in step 2.
 
 **4. Install once per dataset.**
 
