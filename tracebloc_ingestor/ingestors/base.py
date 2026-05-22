@@ -180,8 +180,7 @@ class BaseIngestor(ABC):
         # being sent to the backend as part of meta_data.
         if schema:
             self.file_options["schema"] = table_schema
-            if "number_of_columns" in self.file_options:
-                self.file_options["number_of_columns"] = len(table_schema)
+            self.file_options["number_of_columns"] = len(table_schema)
 
         # Ensure table exists
         self.table = self.database.create_table(table_name, table_schema)

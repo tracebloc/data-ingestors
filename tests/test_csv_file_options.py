@@ -40,6 +40,9 @@ def test_yaml_path_empty_file_options_keeps_cleaned_schema():
         "subclass init wiped the schema base injected"
     )
     assert ing.file_options["schema"] == {"feature_a": "str", "feature_b": "int"}
+    # number_of_columns must reflect the cleaned schema even when the YAML
+    # path passes file_options={} (i.e. without a pre-seeded key).
+    assert ing.file_options["number_of_columns"] == 2
 
 
 def test_template_path_existing_file_options_sanitized_and_resized():

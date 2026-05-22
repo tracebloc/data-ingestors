@@ -99,7 +99,9 @@ DEFAULT_IMAGE_FILE_OPTIONS_BY_CATEGORY: Dict[str, Dict[str, Any]] = {
     TaskCategory.IMAGE_CLASSIFICATION:    {"target_size": [512, 512], "extension": ".jpg"},
     TaskCategory.SEMANTIC_SEGMENTATION:   {"target_size": [512, 512], "extension": ".jpg"},
     TaskCategory.OBJECT_DETECTION:        {"target_size": [448, 448], "extension": ".jpg"},
-    TaskCategory.KEYPOINT_DETECTION:      {"target_size": [448, 448], "extension": ".jpg"},
+    # keypoint_detection: no target_size default — the customer's pose model
+    # dictates input resolution, so the schema requires it top-level.
+    TaskCategory.KEYPOINT_DETECTION:      {"extension": ".jpg"},
     # No template exists yet for instance_segmentation; mirror semantic for
     # forward-compatibility, revisit when the template lands.
     TaskCategory.INSTANCE_SEGMENTATION:   {"target_size": [512, 512], "extension": ".jpg"},
@@ -257,6 +259,20 @@ def resolve(config: Dict[str, Any]) -> ResolvedConfig:
     #     other spec.file_options key behaves.
     if category == TaskCategory.TIME_TO_EVENT_PREDICTION and resolved.time_column:
         resolved.file_options.setdefault("time_column", resolved.time_column)
+
+    # 7b. Bridge top-level `target_size` (any image category — customer
+    #     override, or the only source for keypoint_detection) and
+    #     `number_of_keypoints` (keypoint_detection only — schema requires it).
+    #     Precedence is spec.file_options > top-level > category default; since
+    #     spec was already merged in step 7, top-level only fills in when spec
+    #     didn't set it.
+    if "target_size" in config and "target_size" not in spec_file_options:
+        resolved.file_options["target_size"] = list(config["target_size"])
+    if (
+        "number_of_keypoints" in config
+        and "number_of_keypoints" not in spec_file_options
+    ):
+        resolved.file_options["number_of_keypoints"] = config["number_of_keypoints"]
 
     # 8. annotation_column — keypoint_detection's existing template uses
     #    column "Annotation" (the keypoint coords carried in the CSV). The
