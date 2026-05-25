@@ -203,6 +203,8 @@ if __name__ == "__main__":
 
 [Platform](https://ai.tracebloc.io/) · [Docs](https://docs.tracebloc.io/) · [Data preparation guide](https://docs.tracebloc.io/create-use-case/prepare-dataset) · [Discord](https://discord.gg/tracebloc)
 
+Maintainers: see [RELEASING.md](RELEASING.md) for the release procedure.
+
 ## License
 
 Apache 2.0 — see [LICENSE](LICENSE).

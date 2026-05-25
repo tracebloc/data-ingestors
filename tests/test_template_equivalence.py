@@ -31,10 +31,13 @@ Two intentional, documented divergences from the templates (per #44 design):
    asserts ``label_policy="bucket"`` for those three categories rather
    than asserting payload equivalence on the label.
 
-A third, non-functional difference: tabular templates set
-``file_options={"number_of_columns": len(schema)}``. The
-``number_of_columns`` field is dead code (no consumer in the package;
-``grep`` confirms). YAML path omits it; harness allows the diff.
+A third difference: tabular templates set
+``file_options={"number_of_columns": len(schema)}`` at the call site.
+The YAML resolver returns ``file_options={}`` for tabular categories —
+this test asserts that. ``number_of_columns`` is then injected at
+runtime by ``BaseIngestor.__init__`` (against the *cleaned* schema, with
+label/annotation/unique_id columns removed) for both paths, so the
+metadata sent to the backend is equivalent.
 """
 
 from __future__ import annotations
@@ -130,9 +133,10 @@ CASES = [
     ),
 
     # -----------------------------------------------------------------------
-    # keypoint_detection — template uses 448×448, label_column="image_label",
-    # annotation_column="Annotation", unique_id_column="filename" (opt-in
-    # column-mapping per #44 default-UUID change).
+    # keypoint_detection — template uses 256×256 with 9 keypoints. No
+    # convention defaults for these (both dataset-specific); schema requires
+    # them top-level. label_column="image_label", annotation_column="Annotation",
+    # unique_id_column="filename" (opt-in column-mapping per #44).
     # -----------------------------------------------------------------------
     pytest.param(
         _yaml(
@@ -142,6 +146,8 @@ CASES = [
             csv="/data/labels.csv",
             images="/data/images/",
             label="image_label",
+            target_size=[256, 256],
+            number_of_keypoints=9,
             data_id={"strategy": "column", "column": "filename"},
         ),
         {
@@ -152,7 +158,11 @@ CASES = [
             "label_policy": PASSTHROUGH,
             "unique_id_column": "filename",
             "annotation_column": "Annotation",  # convention default per category
-            "file_options": {"target_size": [448, 448], "extension": FileExtension.JPG},
+            "file_options": {
+                "target_size": [256, 256],
+                "extension": FileExtension.JPG,
+                "number_of_keypoints": 9,
+            },
         },
         id="keypoint_detection",
     ),
@@ -231,7 +241,8 @@ CASES = [
             "label_policy": PASSTHROUGH,
             "unique_id_column": None,
             "annotation_column": None,
-            # number_of_columns is dead code in templates — YAML path omits it.
+            # resolve() returns empty file_options for tabular; base.py
+            # injects number_of_columns from the cleaned schema at runtime.
             "file_options": {},
         },
         id="tabular_classification",

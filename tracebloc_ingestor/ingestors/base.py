@@ -31,6 +31,18 @@ logger = logging.getLogger(__name__)
 __all__ = ["BaseIngestor", "IngestionSummary"]
 
 
+# Tabular-family categories carry `number_of_columns` in file_options;
+# image / text categories do not (a schema may still be supplied — e.g.
+# keypoint_detection's "Visibility" column — but a column count there
+# would be a misleading metric).
+_TABULAR_FAMILY_CATEGORIES = frozenset({
+    TaskCategory.TABULAR_CLASSIFICATION,
+    TaskCategory.TABULAR_REGRESSION,
+    TaskCategory.TIME_SERIES_FORECASTING,
+    TaskCategory.TIME_TO_EVENT_PREDICTION,
+})
+
+
 class IngestionSummary(NamedTuple):
     """Data class to hold ingestion summary statistics.
 
@@ -180,7 +192,12 @@ class BaseIngestor(ABC):
         # being sent to the backend as part of meta_data.
         if schema:
             self.file_options["schema"] = table_schema
-            if "number_of_columns" in self.file_options:
+            # number_of_columns is only meaningful for tabular-family
+            # categories — that's where the validator + backend metadata
+            # consume it. Image categories may also carry a schema (e.g.
+            # keypoint_detection's "Visibility" column) but the count
+            # would be misleading there, so don't inject it.
+            if self.category in _TABULAR_FAMILY_CATEGORIES:
                 self.file_options["number_of_columns"] = len(table_schema)
 
         # Ensure table exists

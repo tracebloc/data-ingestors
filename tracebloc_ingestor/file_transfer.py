@@ -360,6 +360,22 @@ def map_file_transfer(
         return result
     elif task_category == TaskCategory.MASKED_LANGUAGE_MODELING:
         result = text_transfer(record, options, src_subdir="sequences")
+        # Copy tokenizer.json once (if provided by the user).
+        # The client's MLM strategy looks for tokenizer.json at
+        # DEST_PATH/tokenizer.json to use the user's custom tokenizer
+        # instead of falling back to bert-base-uncased.  Without this
+        # copy the tokenizer vocab_size may mismatch the model's
+        # nn.Embedding, causing CUDA device-side assert at training.
+        tokenizer_src = os.path.join(config.SRC_PATH, "tokenizer.json")
+        tokenizer_dest = os.path.join(config.DEST_PATH, "tokenizer.json")
+        if (
+            os.path.isfile(tokenizer_src)
+            and not os.path.exists(tokenizer_dest)
+        ):
+            _copy_file_with_retry(tokenizer_src, tokenizer_dest)
+            logger.info(
+                f"{GREEN}Copied tokenizer.json to {config.DEST_PATH}{RESET}"
+            )
         return result
     elif task_category == TaskCategory.SEMANTIC_SEGMENTATION:
         # Atomic: only copy image+mask together. Pre-verify both sources
