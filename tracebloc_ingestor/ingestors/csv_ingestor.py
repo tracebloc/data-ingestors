@@ -24,6 +24,20 @@ logger.setLevel(config.LOG_LEVEL)
 __all__ = ["Ingestor"]
 
 
+# Tabular-family categories parse CSVs with a wider null sentinel set so the
+# strings "NA" / "NULL" / "None" become NaN instead of being stored verbatim.
+# This matches what the legacy templates (templates/tabular_*/...) passed
+# explicitly via csv_options; the YAML path can't express it because
+# schema/ingest.v1.json restricts spec.csv_options to a small whitelist.
+_TABULAR_NA_VALUES = ["", "NA", "NULL", "None"]
+_TABULAR_FAMILY_CATEGORIES = frozenset({
+    TaskCategory.TABULAR_CLASSIFICATION,
+    TaskCategory.TABULAR_REGRESSION,
+    TaskCategory.TIME_SERIES_FORECASTING,
+    TaskCategory.TIME_TO_EVENT_PREDICTION,
+})
+
+
 class CSVIngestor(BaseIngestor):
     """A specialized ingestor for CSV files.
 
@@ -157,11 +171,20 @@ class CSVIngestor(BaseIngestor):
         try:
             chunk_size = self.csv_options.pop("chunk_size", 1000)
 
+            # Wider null sentinel for tabular-family categories — matches the
+            # legacy templates and prevents "NA"/"NULL"/"None" string cells
+            # from being stored verbatim instead of as NaN.
+            na_values = (
+                _TABULAR_NA_VALUES
+                if self.category in _TABULAR_FAMILY_CATEGORIES
+                else [""]
+            )
+
             # Enhanced default options for pandas
             default_options = {
                 "dtype": None,  # Let pandas infer types initially
                 "keep_default_na": False,
-                "na_values": [""],
+                "na_values": na_values,
                 "encoding": "utf-8",
                 "on_bad_lines": "warn",
                 "low_memory": False,  # Prevent mixed type inference warnings

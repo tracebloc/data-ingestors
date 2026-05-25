@@ -138,6 +138,20 @@
       "description": "Name of the time column for time_to_event_prediction. Falls back to a column named `time` if unset."
     },
 
+    "target_size": {
+      "type": "array",
+      "items": { "type": "integer", "minimum": 1 },
+      "minItems": 2,
+      "maxItems": 2,
+      "description": "[height, width] to resize images to. Required for keypoint_detection (no default — depends on the customer's pose model). Other image categories use category defaults if unset."
+    },
+
+    "number_of_keypoints": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Number of keypoints per sample. Required for keypoint_detection — dataset-specific (e.g. 17 for COCO pose, 9 for the upper-body sample in templates/keypoint_detection)."
+    },
+
     "data_id": {
       "type": "object",
       "additionalProperties": false,
@@ -355,6 +369,14 @@
         },
         "required": ["label"]
       }
+    },
+    {
+      "description": "keypoint_detection requires customer-supplied `target_size` and `number_of_keypoints` (no convention defaults — both are dataset-specific).",
+      "if": {
+        "properties": { "category": { "const": "keypoint_detection" } },
+        "required": ["category"]
+      },
+      "then": { "required": ["target_size", "number_of_keypoints"] }
     },
     {
       "description": "Most categories require `label`.",

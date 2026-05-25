@@ -1,5 +1,10 @@
 # Keypoint detection: image + per-image keypoint coordinates carried in the CSV.
 # Same validator surface as image_classification (no XML, no masks).
+#
+# Unlike other image categories, keypoint_detection has no convention defaults
+# for `target_size` or `number_of_keypoints` — both are dataset-specific (pose
+# model input resolution + dataset's keypoint schema), so the schema requires
+# them top-level.
 apiVersion: tracebloc.io/v1
 kind: IngestConfig
 table: pose_train
@@ -8,3 +13,5 @@ category: keypoint_detection
 csv: /data/labels.csv
 images: /data/images/
 label: image_label
+target_size: [256, 256]      # height, width — must match your pose model's input
+number_of_keypoints: 9        # e.g. 17 for COCO pose, 9 for the upper-body sample

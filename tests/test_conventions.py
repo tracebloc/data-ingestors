@@ -133,13 +133,15 @@ def test_object_detection_gets_448x448_default():
     assert r.file_options["target_size"] == [448, 448]
 
 
-def test_keypoint_detection_gets_448x448_default():
-    """Keypoint detection's template also uses 448×448."""
+def test_keypoint_detection_bridges_top_level_fields():
+    """Keypoint detection has no convention defaults for target_size or
+    number_of_keypoints — both are dataset-specific. The example YAML
+    supplies them top-level; resolve() must bridge them into file_options
+    so validators see them at the same key the template path uses."""
     r = resolve(_load("keypoint_detection.yaml"))
-    assert r.file_options == DEFAULT_IMAGE_FILE_OPTIONS_BY_CATEGORY[
-        TaskCategory.KEYPOINT_DETECTION
-    ]
-    assert r.file_options["target_size"] == [448, 448]
+    assert r.file_options["extension"] == ".jpg"
+    assert r.file_options["target_size"] == [256, 256]
+    assert r.file_options["number_of_keypoints"] == 9
 
 
 def test_text_classification_gets_text_file_option_defaults():

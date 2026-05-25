@@ -13,9 +13,10 @@ populated with a fresh empty dict — the cleaned schema (and
 from unittest.mock import MagicMock
 
 from tracebloc_ingestor.ingestors.csv_ingestor import CSVIngestor
+from tracebloc_ingestor.utils.constants import TaskCategory
 
 
-def _make_ingestor(schema, file_options, label_column=None):
+def _make_ingestor(schema, file_options, label_column=None, category=None):
     """Build a CSVIngestor with mock DB/API so ``BaseIngestor.__init__``
     runs end-to-end (including ``database.create_table``)."""
     database = MagicMock()
@@ -27,19 +28,29 @@ def _make_ingestor(schema, file_options, label_column=None):
         schema=schema,
         file_options=file_options,
         label_column=label_column,
+        category=category,
     )
 
 
 def test_yaml_path_empty_file_options_keeps_cleaned_schema():
     """YAML path: caller passes file_options={}. The cleaned schema base
-    injects must survive subclass init."""
+    injects must survive subclass init, and tabular categories must get
+    ``number_of_columns`` derived from the cleaned schema."""
     schema = {"feature_a": "str", "feature_b": "int", "label": "str"}
-    ing = _make_ingestor(schema=schema, file_options={}, label_column="label")
+    ing = _make_ingestor(
+        schema=schema,
+        file_options={},
+        label_column="label",
+        category=TaskCategory.TABULAR_CLASSIFICATION,
+    )
 
     assert "schema" in ing.file_options, (
         "subclass init wiped the schema base injected"
     )
     assert ing.file_options["schema"] == {"feature_a": "str", "feature_b": "int"}
+    # number_of_columns must reflect the cleaned schema even when the YAML
+    # path passes file_options={} (i.e. without a pre-seeded key).
+    assert ing.file_options["number_of_columns"] == 2
 
 
 def test_template_path_existing_file_options_sanitized_and_resized():
@@ -53,12 +64,30 @@ def test_template_path_existing_file_options_sanitized_and_resized():
         "custom_flag": True,  # unrelated keys must be preserved
     }
     ing = _make_ingestor(
-        schema=schema, file_options=file_options, label_column="label"
+        schema=schema,
+        file_options=file_options,
+        label_column="label",
+        category=TaskCategory.TABULAR_CLASSIFICATION,
     )
 
     assert ing.file_options["schema"] == {"feature_a": "str", "feature_b": "int"}
     assert ing.file_options["number_of_columns"] == 2
     assert ing.file_options["custom_flag"] is True
+
+
+def test_non_tabular_schema_does_not_get_number_of_columns():
+    """Non-tabular categories may still carry a schema (e.g. keypoint
+    detection's "Visibility" column) — but ``number_of_columns`` is a
+    tabular-only metric and must not be injected for them."""
+    schema = {"Visibility": "TEXT"}
+    ing = _make_ingestor(
+        schema=schema,
+        file_options={},
+        category=TaskCategory.KEYPOINT_DETECTION,
+    )
+
+    assert ing.file_options["schema"] == {"Visibility": "TEXT"}
+    assert "number_of_columns" not in ing.file_options
 
 
 def test_file_options_none_keeps_cleaned_schema():
