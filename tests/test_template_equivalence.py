@@ -222,6 +222,31 @@ CASES = [
     ),
 
     # -----------------------------------------------------------------------
+    # masked_language_modeling — self-supervised: no label_column. Template
+    # uses data_format=TEXT, extension=.txt, intent=TRAIN.
+    # -----------------------------------------------------------------------
+    pytest.param(
+        _yaml(
+            category=TaskCategory.MASKED_LANGUAGE_MODELING,
+            table="masked_language_modeling_train",
+            intent="train",
+            csv="/data/labels.csv",
+            sequences="/data/sequences/",
+        ),
+        {
+            "category": TaskCategory.MASKED_LANGUAGE_MODELING,
+            "data_format": DataFormat.TEXT,
+            "intent": Intent.TRAIN,
+            "label_column": "",
+            "label_policy": PASSTHROUGH,
+            "unique_id_column": None,
+            "annotation_column": None,
+            "file_options": {"extension": FileExtension.TXT},
+        },
+        id="masked_language_modeling",
+    ),
+
+    # -----------------------------------------------------------------------
     # tabular_classification — template label_column="name"
     # -----------------------------------------------------------------------
     pytest.param(
