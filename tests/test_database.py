@@ -135,9 +135,12 @@ def _seed_table(db):
         db.create_table("tbl", {"feat": "INT"})
 
 
-def test_insert_batch_empty_returns_dict(db):
-    result = db.insert_batch("tbl", [])
-    assert result == {"success_ids": [], "failures": []}
+def test_insert_batch_empty_returns_empty_tuple(db):
+    # Empty input returns the same (success_ids, failures) tuple shape as the
+    # non-empty path, so callers can unconditionally unpack two values.
+    ids, failures = db.insert_batch("tbl", [])
+    assert ids == []
+    assert failures == []
 
 
 def test_insert_batch_success(db, mock_engine_factory):

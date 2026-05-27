@@ -280,9 +280,8 @@ def test_validate_xml_files_empty(v):
 def test_validate_single_xml_generic_error(v, tmp_path):
     f = tmp_path / "a.xml"
     f.write_text("<annotation></annotation>")
-    with patch.object(base_mod, "Session"):
-        with patch("xml.etree.ElementTree.parse", side_effect=RuntimeError("boom")):
-            res = v._validate_single_xml(f)
+    with patch("xml.etree.ElementTree.parse", side_effect=RuntimeError("boom")):
+        res = v._validate_single_xml(f)
     assert not res.is_valid
     assert "Unexpected error" in res.errors[0]
 
