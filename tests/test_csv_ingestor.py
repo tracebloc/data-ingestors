@@ -42,7 +42,7 @@ def test_read_data_missing_file_raises():
         list(ing.read_data("/no/such/file.csv"))
 
 
-def test_read_data_strips_column_whitespace(make_csv, tmp_path):
+def test_read_data_strips_column_whitespace(tmp_path):
     p = tmp_path / "d.csv"
     p.write_text(" a , b \n1,2\n")
     ing = make_csv_ingestor(schema={"a": "INT", "b": "INT"})
