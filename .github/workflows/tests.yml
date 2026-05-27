@@ -1,0 +1,74 @@
+name: Tests
+
+# Runs the pytest suite on every PR + push to develop/master/main.
+# Matrix: Python 3.11 + 3.12 (matches setup.py: python_requires=">=3.11").
+# Coverage measured but not yet gated by --cov-fail-under; lock that in once
+# the baseline number is recorded.
+#
+# After this lands and stabilizes:
+#   - 'pytest (3.11)' + 'pytest (3.12)' become required status checks via
+#     branch protection.
+
+on:
+  pull_request:
+    branches: [develop, master, main]
+  push:
+    branches: [develop, master, main]
+
+concurrency:
+  group: tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    name: pytest
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.12']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+
+      - name: Install package + test deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -e .
+
+      - name: Run pytest with coverage
+        run: |
+          pytest \
+            --cov=tracebloc_ingestor \
+            --cov-report=term \
+            --cov-report=xml \
+            --cov-report=html
+
+      - name: Coverage summary
+        if: always()
+        run: |
+          if [ -f .coverage ]; then
+            echo "## Coverage (Python ${{ matrix.python }})" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            coverage report >> "$GITHUB_STEP_SUMMARY" || true
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload coverage HTML
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-html-py${{ matrix.python }}
+          path: htmlcov/
+          retention-days: 7
+          if-no-files-found: warn
