@@ -53,18 +53,6 @@ def _voc_xml(objects=None, width=640, height=480, depth=3, segmented="0"):
 
 
 @pytest.fixture
-def write_xml(tmp_path):
-    """Write XML text into SRC_PATH and point config at it via env."""
-
-    def _write(xml_text, *, name="ann.xml", monkeypatch=None):
-        path = tmp_path / name
-        path.write_text(xml_text, encoding="utf-8")
-        return path
-
-    return _write
-
-
-@pytest.fixture
 def validator():
     return PascalVOCXMLValidator()
 
