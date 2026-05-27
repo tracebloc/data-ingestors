@@ -19,8 +19,10 @@ from tracebloc_ingestor.utils.constants import TaskCategory
 
 
 def _client(**overrides):
+    # TITLE=None by default so create_dataset's title-generation path is
+    # deterministic regardless of any TITLE exported in the host/CI env.
     defaults = dict(BACKEND_TOKEN="tok", CLIENT_USERNAME=None,
-                    CLIENT_PASSWORD=None, EDGE_ENV="prod")
+                    CLIENT_PASSWORD=None, EDGE_ENV="prod", TITLE=None)
     defaults.update(overrides)
     return APIClient(Config(**defaults))
 
