@@ -28,7 +28,7 @@ def _client(**overrides):
 def _resp(status=200, json_body=None, text=""):
     r = MagicMock()
     r.status_code = status
-    r.json.return_value = json_body or {}
+    r.json.return_value = json_body if json_body is not None else {}
     r.text = text
     return r
 
