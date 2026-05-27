@@ -222,8 +222,10 @@ CASES = [
     ),
 
     # -----------------------------------------------------------------------
-    # masked_language_modeling — self-supervised: no label_column. Template
-    # uses data_format=TEXT, extension=.txt, intent=TRAIN.
+    # masked_language_modeling — self-supervised, no label column. CSV manifest
+    # points at .txt sidecar files containing space-separated token sequences;
+    # the MLM client masks tokens on-the-fly during training. Sidecar dir is
+    # ``sequences/`` (not ``texts/``) to signal it's pre-tokenized, not raw text.
     # -----------------------------------------------------------------------
     pytest.param(
         _yaml(
@@ -237,7 +239,7 @@ CASES = [
             "category": TaskCategory.MASKED_LANGUAGE_MODELING,
             "data_format": DataFormat.TEXT,
             "intent": Intent.TRAIN,
-            "label_column": "",
+            "label_column": "",  # self-supervised — no label
             "label_policy": PASSTHROUGH,
             "unique_id_column": None,
             "annotation_column": None,
