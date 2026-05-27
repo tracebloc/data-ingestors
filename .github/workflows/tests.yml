@@ -2,8 +2,8 @@ name: Tests
 
 # Runs the pytest suite on every PR + push to develop/master/main.
 # Matrix: Python 3.11 + 3.12 (matches setup.py: python_requires=">=3.11").
-# Coverage measured but not yet gated by --cov-fail-under; lock that in once
-# the baseline number is recorded.
+# Coverage is gated at --cov-fail-under=90 (the suite currently sits at ~99%);
+# CI fails if total coverage regresses below 90%.
 #
 # After this lands and stabilizes:
 #   - 'pytest (3.11)' + 'pytest (3.12)' become required status checks via
@@ -52,7 +52,8 @@ jobs:
             --cov=tracebloc_ingestor \
             --cov-report=term \
             --cov-report=xml \
-            --cov-report=html
+            --cov-report=html \
+            --cov-fail-under=90
 
       - name: Coverage summary
         if: always()
