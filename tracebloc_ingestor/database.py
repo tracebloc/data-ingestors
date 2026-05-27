@@ -178,7 +178,10 @@ class Database:
             - failures: List of dictionaries containing failed records and their error messages
         """
         if not records:
-            return {"success_ids": [], "failures": []}
+            # Return the same (success_ids, failures) tuple shape as the
+            # non-empty path so callers can always unpack two values —
+            # BaseIngestor._process_batch does ``ids, failures = insert_batch(...)``.
+            return [], []
 
         table = self.tables[table_name]
         result = {"success_ids": [], "failures": []}
