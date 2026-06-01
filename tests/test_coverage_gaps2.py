@@ -350,8 +350,19 @@ def test_object_truncated_missing(v):
 
 
 def test_object_difficult_bad_value(v):
-    res = v._validate_single_object(_obj(difficult="9"), 0)
+    # Non-integer (or negative) difficult is still rejected; the message changed
+    # from strict 0/1 to "non-negative integer" when we relaxed the validator
+    # for VisDrone-style data (#135a).
+    res = v._validate_single_object(_obj(difficult="abc"), 0)
     assert any("Difficult element must be" in e for e in res["errors"])
+
+
+def test_object_difficult_high_value_accepted(v):
+    # VisDrone uses difficult=2; it's now accepted (with a warning) rather than
+    # an error, so the bundled OD sample ingests (#135a).
+    res = v._validate_single_object(_obj(difficult="2"), 0)
+    assert not any("Difficult" in e for e in res["errors"])
+    assert any("Difficult=2" in w for w in res["warnings"])
 
 
 def test_object_difficult_missing(v):

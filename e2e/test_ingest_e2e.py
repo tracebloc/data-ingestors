@@ -83,15 +83,25 @@ CASES = [
         target_size=[448, 448], number_of_keypoints=9,
     ), id="keypoint_detection"),
 
-    # ── known gaps (xfail → tracking ticket; XPASS signals the fix landed) ──
+    # object_detection: now ingests after relaxing the PascalVOC `difficult`
+    # validator (#135a); target_size matched to the bundled VisDrone image.
     pytest.param(_cfg(
         table="e2e_od", category="object_detection",
         csv=str(T / "object_detection/data/labels_file_sample.csv"),
         images=str(T / "object_detection/data/images"),
         annotations=str(T / "object_detection/data/annotations"), label="image_label",
-    ), id="object_detection",
-        marks=pytest.mark.xfail(reason="bundled VisDrone XML difficult=2 rejected (#135)", strict=False)),
+        target_size=[1920, 1080],
+    ), id="object_detection"),
 
+    # masked_language_modeling: now ingests after adding the template's
+    # tokenizer.json (#137).
+    pytest.param(_cfg(
+        table="e2e_mlm", category="masked_language_modeling",
+        csv=str(T / "masked_language_modeling/data/labels_file_sample.csv"),
+        sequences=str(T / "masked_language_modeling/data/sequences"),
+    ), id="masked_language_modeling"),
+
+    # ── known gap (xfail → tracking ticket; XPASS signals the fix landed) ──
     pytest.param(_cfg(
         table="e2e_seg", category="semantic_segmentation",
         csv=str(T / "semantic_segmentation/semantic_data/labels_file_sample.csv"),
@@ -99,13 +109,6 @@ CASES = [
         masks=str(T / "semantic_segmentation/semantic_data/masks"), label="image_label",
     ), id="semantic_segmentation",
         marks=pytest.mark.xfail(reason="mask sidecar not wired in declarative path (#136)", strict=False)),
-
-    pytest.param(_cfg(
-        table="e2e_mlm", category="masked_language_modeling",
-        csv=str(T / "masked_language_modeling/data/labels_file_sample.csv"),
-        sequences=str(T / "masked_language_modeling/data/sequences"),
-    ), id="masked_language_modeling",
-        marks=pytest.mark.xfail(reason="template missing tokenizer.json (#137)", strict=False)),
 ]
 
 

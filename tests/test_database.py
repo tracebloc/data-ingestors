@@ -223,3 +223,20 @@ def test_get_table_schema(db):
     assert schema["name"] == "VARCHAR(255)"
     # unknown SQLAlchemy type falls back to VARCHAR
     assert schema["weird"] == "VARCHAR"
+
+
+def test_create_table_rejects_reserved_column():
+    """A user schema column colliding with a reserved/internal column (e.g.
+    'id') fails fast with a clear ValueError, not a cryptic DuplicateColumnError.
+    The guard runs before any DB I/O, so no live connection is needed."""
+    db = Database.__new__(Database)
+    with pytest.raises(ValueError, match="reserved"):
+        db.create_table("some_table", {"id": "INT", "feature_0": "FLOAT"})
+
+
+def test_create_table_allows_label_in_schema():
+    """`label` is the user-facing label column (mapped onto the standard
+    column), so it must NOT be treated as a reserved collision."""
+    db = Database.__new__(Database)
+    db.tables = {"t": "sentinel"}  # short-circuit before any engine use
+    assert db.create_table("t", {"feature_0": "FLOAT", "label": "INT"}) == "sentinel"
