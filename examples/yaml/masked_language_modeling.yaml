@@ -6,5 +6,5 @@ kind: IngestConfig
 table: primekg_mlm_train
 intent: train
 category: masked_language_modeling
-csv: /data/labels_file.csv
-sequences: /data/sequences/
+csv: /data/shared/primekg-mlm/labels_file.csv
+sequences: /data/shared/primekg-mlm/sequences/

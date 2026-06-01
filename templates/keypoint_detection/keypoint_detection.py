@@ -92,7 +92,7 @@ def main():
                 logger.warning(f"Failed to process {len(failed_records)} records")
                 for record in failed_records:
                     logger.warning(
-                        f"Failed record: {record.get('image_id', 'Unknown')}"
+                        f"Failed record: {record.get('filename', 'Unknown')}"
                     )
                     logger.warning(
                         f"Error details: {record.get('error', 'Unknown error')}"

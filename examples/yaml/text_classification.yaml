@@ -6,8 +6,8 @@ kind: IngestConfig
 table: support_tickets_train
 intent: train
 category: text_classification
-csv: /data/labels.csv
-texts: /data/texts/
+csv: /data/shared/support-tickets/labels.csv
+texts: /data/shared/support-tickets/texts/
 schema:
   text_id: VARCHAR(255)
   label: VARCHAR(64)

@@ -67,7 +67,7 @@ object_detection/
 ### CSV Labels File
 The CSV file contains the following columns:
 - `object_id`: Unique identifier for each object (format: `{image_name}_obj_{index}`)
-- `image_id`: Name of the image file (without extension)
+- `filename`: Image filename (with or without extension — the configured extension is appended if missing)
 - `image_label`: Class label of the object
 - `object_count`: Number of objects in the image (always 1 for individual objects)
 

@@ -71,8 +71,8 @@ semantic_segmentation/
 
 ### CSV Labels File
 The CSV file contains the following columns:
-- `filename`: Name of the image file (without extension)
-- `mask_id`: Name of the corresponding mask file (without extension)
+- `filename`: Image filename (with or without extension — the configured extension is appended if missing)
+- `mask_id`: Corresponding mask filename (with or without extension — `.png` is appended if missing)
 - `image_label`: Class label present in the image (one row per class per image)
 
 Example:
