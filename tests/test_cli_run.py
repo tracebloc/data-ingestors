@@ -164,7 +164,7 @@ def test_csv_happy_path(clean_env, mock_runtime, monkeypatch):
     csv_instance = mock_runtime["CSVIngestor"].return_value
     csv_instance.ingest.assert_called_once()
     args, kwargs = csv_instance.ingest.call_args
-    assert args[0] == "/data/labels.csv"
+    assert args[0] == "/data/shared/chest-xrays/labels.csv"
     assert kwargs.get("batch_size") == 4000
 
 
@@ -364,10 +364,10 @@ def test_legacy_env_vars_set_before_config_construction(
     main()
 
     assert captured_env["TABLE_NAME"] == "chest_xrays_train"
-    assert captured_env["LABEL_FILE"] == "/data/labels.csv"
+    assert captured_env["LABEL_FILE"] == "/data/shared/chest-xrays/labels.csv"
     # SRC_PATH = parent of `images:` dir, since file_transfer.py joins
     # SRC_PATH/images/<filename>.
-    assert captured_env["SRC_PATH"] == "/data"
+    assert captured_env["SRC_PATH"] == "/data/shared/chest-xrays"
 
 
 def test_file_transfer_config_reads_env_lazily(clean_env, mock_runtime, monkeypatch):
@@ -395,8 +395,8 @@ def test_file_transfer_config_reads_env_lazily(clean_env, mock_runtime, monkeypa
     main()
 
     assert file_transfer.config.TABLE_NAME == "chest_xrays_train"
-    assert file_transfer.config.LABEL_FILE == "/data/labels.csv"
-    assert file_transfer.config.SRC_PATH == "/data"
+    assert file_transfer.config.LABEL_FILE == "/data/shared/chest-xrays/labels.csv"
+    assert file_transfer.config.SRC_PATH == "/data/shared/chest-xrays"
     # DEST_PATH is derived from STORAGE_PATH/<table> via property — no
     # in-place patching needed.
     assert file_transfer.config.DEST_PATH == os.path.join(storage_path, "chest_xrays_train")

@@ -77,14 +77,14 @@ def test_image_classification_data_format():
     r = resolve(_load("image_classification.yaml"))
     assert r.data_format == DataFormat.IMAGE
     assert r.source_type == "csv"
-    assert r.source_path == "/data/labels.csv"
-    assert r.images == "/data/images/"
+    assert r.source_path == "/data/shared/chest-xrays/labels.csv"
+    assert r.images == "/data/shared/chest-xrays/images/"
 
 
 def test_text_classification_data_format():
     r = resolve(_load("text_classification.yaml"))
     assert r.data_format == DataFormat.TEXT
-    assert r.texts == "/data/texts/"
+    assert r.texts == "/data/shared/support-tickets/texts/"
 
 
 def test_tabular_classification_data_format():
@@ -100,16 +100,16 @@ def test_time_series_data_format_is_tabular():
 
 def test_object_detection_sidecars_set():
     r = resolve(_load("object_detection.yaml"))
-    assert r.images == "/data/images/"
-    assert r.annotations == "/data/annotations/"
+    assert r.images == "/data/shared/visdrone/images/"
+    assert r.annotations == "/data/shared/visdrone/annotations/"
     assert r.masks is None
     assert r.texts is None
 
 
 def test_semantic_segmentation_sidecars_set():
     r = resolve(_load("semantic_segmentation.yaml"))
-    assert r.images == "/data/images/"
-    assert r.masks == "/data/masks/"
+    assert r.images == "/data/shared/tumors/images/"
+    assert r.masks == "/data/shared/tumors/masks/"
     assert r.annotations is None
 
 
