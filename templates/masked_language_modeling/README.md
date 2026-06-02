@@ -34,6 +34,12 @@ helm install my-mlm-dataset tracebloc/ingestor \
   --set-file ingestConfig=./ingest.yaml
 ```
 
+> **If install fails with `'masked_language_modeling' is not one of [...]` or `Additional properties are not allowed ('sequences' was unexpected)`:** your local Helm chart cache is stale. Refresh it and retry:
+>
+> ```bash
+> helm repo update
+> ```
+
 MLM is unsupervised — no `label:` field; the tokenizer validator checks that sequences match the configured vocabulary. Canonical example: [`examples/yaml/masked_language_modeling.yaml`](../../examples/yaml/masked_language_modeling.yaml). Full chart docs: [`tracebloc/client/ingestor/README.md`](https://github.com/tracebloc/client/blob/develop/ingestor/README.md).
 
 ## Directory Structure
