@@ -5,7 +5,7 @@ kind: IngestConfig
 table: churn_train
 intent: train
 category: tabular_classification
-csv: /data/customers.csv
+csv: /data/shared/churn/customers.csv
 schema:
   age: INT
   tenure_months: INT

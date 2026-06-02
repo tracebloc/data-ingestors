@@ -6,7 +6,7 @@ kind: IngestConfig
 table: energy_demand_train
 intent: train
 category: time_series_forecasting
-csv: /data/demand.csv
+csv: /data/shared/energy-demand/demand.csv
 schema:
   timestamp: VARCHAR(64)
   region: VARCHAR(32)

@@ -6,7 +6,7 @@ kind: IngestConfig
 table: customer_churn_survival_train
 intent: train
 category: time_to_event_prediction
-csv: /data/survival.csv
+csv: /data/shared/customer-churn-survival/survival.csv
 time_column: tenure_days
 schema:
   customer_id: VARCHAR(64)

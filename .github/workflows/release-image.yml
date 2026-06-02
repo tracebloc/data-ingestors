@@ -51,6 +51,12 @@ jobs:
           # cosign + buildkit reproducibility benefit from full history.
           fetch-depth: 0
 
+      - name: Set up QEMU
+        # Registers binfmt handlers so the arm64 layers can be built
+        # under emulation on the amd64 runner. Without this, the
+        # multi-arch build below silently degrades to amd64-only.
+        uses: docker/setup-qemu-action@v3
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -119,6 +125,15 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
+          # Multi-arch (#24). Without `platforms`, build-push-action
+          # builds for the runner's arch only (amd64) — which is exactly
+          # why earlier ingestor digests couldn't be pulled on arm64
+          # nodes/clusters (jobs-manager spawns the ingestor Job by
+          # digest; arm64 kubelets ImagePullBackOff on an amd64-only
+          # manifest). The pushed digest becomes a manifest-list index
+          # spanning both arches; downstream (the chart's
+          # images.ingestor.digest) pins that index digest.
+          platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

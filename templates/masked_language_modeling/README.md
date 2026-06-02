@@ -8,9 +8,13 @@ Ingest with ~7 lines of YAML using the official ingestor image (`ghcr.io/tracebl
 
 > **Prerequisite:** the chart doesn't transport data into the cluster. Stage your files on the cluster's shared PVC first — see the [data-staging recipe](https://github.com/tracebloc/client/blob/develop/ingestor/README.md#stage-your-data-on-the-shared-pvc) in the chart docs (kubectl cp pattern for small datasets, init-container sync for production).
 
-**1. Stage the data** on the shared PVC at `/data/shared/<your-prefix>/` with a `sequences/` subdirectory holding the per-record `.txt` sequence files.
+**1. Stage the data** on the shared PVC at `/data/shared/<your-prefix>/` with:
+- a `sequences/` subdirectory holding the per-record `.txt` sequence files, and
+- **`tokenizer.json` placed in the same folder as your labels CSV** (the prefix root, not inside `sequences/`).
 
-**2. Write `ingest.yaml`:**
+The ingestor auto-discovers `tokenizer.json` from that folder — there is no YAML field for it. See [Tokenizer Requirements](#tokenizer-requirements) for the format rules (must be a HuggingFace tokenizer with `[MASK]` and `[PAD]` in its vocab).
+
+**2. Write `ingest.yaml`** — note there is **no** `tokenizer:` field; the file is discovered automatically:
 
 ```yaml
 apiVersion: tracebloc.io/v1
@@ -18,8 +22,8 @@ kind: IngestConfig
 category: masked_language_modeling
 table: primekg_mlm_train
 intent: train
-csv: /data/shared/primekg/labels_file.csv
-sequences: /data/shared/primekg/sequences/
+csv: /data/shared/primekg-mlm/labels_file.csv
+sequences: /data/shared/primekg-mlm/sequences/
 ```
 
 **3. Install:**
@@ -29,6 +33,12 @@ helm install my-mlm-dataset tracebloc/ingestor \
   --namespace tracebloc \
   --set-file ingestConfig=./ingest.yaml
 ```
+
+> **If install fails with `'masked_language_modeling' is not one of [...]` or `Additional properties are not allowed ('sequences' was unexpected)`:** your local Helm chart cache is stale. Refresh it and retry:
+>
+> ```bash
+> helm repo update
+> ```
 
 MLM is unsupervised — no `label:` field; the tokenizer validator checks that sequences match the configured vocabulary. Canonical example: [`examples/yaml/masked_language_modeling.yaml`](../../examples/yaml/masked_language_modeling.yaml). Full chart docs: [`tracebloc/client/ingestor/README.md`](https://github.com/tracebloc/client/blob/develop/ingestor/README.md).
 
@@ -45,7 +55,8 @@ masked_language_modeling/
     │   ├── seq_0000003.txt
     │   ├── seq_0000004.txt
     │   └── seq_0000005.txt
-    └── labels_file_sample.csv    # CSV manifest mapping filenames to extensions
+    ├── labels_file_sample.csv    # CSV manifest mapping filenames to extensions
+    └── tokenizer.json            # REQUIRED — same folder as the labels CSV; HuggingFace tokenizer with [MASK] and [PAD]
 ```
 
 ## Data Format
@@ -60,6 +71,28 @@ masked_language_modeling/
 MLM is **self-supervised** — no label column is needed. The CSV contains:
 - `filename`: Base name of the text file, without extension (e.g. `seq_0000001`)
 - `extension`: File extension as a quoted string (e.g. `'.txt'`)
+
+## Tokenizer Requirements
+
+MLM ingestion requires a `tokenizer.json` placed **in the same folder as your labels CSV** (the dataset prefix root — not inside `sequences/`). The ingestor copies it once from there ([`file_transfer.py:369`](../../tracebloc_ingestor/file_transfer.py)), and the training client loads it automatically.
+
+Hard rules (enforced — failing any of these blocks ingestion or training):
+
+- Must be a valid HuggingFace `tokenizer.json`, loadable via `tokenizers.Tokenizer.from_file()`.
+- Must contain **both `[MASK]` and `[PAD]`** in its vocabulary (`model.vocab` or `added_tokens`).
+- These tokens **cannot be added dynamically** — doing so would create token IDs beyond the model's embedding size (`vocab_size`) and crash training with an `IndexError`.
+
+Validation runs twice:
+1. **At ingestion** — [`TokenizerValidator`](../../tracebloc_ingestor/validators/tokenizer_validator.py) checks the file exists, parses as JSON, and contains the required tokens.
+2. **At training load** — the MLM client re-checks `mask_token`/`pad_token` and raises a `ValueError` if either is missing.
+
+### Troubleshooting validation failures
+
+| Error | Cause | Fix |
+|-------|-------|-----|
+| `tokenizer.json not found` | File missing or in the wrong folder | Place `tokenizer.json` in the same folder as your labels CSV |
+| `Invalid JSON in tokenizer.json` | Corrupt / non-JSON file | Regenerate the tokenizer; verify it loads with `Tokenizer.from_file()` |
+| `Tokenizer is missing required special tokens: [MASK], [PAD]` | Tokens absent from vocab | Add `[MASK]` and `[PAD]` to the vocabulary **before** saving the tokenizer |
 
 ## Preprocessing
 
@@ -118,4 +151,12 @@ The script uses the following configuration:
 
 - The `filename` column does **not** include the extension — that's supplied separately via the `extension` column.
 - No `label` column is needed because MLM training is self-supervised (masking is applied on-the-fly by the training client).
-- A `tokenizer.json` file should be placed alongside the data on the dataset path. The MLM client will load it automatically. See the preprocessing scripts for tokenizer generation.
+- `tokenizer.json` must sit **in the same folder as your labels CSV** (not inside `sequences/`). See [Tokenizer Requirements](#tokenizer-requirements).
+- Generate the tokenizer with the preprocessing scripts in the `tracebloc-client` repo. After generating, confirm the special tokens are present:
+
+  ```python
+  from tokenizers import Tokenizer
+  tok = Tokenizer.from_file("tokenizer.json")
+  vocab = tok.get_vocab()
+  assert "[MASK]" in vocab and "[PAD]" in vocab, "Missing required special tokens"
+  ```

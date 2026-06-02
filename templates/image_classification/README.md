@@ -61,7 +61,7 @@ image_classification/
 
 ### CSV Labels File
 The CSV contains the following columns:
-- `filename`: Image filename with extension, e.g. `cat1.jpeg`
+- `filename`: Image filename (with or without extension — the configured extension is appended if missing). E.g. `cat1.jpeg` or `cat1`.
 - `label`: Class label for the image, e.g. `cat`, `dog`
 
 ## Advanced: custom processor script

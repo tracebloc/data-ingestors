@@ -113,7 +113,29 @@ class Database:
 
         Returns:
             SQLAlchemy Table object
+
+        Raises:
+            ValueError: if a schema column collides with a reserved/internal
+                column (e.g. a user CSV with its own ``id``), which would
+                otherwise surface as a cryptic SQLAlchemy DuplicateColumnError.
         """
+        # Fail fast on reserved-column collisions before any DB I/O. `label`
+        # is intentionally excluded — it's the user-facing label column the
+        # framework maps onto the standard `label` column.
+        _RESERVED = {
+            "id", "created_at", "updated_at", "status", "data_intent",
+            "data_id", "filename", "extension", "annotation", "ingestor_id",
+        }
+        _collisions = sorted(_RESERVED & set(schema))
+        if _collisions:
+            raise ValueError(
+                f"Schema column(s) {_collisions} collide with reserved tracebloc "
+                f"columns. The framework manages its own row id, timestamps, status, "
+                f"data_id and sidecar metadata — rename these column(s) in your "
+                f"CSV/schema. (To use your own `id` as the record identifier, set "
+                f"data_id.strategy=column instead.)"
+            )
+
         # Return existing table if already created
         if table_name in self.tables:
             return self.tables[table_name]
@@ -178,7 +200,10 @@ class Database:
             - failures: List of dictionaries containing failed records and their error messages
         """
         if not records:
-            return {"success_ids": [], "failures": []}
+            # Return the same (success_ids, failures) tuple shape as the
+            # non-empty path so callers can always unpack two values —
+            # BaseIngestor._process_batch does ``ids, failures = insert_batch(...)``.
+            return [], []
 
         table = self.tables[table_name]
         result = {"success_ids": [], "failures": []}

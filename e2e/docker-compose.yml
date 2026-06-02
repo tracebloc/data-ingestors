@@ -1,0 +1,17 @@
+# Local MySQL for the e2e ingestion suite.  Usage:
+#   docker compose -f e2e/docker-compose.yml up -d
+#   MYSQL_HOST=127.0.0.1 DB_USER=root DB_PASSWORD=root pytest e2e/ -v
+#   docker compose -f e2e/docker-compose.yml down -v
+services:
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: training_test_datasets
+    ports:
+      - "3306:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-uroot", "-proot"]
+      interval: 5s
+      timeout: 3s
+      retries: 20

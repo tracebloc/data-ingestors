@@ -7,7 +7,7 @@ kind: IngestConfig
 table: house_prices_train
 intent: train
 category: tabular_regression
-csv: /data/houses.csv
+csv: /data/shared/house-prices/houses.csv
 schema:
   square_feet: FLOAT
   bedrooms: INT
