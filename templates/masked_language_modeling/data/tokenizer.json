@@ -1,0 +1,31 @@
+{
+  "version": "1.0",
+  "model": {
+    "type": "WordLevel",
+    "unk_token": "[UNK]",
+    "vocab": {
+      "[PAD]": 0,
+      "[UNK]": 1,
+      "[CLS]": 2,
+      "[SEP]": 3,
+      "[MASK]": 4,
+      "the": 5,
+      "a": 6,
+      "is": 7,
+      "of": 8,
+      "and": 9,
+      "to": 10,
+      "in": 11,
+      "protein": 12,
+      "gene": 13,
+      "disease": 14
+    }
+  },
+  "added_tokens": [
+    {"id": 0, "content": "[PAD]", "special": true},
+    {"id": 1, "content": "[UNK]", "special": true},
+    {"id": 2, "content": "[CLS]", "special": true},
+    {"id": 3, "content": "[SEP]", "special": true},
+    {"id": 4, "content": "[MASK]", "special": true}
+  ]
+}

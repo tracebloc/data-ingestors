@@ -527,15 +527,30 @@ class PascalVOCXMLValidator(BaseValidator):
         elif "truncated" in self.required_object_elements:
             errors.append(f"Object {index}: Missing required 'truncated' element")
 
-        # Validate difficult element
+        # Validate difficult element. Pascal VOC officially uses 0/1, but
+        # real-world detection datasets (e.g. VisDrone — our bundled OD sample)
+        # use higher difficulty levels. Accept any non-negative integer; flag
+        # non-standard values as a warning rather than failing ingestion.
         difficult_elem = obj.find("difficult")
         if difficult_elem is not None:
-            if difficult_elem.text not in ["0", "1"]:
+            try:
+                difficult_val = (
+                    int(difficult_elem.text) if difficult_elem.text is not None else None
+                )
+            except (ValueError, TypeError):
+                difficult_val = None
+            if difficult_val is None or difficult_val < 0:
                 errors.append(
-                    f"Object {index}: Difficult element must be '0' or '1', found: {difficult_elem.text}"
+                    f"Object {index}: Difficult element must be a non-negative integer, "
+                    f"found: {difficult_elem.text}"
                 )
             else:
-                metadata["difficult"] = int(difficult_elem.text)
+                metadata["difficult"] = difficult_val
+                if difficult_val not in (0, 1):
+                    warnings.append(
+                        f"Object {index}: Difficult={difficult_val} is outside the standard "
+                        f"Pascal VOC 0/1 (accepted; e.g. VisDrone uses 0/1/2)"
+                    )
         elif "difficult" in self.required_object_elements:
             errors.append(f"Object {index}: Missing required 'difficult' element")
 
