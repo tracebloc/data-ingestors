@@ -1,0 +1,55 @@
+name: E2E ingestion
+
+# Real end-to-end ingestion: runs the engine against the bundled templates into
+# a real MySQL (service container) with an in-process mock backend. Complements
+# the unit suite (tests.yml), which mocks the DB + API. See e2e/README.md.
+
+on:
+  pull_request:
+    branches: [develop, master, main]
+  push:
+    branches: [develop, master, main]
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    name: e2e (real MySQL)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: training_test_datasets
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -uroot -proot"
+          --health-interval=5s
+          --health-timeout=3s
+          --health-retries=20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install package + deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -e .
+
+      - name: Run e2e ingestion suite
+        env:
+          MYSQL_HOST: 127.0.0.1
+          MYSQL_PORT: '3306'
+          DB_USER: root
+          DB_PASSWORD: root
+          DB_NAME: training_test_datasets
+        run: pytest e2e/ -v
