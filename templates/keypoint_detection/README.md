@@ -56,7 +56,7 @@ keypoint_detection/
 
 ### CSV Labels File
 The CSV file contains the following columns:
-- `filename`: Name of the image file (without extension)
+- `filename`: Image filename (with or without extension — the configured extension is appended if missing)
 - `Annotation`: JSON string with keypoint coordinates as `{"joint_name": [x, y]}` pairs
 - `Visibility`: JSON string with per-keypoint visibility flags as `{"joint_name": 0|1}` (1=visible, 0=occluded/out-of-frame)
 - `image_label`: Class label for the image

@@ -17,7 +17,7 @@ kind: IngestConfig
 table: phi_records_train
 intent: train
 category: tabular_classification
-csv: /data/records.csv
+csv: /data/shared/phi-records/records.csv
 schema:
   patient_id: VARCHAR(255)
   age: INT
