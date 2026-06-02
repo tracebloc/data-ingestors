@@ -8,7 +8,11 @@ Ingest with ~7 lines of YAML using the official ingestor image (`ghcr.io/tracebl
 
 > **Prerequisite:** the chart doesn't transport data into the cluster. Stage your files on the cluster's shared PVC first — see the [data-staging recipe](https://github.com/tracebloc/client/blob/develop/ingestor/README.md#stage-your-data-on-the-shared-pvc) in the chart docs (kubectl cp pattern for small datasets, init-container sync for production).
 
-**1. Stage the data** on the shared PVC at `/data/shared/<your-prefix>/` with a `sequences/` subdirectory holding the per-record `.txt` sequence files, plus a `tokenizer.json` at the prefix root (sibling of `sequences/`, **not** inside it). The ingestor auto-discovers the tokenizer by joining `SRC_PATH/tokenizer.json` — `SRC_PATH` is derived as the parent of the `sequences:` directory below, so the location is implicit. See [Tokenizer Requirements](#tokenizer-requirements) for the format rules (must be a HuggingFace tokenizer with `[MASK]` and `[PAD]` in its vocab).
+**1. Stage the data** on the shared PVC at `/data/shared/<your-prefix>/` with:
+- a `sequences/` subdirectory holding the per-record `.txt` sequence files, and
+- **`tokenizer.json` placed in the same folder as your labels CSV** (the prefix root, not inside `sequences/`).
+
+The ingestor auto-discovers `tokenizer.json` from that folder — there is no YAML field for it. See [Tokenizer Requirements](#tokenizer-requirements) for the format rules (must be a HuggingFace tokenizer with `[MASK]` and `[PAD]` in its vocab).
 
 **2. Write `ingest.yaml`** — note there is **no** `tokenizer:` field; the file is discovered automatically:
 
@@ -46,7 +50,7 @@ masked_language_modeling/
     │   ├── seq_0000004.txt
     │   └── seq_0000005.txt
     ├── labels_file_sample.csv    # CSV manifest mapping filenames to extensions
-    └── tokenizer.json            # REQUIRED — HuggingFace tokenizer (must include [MASK] and [PAD])
+    └── tokenizer.json            # REQUIRED — same folder as the labels CSV; HuggingFace tokenizer with [MASK] and [PAD]
 ```
 
 ## Data Format
@@ -64,7 +68,7 @@ MLM is **self-supervised** — no label column is needed. The CSV contains:
 
 ## Tokenizer Requirements
 
-MLM ingestion requires a `tokenizer.json` placed at the dataset **root** (sibling of `sequences/`, **not** inside it). The ingestor copies it once from `SRC_PATH` ([`file_transfer.py:369`](../../tracebloc_ingestor/file_transfer.py)), and the training client loads it automatically.
+MLM ingestion requires a `tokenizer.json` placed **in the same folder as your labels CSV** (the dataset prefix root — not inside `sequences/`). The ingestor copies it once from there ([`file_transfer.py:369`](../../tracebloc_ingestor/file_transfer.py)), and the training client loads it automatically.
 
 Hard rules (enforced — failing any of these blocks ingestion or training):
 
@@ -80,7 +84,7 @@ Validation runs twice:
 
 | Error | Cause | Fix |
 |-------|-------|-----|
-| `tokenizer.json not found` | File missing or not at dataset root | Place `tokenizer.json` alongside `sequences/` |
+| `tokenizer.json not found` | File missing or in the wrong folder | Place `tokenizer.json` in the same folder as your labels CSV |
 | `Invalid JSON in tokenizer.json` | Corrupt / non-JSON file | Regenerate the tokenizer; verify it loads with `Tokenizer.from_file()` |
 | `Tokenizer is missing required special tokens: [MASK], [PAD]` | Tokens absent from vocab | Add `[MASK]` and `[PAD]` to the vocabulary **before** saving the tokenizer |
 
@@ -141,7 +145,7 @@ The script uses the following configuration:
 
 - The `filename` column does **not** include the extension — that's supplied separately via the `extension` column.
 - No `label` column is needed because MLM training is self-supervised (masking is applied on-the-fly by the training client).
-- `tokenizer.json` must sit at the dataset **root** (sibling of `sequences/`), not inside `sequences/`. See [Tokenizer Requirements](#tokenizer-requirements).
+- `tokenizer.json` must sit **in the same folder as your labels CSV** (not inside `sequences/`). See [Tokenizer Requirements](#tokenizer-requirements).
 - Generate the tokenizer with the preprocessing scripts in the `tracebloc-client` repo. After generating, confirm the special tokens are present:
 
   ```python
