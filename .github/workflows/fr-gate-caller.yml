@@ -1,0 +1,15 @@
+name: FR gate
+
+# Per-repo caller. Blocks merges to staging/main/master unless every contained
+# kanban item is in "Ready for staging" or "Ready for prod" respectively.
+# All logic lives in tracebloc/.github/.github/workflows/fr-gate.yml.
+
+on:
+  pull_request:
+    branches: [staging, main, master]
+    types: [opened, reopened, synchronize, ready_for_review, labeled, unlabeled]
+
+jobs:
+  gate:
+    uses: tracebloc/.github/.github/workflows/fr-gate.yml@main
+    secrets: inherit
