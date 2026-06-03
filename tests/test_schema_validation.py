@@ -98,6 +98,37 @@ def test_all_task_categories_covered():
     assert not missing, f"No example for categories: {missing}"
 
 
+def test_schema_category_enum_matches_engine_categories():
+    """Anti-drift: the schema's ``category`` enum must list EXACTLY the
+    categories the engine supports (``TaskCategory``).
+
+    ``cli/run.py`` validates every ingest config against this schema before the
+    engine runs, so a category the engine supports but the enum omits would be
+    rejected before ingestion ever starts. This schema is also published as the
+    ingestion contract, so any downstream service that validates submissions
+    against it would reject the same configs (HTTP 4xx) before any work begins.
+
+    This test anchors the enum to the engine's category list so the next
+    category added to ``TaskCategory`` cannot silently desync the published
+    schema. Equality (not subset) so an enum value the engine cannot handle is
+    flagged too.
+    """
+    from tracebloc_ingestor.utils.constants import TaskCategory
+
+    schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+    enum_values = set(schema["properties"]["category"]["enum"])
+    engine_categories = set(TaskCategory.get_all_categories())
+
+    rejected_by_schema = engine_categories - enum_values
+    unknown_to_engine = enum_values - engine_categories
+    assert not (rejected_by_schema or unknown_to_engine), (
+        "ingest.v1.json `category` enum has drifted from the engine's "
+        "TaskCategory (jobs-manager vendors this enum as its submit gate):\n"
+        f"  supported by engine but REJECTED by schema/gate: {sorted(rejected_by_schema)}\n"
+        f"  allowed by schema/gate but UNKNOWN to engine:     {sorted(unknown_to_engine)}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Negative coverage: each rejection path the schema is supposed to enforce.
 # ---------------------------------------------------------------------------
