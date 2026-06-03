@@ -28,17 +28,35 @@ class KeypointAnnotationValidator(BaseValidator):
     positive width and height. Checks keypoint name consistency across
     all records.
 
+    When ``num_keypoints`` is provided (the dataset author's declared
+    ``number_of_keypoints``), also enforces that every per-row
+    annotation carries exactly that many keypoints. Without this check
+    a dataset can declare K=14 in metadata while shipping rows that
+    only name a subset (e.g. 4) — downstream training silently
+    mis-shapes placeholders / heatmap targets and crashes on the
+    client side, where the only signal back to the operator is an
+    inscrutable ``torch.cat`` / ``broadcast_tensors`` failure inside
+    the runtime. Catching the drift at ingest time turns that into a
+    clear "your dataset is inconsistent with your declared keypoint
+    count" error against the dataset author.
+
     Attributes:
         annotation_column: Name of the annotation column in CSV
+        num_keypoints: Optional expected count from the dataset's
+            declared ``number_of_keypoints``. ``None`` skips the
+            check (preserves legacy behavior for ingests that don't
+            yet declare a count).
     """
 
     def __init__(
         self,
         annotation_column: str = "Annotation",
+        num_keypoints: Optional[int] = None,
         name: str = "Keypoint Annotation",
     ):
         super().__init__(name)
         self.annotation_column = annotation_column
+        self.num_keypoints = num_keypoints
 
     def validate(self, data: Any, **kwargs) -> ValidationResult:
         try:
@@ -99,6 +117,29 @@ class KeypointAnnotationValidator(BaseValidator):
                 f"got {type(annotation).__name__}"
             )
             return errors
+
+        # 1b. Enforce declared num_keypoints, if set.
+        # We compare against ``len(annotation)`` (the number of named
+        # keypoints in the row's JSON dict) — not against any later
+        # coordinate-shape derivative — because the on-disk annotation
+        # is the source of truth that downstream consumers
+        # (``rescale_keypoints``, ``_generate_heatmaps``) actually
+        # iterate. A mismatch here is exactly the condition that
+        # produces runtime ``Sizes of tensors must match`` and
+        # ``broadcast_tensors`` crashes; failing the ingest is far
+        # kinder than letting the dataset land and then debug it
+        # from pod logs three weeks later.
+        if self.num_keypoints is not None and len(annotation) != self.num_keypoints:
+            errors.append(
+                f"{row_label}: annotation has {len(annotation)} keypoint(s) "
+                f"but the dataset declared num_keypoints={self.num_keypoints}. "
+                f"Every row's annotation JSON must name exactly the declared "
+                f"number of keypoints — mismatched counts cause silent shape "
+                f"crashes during client-side training."
+            )
+            # Continue into per-keypoint validation so the operator
+            # sees coordinate-level errors in the same pass instead of
+            # having to re-ingest to find them.
 
         # 2. Validate each keypoint coordinate
         x_coords = []
