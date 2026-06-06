@@ -14,6 +14,7 @@ from tracebloc_ingestor.validators.numeric_columns_validator import NumericColum
 from tracebloc_ingestor.validators.keypoint_annotation_validator import KeypointAnnotationValidator
 from tracebloc_ingestor.validators.keypoint_visibility_validator import KeypointVisibilityValidator
 from tracebloc_ingestor.validators.tokenizer_validator import TokenizerValidator
+from tracebloc_ingestor.validators.file_pairing_validator import FilePairingValidator
 from tracebloc_ingestor.utils.constants import TaskCategory, FileExtension
 
 
@@ -32,6 +33,9 @@ def map_validators(
             FileTypeValidator(allowed_extension=options["extension"], path="images"),
             FileTypeValidator(allowed_extension=".xml", path="annotations"),
             PascalVOCXMLValidator(),
+            FilePairingValidator(
+                image_path="images", sidecar_path="annotations", sidecar_label="annotation"
+            ),
             ImageResolutionValidator(expected_resolution=options["target_size"]),
             TableNameValidator(),
             DuplicateValidator(),
@@ -125,6 +129,9 @@ def map_validators(
         return [
             FileTypeValidator(allowed_extension=options["extension"], path="images"),
             FileTypeValidator(allowed_extension=FileExtension.PNG, path="masks"),
+            FilePairingValidator(
+                image_path="images", sidecar_path="masks", sidecar_label="mask"
+            ),
             ImageResolutionValidator(expected_resolution=options["target_size"]),
             TableNameValidator(),
             DuplicateValidator(),
