@@ -130,10 +130,18 @@ def map_validators(
             DuplicateValidator(),
         ]
     elif task_category == TaskCategory.KEYPOINT_DETECTION:
+        # ``number_of_keypoints`` is required by the ingest schema for
+        # keypoint_detection (see ``schema/ingest.v1.json``) and
+        # plumbed into ``file_options`` by ``cli/conventions.py``.
+        # Passing it to ``KeypointAnnotationValidator`` enables the
+        # per-row count check that rejects datasets whose annotations
+        # drift from the declared K.
         validators = [
             FileTypeValidator(allowed_extension=options["extension"], path="images"),
             ImageResolutionValidator(expected_resolution=options["target_size"]),
-            KeypointAnnotationValidator(),
+            KeypointAnnotationValidator(
+                num_keypoints=options.get("number_of_keypoints")
+            ),
             KeypointVisibilityValidator(),
             TableNameValidator(),
             DuplicateValidator(),

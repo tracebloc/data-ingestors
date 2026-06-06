@@ -143,9 +143,17 @@ docker run --rm --entrypoint python ${IMAGE}@${DIGEST} \
   -c "from tracebloc_ingestor.cli.run import _load_schema; print(_load_schema()['title'])"
 ```
 
-## 7. Pin the new digest downstream
+## 7. (Optional) Bump the greenfield baseline in `tracebloc/client`
 
-The Helm subchart in [`tracebloc/client`](https://github.com/tracebloc/client) reads the digest out of these release notes and bakes it into its values. Open a follow-up PR there pinning to the new digest. (Pull by digest, not tag — that's the whole point of signing.)
+**Live clusters roll themselves forward — this step is not required for rollout.** Since [`tracebloc/client#159`](https://github.com/tracebloc/client/pull/159) (the [#158](https://github.com/tracebloc/client/issues/158) auto-refresh feature), the chart ships `images.ingestor.autoRefresh: true` with a floating tag (`images.ingestor.tag: "0.3"`). An image-refresh CronJob polls `ghcr.io/tracebloc/ingestor:0.3` and rewrites the live deployment's `INGESTOR_IMAGE_DIGEST` within ~15 min of a new image push — no chart change, no `helm upgrade`. Every existing install converges on its own, as long as the new image matches the chart's floating tag. (Authoritative explanation: the comment block around `images.ingestor` in [`client/values.yaml`](https://github.com/tracebloc/client/blob/develop/client/values.yaml).)
+
+The pinned `images.ingestor.digest` in the chart only sets the **greenfield baseline** — the digest a brand-new install lands on before its first refresh tick. Bumping it is a deliberate, optional chart release, not a release step. Do it when you want fresh installs to start on the version you just shipped:
+
+- Bump `images.ingestor.digest` to the new digest **and** `client/Chart.yaml`'s `version` + `appVersion` in lockstep (the chart's own SemVer, independent of the ingestor's).
+- Open the PR against **`develop`**, like any other client change — this is not a `master`-targeting release PR.
+- Precedent: [`client#161`](https://github.com/tracebloc/client/pull/161) (baseline v0.3.0 → v0.3.1) and [`client#185`](https://github.com/tracebloc/client/pull/185) (v0.3.1 → v0.3.2, tracking [#184](https://github.com/tracebloc/client/issues/184)).
+
+(When you do pin, pull by digest, not tag — that's the whole point of signing.)
 
 ## Manual fallback (workflow_dispatch)
 
