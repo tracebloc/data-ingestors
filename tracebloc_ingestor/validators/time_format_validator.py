@@ -72,9 +72,30 @@ class TimeFormatValidator(BaseValidator):
                     errors=[f"Required column 'timestamp' not found. Available: {list(df.columns)}"],
                 )
 
-            # Parse timestamps
+            # Parse timestamps (month-first by default).
             timestamps = pd.to_datetime(df["timestamp"], format='mixed', errors="coerce")
             metadata = {"rows_checked": len(df)}
+
+            # Locale-ambiguity guard. "03.04.2026" is Apr 3 read day-first (EU)
+            # but Mar 4 read month-first (US); format='mixed' silently picks one
+            # and corrupts the whole series with no error. If a value parses
+            # successfully BOTH ways but to different dates, it is ambiguous —
+            # reject it and steer the user to unambiguous ISO 8601.
+            day_first = pd.to_datetime(
+                df["timestamp"], format='mixed', dayfirst=True, errors="coerce"
+            )
+            ambiguous_mask = (
+                timestamps.notna() & day_first.notna() & (timestamps != day_first)
+            )
+            if ambiguous_mask.any():
+                ambiguous_count = int(ambiguous_mask.sum())
+                samples = df["timestamp"][ambiguous_mask].astype(str).head(5).tolist()
+                errors.append(
+                    f"Found {ambiguous_count} ambiguous date(s) in 'timestamp' that parse "
+                    f"differently day-first vs month-first (e.g. {samples}). Use ISO 8601 "
+                    f"(YYYY-MM-DD or YYYY-MM-DD HH:MM:SS) to remove the ambiguity."
+                )
+                metadata["ambiguous_timestamps"] = ambiguous_count
 
             # Check for invalid/missing timestamps
             invalid_mask = timestamps.isna()
