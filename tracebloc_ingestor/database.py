@@ -136,6 +136,20 @@ class Database:
                 f"data_id.strategy=column instead.)"
             )
 
+        # Fail fast on column names longer than MySQL's 64-char identifier limit,
+        # before CREATE TABLE turns it into a raw MySQL 1059 error. CSV headers are
+        # used verbatim as column names, so long proteomics/genomics headers (e.g. a
+        # semicolon-joined isoform list) blow the limit; name the offenders clearly.
+        _MAX_IDENTIFIER = 64
+        _too_long = sorted(c for c in schema if len(str(c)) > _MAX_IDENTIFIER)
+        if _too_long:
+            preview = "; ".join(f"'{c[:40]}…' ({len(c)} chars)" for c in _too_long[:5])
+            more = "" if len(_too_long) <= 5 else f" (and {len(_too_long) - 5} more)"
+            raise ValueError(
+                f"{len(_too_long)} column name(s) exceed the {_MAX_IDENTIFIER}-character "
+                f"database column-name limit and must be shortened: {preview}{more}"
+            )
+
         # Return existing table if already created
         if table_name in self.tables:
             return self.tables[table_name]

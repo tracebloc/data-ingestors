@@ -171,19 +171,20 @@ class CSVIngestor(BaseIngestor):
         try:
             chunk_size = self.csv_options.pop("chunk_size", 1000)
 
-            # Wider null sentinel for tabular-family categories — matches the
-            # legacy templates and prevents "NA"/"NULL"/"None" string cells
-            # from being stored verbatim instead of as NaN.
-            na_values = (
-                _TABULAR_NA_VALUES
-                if self.category in _TABULAR_FAMILY_CATEGORIES
-                else [""]
-            )
+            # NA handling. Tabular-family CSVs use pandas' full default NA set
+            # (keep_default_na=True) so every common missing sentinel — ""/NaN/
+            # "N/A"/"null"/"NA"/"NULL"/"None" — parses as NaN. Crucially this
+            # MATCHES how the validators read the file (plain pd.read_csv with
+            # defaults), so a file that passes validation can't then crash the
+            # numeric type-conversion below on an unrecognised NA token. Other
+            # categories keep the conservative empty-only behaviour.
+            is_tabular = self.category in _TABULAR_FAMILY_CATEGORIES
+            na_values = _TABULAR_NA_VALUES if is_tabular else [""]
 
             # Enhanced default options for pandas
             default_options = {
                 "dtype": None,  # Let pandas infer types initially
-                "keep_default_na": False,
+                "keep_default_na": is_tabular,
                 "na_values": na_values,
                 "encoding": "utf-8",
                 "on_bad_lines": "warn",
