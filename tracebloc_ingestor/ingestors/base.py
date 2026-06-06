@@ -5,6 +5,7 @@ from sqlalchemy.engine import Engine
 import logging
 from tqdm import tqdm
 import uuid
+from pathlib import Path
 
 from ..database import Database
 from ..api.client import APIClient
@@ -307,6 +308,30 @@ class BaseIngestor(ABC):
             logger.error(f"Error processing record: {str(e)}")
             return None
 
+    @staticmethod
+    def _check_csv_encoding(source: Any) -> None:
+        """Fail fast with a clear message if a CSV source is not valid UTF-8.
+
+        Every validator reads CSVs as UTF-8 and swallows decode errors into a
+        misleading "No data found"; a non-UTF-8 export (e.g. a Latin-1/Windows
+        CSV with umlauts) would otherwise crash or mislead. Probe once, up front.
+        """
+        if not isinstance(source, (str, Path)):
+            return
+        path = Path(source)
+        if path.suffix.lower() != ".csv" or not path.exists():
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                while fh.read(1 << 20):  # decode in 1 MB chunks; raises on a bad byte
+                    pass
+        except UnicodeDecodeError as exc:
+            raise ValueError(
+                f"{RED}'{path.name}' is not valid UTF-8 — a non-UTF-8 byte was found at "
+                f"byte {exc.start}. Re-save the file as UTF-8 (in Excel: Save As → "
+                f"'CSV UTF-8 (Comma delimited)'), then re-ingest.{RESET}"
+            ) from exc
+
     def validate_data(self, source: Any) -> bool:
         """Validate data before ingestion using configured validators.
 
@@ -319,6 +344,10 @@ class BaseIngestor(ABC):
         Raises:
             ValueError: If validation fails
         """
+        # Pre-flight: a non-UTF-8 CSV otherwise surfaces as a misleading
+        # "No data found" (validators read UTF-8 and swallow decode errors).
+        # Catch it once here with a clear, actionable message.
+        self._check_csv_encoding(source)
 
         validators = map_validators(self.category, self.file_options)
         logger.info(f"Running {len(validators)} validator(s) on data source")

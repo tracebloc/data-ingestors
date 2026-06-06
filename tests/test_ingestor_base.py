@@ -241,3 +241,29 @@ def test_context_manager_protocol():
     ing = make_ingestor()
     with ing as x:
         assert x is ing
+
+
+# ---------------------------------------------------------------------------
+# CSV encoding pre-flight (validate_data)
+# ---------------------------------------------------------------------------
+
+def test_check_csv_encoding_rejects_non_utf8(tmp_path):
+    # A Latin-1 export (German umlauts) used to surface as a misleading
+    # "No data found"; now it fails fast with a clear UTF-8 message.
+    bad = tmp_path / "umlaut.csv"
+    bad.write_bytes("Größe,label\n1,a\n".encode("latin-1"))
+    with pytest.raises(ValueError, match="UTF-8"):
+        BaseIngestor._check_csv_encoding(str(bad))
+
+
+def test_check_csv_encoding_accepts_utf8(tmp_path):
+    good = tmp_path / "ok.csv"
+    good.write_text("Größe,label\n1,a\n", encoding="utf-8")
+    BaseIngestor._check_csv_encoding(str(good))  # must not raise
+
+
+def test_check_csv_encoding_skips_non_csv_sources(tmp_path):
+    # Non-CSV / non-path / missing sources are left to the validators.
+    BaseIngestor._check_csv_encoding(str(tmp_path))                   # a directory
+    BaseIngestor._check_csv_encoding(None)                            # not a path
+    BaseIngestor._check_csv_encoding(str(tmp_path / "missing.csv"))   # nonexistent
