@@ -342,18 +342,27 @@ class DataValidator(BaseValidator):
         errors = []
         warnings = []
 
-        # Try to convert to numeric
+        # Coerce to numeric; only values that were *present* but unparseable are
+        # "non-numeric". Genuine missing values (NaN/empty) are NOT non-numeric —
+        # the ingestor stores them as NULL — so they must not be conflated, or a
+        # user can never clear the error (inserting NaN doesn't help). See
+        # NumericColumnsValidator, which makes the same distinction.
         numeric_series = pd.to_numeric(series, errors="coerce")
-        non_numeric_count = numeric_series.isnull().sum()
+        non_numeric_mask = numeric_series.isna() & series.notna()
+        non_numeric_count = int(non_numeric_mask.sum())
 
         if non_numeric_count > 0:
+            sample = series[non_numeric_mask].head(5).tolist()
             errors.append(
-                f"Column '{column_name}' contains {non_numeric_count} non-numeric values"
+                f"Column '{column_name}' contains {non_numeric_count} non-numeric value(s). "
+                f"Sample invalid values: {sample}"
             )
 
-        # Check for integer values
+        # Check for integer values among the parsed, non-null numbers only
+        # (a NaN would otherwise be miscounted as "non-integer" via NaN % 1).
         if non_numeric_count == 0:
-            non_integer_count = (numeric_series % 1 != 0).sum()
+            non_integer_mask = numeric_series.notna() & (numeric_series % 1 != 0)
+            non_integer_count = int(non_integer_mask.sum())
             if non_integer_count > 0:
                 errors.append(
                     f"Column '{column_name}' contains {non_integer_count} non-integer values"
@@ -392,13 +401,20 @@ class DataValidator(BaseValidator):
         errors = []
         warnings = []
 
-        # Try to convert to numeric
+        # Coerce to numeric; only values that were *present* but unparseable are
+        # "non-numeric". Genuine missing values (NaN/empty) are valid for a float
+        # column (stored as NULL), so they must not be counted here — otherwise a
+        # user can never clear the error (inserting NaN doesn't help). See
+        # NumericColumnsValidator, which makes the same distinction.
         numeric_series = pd.to_numeric(series, errors="coerce")
-        non_numeric_count = numeric_series.isnull().sum()
+        non_numeric_mask = numeric_series.isna() & series.notna()
+        non_numeric_count = int(non_numeric_mask.sum())
 
         if non_numeric_count > 0:
+            sample = series[non_numeric_mask].head(5).tolist()
             errors.append(
-                f"Column '{column_name}' contains {non_numeric_count} non-numeric values"
+                f"Column '{column_name}' contains {non_numeric_count} non-numeric value(s). "
+                f"Sample invalid values: {sample}"
             )
 
         return {"is_valid": len(errors) == 0, "errors": errors, "warnings": warnings}

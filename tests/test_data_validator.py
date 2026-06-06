@@ -95,6 +95,41 @@ def test_float_non_numeric_fails():
 
 
 # ---------------------------------------------------------------------------
+# Missing values are NULL, not "non-numeric" (regression)
+# ---------------------------------------------------------------------------
+
+def test_int_with_missing_values_is_valid():
+    # NaN/empty in an INT column is a missing value (stored as NULL), not a
+    # non-numeric one — and not a "non-integer" one either.
+    df = pd.DataFrame({"n": [1, None, 3]})
+    assert DataValidator(schema={"n": "INT"}).validate(df).is_valid
+
+
+def test_float_with_missing_values_is_valid():
+    # Regression: a float column with genuine NaN was wrongly reported as
+    # containing "non-numeric values" — and inserting NaN could never clear it.
+    df = pd.DataFrame({"x": [1.5, None, 2.25]})
+    assert DataValidator(schema={"x": "FLOAT"}).validate(df).is_valid
+
+
+def test_missing_values_do_not_mask_real_non_numeric():
+    # Only the genuinely unparseable value is flagged; the NaN is ignored.
+    df = pd.DataFrame({"x": [1.5, None, "oops"]})
+    result = DataValidator(schema={"x": "FLOAT"}).validate(df)
+    assert not result.is_valid
+    assert "1 non-numeric" in result.errors[0]
+    assert "oops" in result.errors[0]  # the offending value is surfaced
+
+
+def test_non_numeric_error_includes_sample_values():
+    df = pd.DataFrame({"x": ["abc", "def"]})
+    result = DataValidator(schema={"x": "FLOAT"}).validate(df)
+    assert not result.is_valid
+    assert "Sample invalid values" in result.errors[0]
+    assert "abc" in result.errors[0]
+
+
+# ---------------------------------------------------------------------------
 # VARCHAR / CHAR / TEXT
 # ---------------------------------------------------------------------------
 
