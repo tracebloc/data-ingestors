@@ -48,6 +48,10 @@ def test_tabular_family_uses_wider_na_values(category, tmp_path):
 
     _, kwargs = mock_read.call_args
     assert kwargs["na_values"] == ["", "NA", "NULL", "None"]
+    # keep_default_na=True for tabular so pandas' full NA set (NaN/N/A/null/...)
+    # is recognised — matching the validators' read, which closes the gate-lie
+    # where a file passes validation but crashes the ingestor's type-conversion.
+    assert kwargs["keep_default_na"] is True
 
 
 def test_non_tabular_keeps_narrow_na_values(tmp_path):
@@ -61,3 +65,25 @@ def test_non_tabular_keeps_narrow_na_values(tmp_path):
 
     _, kwargs = mock_read.call_args
     assert kwargs["na_values"] == [""]
+    assert kwargs["keep_default_na"] is False
+
+
+def test_tabular_na_token_in_numeric_column_does_not_crash(tmp_path):
+    """A 'NaN'/'N/A' cell in a numeric column used to PASS the validator but then
+    crash the ingestor's numeric type-conversion (the validator read it as NaN,
+    the ingestor kept it as text). With keep_default_na=True both agree: the cell
+    parses as NaN, read_data succeeds, and the value is missing."""
+    csv_path = tmp_path / "x.csv"
+    csv_path.write_text("x,label\n1.5,a\nNaN,b\nN/A,c\n")
+    ing = CSVIngestor(
+        database=MagicMock(),
+        api_client=MagicMock(),
+        table_name="t",
+        schema={"x": "FLOAT", "label": "str"},
+        category=TaskCategory.TABULAR_CLASSIFICATION,
+        label_column="label",
+    )
+    records = list(ing.read_data(str(csv_path)))  # must not raise
+    xs = [r["x"] for r in records]
+    assert xs[0] == 1.5
+    assert pd.isna(xs[1]) and pd.isna(xs[2])

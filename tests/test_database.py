@@ -240,3 +240,13 @@ def test_create_table_allows_label_in_schema():
     db = Database.__new__(Database)
     db.tables = {"t": "sentinel"}  # short-circuit before any engine use
     assert db.create_table("t", {"feature_0": "FLOAT", "label": "INT"}) == "sentinel"
+
+
+def test_create_table_rejects_overlong_column_name():
+    """Column names over MySQL's 64-char identifier limit fail fast with a clear
+    error naming the offenders, instead of a raw MySQL 1059 at CREATE TABLE.
+    Like the reserved-column guard, this runs before any DB I/O."""
+    db = Database.__new__(Database)
+    long_name = "Protein_" + "X" * 70  # 78 chars, > 64
+    with pytest.raises(ValueError, match="64-character"):
+        db.create_table("t", {long_name: "FLOAT", "feature_0": "FLOAT"})
