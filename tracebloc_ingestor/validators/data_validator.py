@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, List, Dict, Optional, Union
 from datetime import datetime
 
+import numpy as np
 import pandas as pd
 
 from .base import BaseValidator, ValidationResult
@@ -326,6 +327,25 @@ class DataValidator(BaseValidator):
 
         return {"is_valid": len(errors) == 0, "errors": errors, "warnings": warnings}
 
+    @staticmethod
+    def _non_finite_error(series, numeric_series, column_name):
+        """Return an error string if a numeric column has inf/-inf values.
+
+        ``pd.to_numeric`` treats inf/-inf as valid numbers, so they slip past
+        the non-numeric check — but they are not valid finite input: they flow
+        through the training preprocessor's scaling unchanged and produce a NaN
+        loss. Reject them at the gate, showing the offending values.
+        """
+        mask = numeric_series.notna() & ~np.isfinite(numeric_series)
+        count = int(mask.sum())
+        if count == 0:
+            return None
+        sample = series[mask].head(5).tolist()
+        return (
+            f"Column '{column_name}' contains {count} non-finite value(s) "
+            f"(inf/-inf): {sample}"
+        )
+
     def _validate_int(
         self, series: pd.Series, column_name: str, expected_type: str
     ) -> Dict[str, Any]:
@@ -358,10 +378,15 @@ class DataValidator(BaseValidator):
                 f"Sample invalid values: {sample}"
             )
 
-        # Check for integer values among the parsed, non-null numbers only
-        # (a NaN would otherwise be miscounted as "non-integer" via NaN % 1).
+        non_finite = self._non_finite_error(series, numeric_series, column_name)
+        if non_finite:
+            errors.append(non_finite)
+
+        # Check for integer values among the parsed, finite, non-null numbers only
+        # (NaN/inf would otherwise be miscounted as "non-integer" via NaN % 1).
         if non_numeric_count == 0:
-            non_integer_mask = numeric_series.notna() & (numeric_series % 1 != 0)
+            finite = numeric_series.notna() & np.isfinite(numeric_series)
+            non_integer_mask = finite & (numeric_series % 1 != 0)
             non_integer_count = int(non_integer_mask.sum())
             if non_integer_count > 0:
                 errors.append(
@@ -416,6 +441,10 @@ class DataValidator(BaseValidator):
                 f"Column '{column_name}' contains {non_numeric_count} non-numeric value(s). "
                 f"Sample invalid values: {sample}"
             )
+
+        non_finite = self._non_finite_error(series, numeric_series, column_name)
+        if non_finite:
+            errors.append(non_finite)
 
         return {"is_valid": len(errors) == 0, "errors": errors, "warnings": warnings}
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -127,6 +128,53 @@ def test_non_numeric_error_includes_sample_values():
     assert not result.is_valid
     assert "Sample invalid values" in result.errors[0]
     assert "abc" in result.errors[0]
+
+
+# ---------------------------------------------------------------------------
+# Non-finite (inf) + realistic messy-data scenarios
+# ---------------------------------------------------------------------------
+
+def test_float_infinity_is_rejected():
+    # inf survives pd.to_numeric (it is "numeric") but flows through the training
+    # scaler unchanged and produces a NaN loss — so the gate must reject it.
+    df = pd.DataFrame({"x": [1.0, np.inf, -np.inf]})
+    result = DataValidator(schema={"x": "FLOAT"}).validate(df)
+    assert not result.is_valid
+    assert "non-finite" in result.errors[0]
+
+
+def test_int_infinity_is_rejected():
+    df = pd.DataFrame({"n": [1.0, np.inf, 3.0]})
+    result = DataValidator(schema={"n": "INT"}).validate(df)
+    assert not result.is_valid
+    assert "non-finite" in result.errors[0]
+
+
+def test_eu_comma_decimal_rejected_with_sample():
+    # German/EU exports write "1,5" for 1.5 — non-numeric to pandas. It is
+    # correctly rejected, and the sample value shows the user what to fix.
+    df = pd.DataFrame({"x": ["1,5", "2,3"]})
+    result = DataValidator(schema={"x": "FLOAT"}).validate(df)
+    assert not result.is_valid
+    assert "1,5" in result.errors[0]
+
+
+def test_thousands_separator_rejected():
+    df = pd.DataFrame({"n": ["1,234", "5,678"]})
+    assert not DataValidator(schema={"n": "INT"}).validate(df).is_valid
+
+
+def test_units_in_numeric_rejected_with_sample():
+    df = pd.DataFrame({"x": ["95%", "3kg"]})
+    result = DataValidator(schema={"x": "FLOAT"}).validate(df)
+    assert not result.is_valid
+    assert "95%" in result.errors[0] or "3kg" in result.errors[0]
+
+
+def test_scientific_notation_is_valid():
+    # Mass-spec / proteomics intensities are commonly in scientific notation.
+    df = pd.DataFrame({"x": ["1.23E+08", "4.5e7"]})
+    assert DataValidator(schema={"x": "FLOAT"}).validate(df).is_valid
 
 
 # ---------------------------------------------------------------------------
