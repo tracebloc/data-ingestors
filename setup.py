@@ -12,7 +12,7 @@ with open("requirements.txt", "r") as f:
 
 setup(
     name="tracebloc_ingestor",
-    version="0.3.3",
+    version="0.3.4",
     author="Tracebloc",
     author_email="support@tracebloc.com",
     description="A flexible data ingestion library for various file formats",
