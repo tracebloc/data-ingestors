@@ -301,8 +301,18 @@ class BaseIngestor(ABC):
             # JSONIngestor._validate_record (#170): `value is None or
             # value == ""`. pd.isna returns False for ordinary
             # strings/numbers/bools so existing values aren't touched.
+            # Python bool must NOT be stringified — mysql-connector-python
+            # writes True/False directly as TINYINT 1/0, but `str(True)` is
+            # the four-character string "True", which MySQL rejects against
+            # a BOOL column with `Incorrect integer value: 'True' for column
+            # 'active' at row 1`. Pass bools through; stringify everything
+            # else as before (the rest of the pipeline expects strings).
             cleaned_record = {
-                k.strip(): (None if pd.isna(v) or v == "" else str(v).strip())
+                k.strip(): (
+                    None if pd.isna(v) or v == ""
+                    else v if isinstance(v, bool)
+                    else str(v).strip()
+                )
                 for k, v in record.items()
                 if k in self.schema and k not in columns_to_exclude
             }

@@ -177,6 +177,33 @@ def test_process_record_preserves_real_values():
     assert rec["b"] == "42"
 
 
+def test_process_record_bool_not_stringified():
+    """Python True / False must NOT be stringified — they must reach the DB
+    binder as native bool so mysql-connector writes TINYINT 1/0.
+
+    Regression: the cleaning dict applied `str(v).strip()` to every
+    non-null value, turning True / False into the four-character strings
+    "True" / "False". MySQL rejects those against a BOOL column with
+    `Incorrect integer value: 'True' for column 'active' at row 1` —
+    16/20 rows of an end-to-end JSON ingest against v0.3.5-rc3 failed for
+    exactly this reason (the 4 rows with explicit `null` succeeded
+    because they round-tripped to SQL NULL per #176; the rest had
+    true/false). The bug was hidden until rc3 because earlier rc's
+    rejected JSON before any record reached the INSERT (#173 read path,
+    #176 validator widening).
+
+    Pass bools through unchanged; non-bool, non-null values still get
+    str()-and-strip semantics so existing INT/FLOAT/VARCHAR contracts
+    are unchanged.
+    """
+    ing = make_ingestor(schema={"a": "BOOL", "b": "BOOL", "n": "INT"}, category=None)
+    rec = ing.process_record({"a": True, "b": False, "n": 42, "filename": "f"})
+    assert rec["a"] is True, f"expected True, got {rec['a']!r}"
+    assert rec["b"] is False, f"expected False, got {rec['b']!r}"
+    # Non-bool unchanged from the prior contract.
+    assert rec["n"] == "42"
+
+
 def test_process_record_treats_empty_string_as_null():
     """Literal "" must become Python None (SQL NULL), matching the
     `value is None or value == ""` convention JSONIngestor._validate_record
