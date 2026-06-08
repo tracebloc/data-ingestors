@@ -211,6 +211,20 @@ def test_text_classification_without_texts_rejected(validator):
         validator.validate(config)
 
 
+def test_token_classification_without_texts_rejected(validator):
+    config = _load_example("token_classification.yaml")
+    del config["texts"]
+    with pytest.raises(ValidationError):
+        validator.validate(config)
+
+
+def test_token_classification_without_label_rejected(validator):
+    config = _load_example("token_classification.yaml")
+    del config["label"]
+    with pytest.raises(ValidationError):
+        validator.validate(config)
+
+
 def test_tabular_without_schema_rejected(validator):
     config = _load_example("tabular_classification.yaml")
     del config["schema"]

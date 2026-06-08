@@ -129,11 +129,26 @@ class BIOLabelValidator(BaseValidator):
                 f"each tag must be 'O' or 'B-<TYPE>' / 'I-<TYPE>'."
             )
 
-        text_path = os.path.join(texts_dir, f"{filename}{self.extension}")
-        if not os.path.isfile(text_path):
+        # Resolve the .txt the same way text_transfer does: the CSV filename
+        # may or may not already include the extension. Try as-is first, then
+        # with the extension appended, so a filename like "sample1.txt" is not
+        # looked up as "sample1.txt.txt".
+        candidates = [filename]
+        if not filename.endswith(self.extension):
+            candidates.append(f"{filename}{self.extension}")
+        text_path = next(
+            (
+                os.path.join(texts_dir, c)
+                for c in candidates
+                if os.path.isfile(os.path.join(texts_dir, c))
+            ),
+            None,
+        )
+        if text_path is None:
             errors.append(
                 f"{row_label}: text file not found at "
-                f"'{self.texts_path}/{filename}{self.extension}'."
+                f"'{self.texts_path}/{filename}' (with or without "
+                f"'{self.extension}')."
             )
             return errors
 

@@ -97,6 +97,23 @@ def test_extension_without_leading_dot_is_normalized(texts_dir):
     assert result.is_valid, result.errors
 
 
+def test_custom_label_column(texts_dir):
+    _write(texts_dir, "s1", "Barack Obama")
+    v = BIOLabelValidator(label_column="ner_tags")
+    df = pd.DataFrame({"filename": ["s1"], "ner_tags": ["B-PER I-PER"]})
+    result = v.validate(df)
+    assert result.is_valid, result.errors
+
+
+def test_filename_with_extension_not_double_appended(validator, texts_dir):
+    # CSV filename already carries the extension -> must resolve sample1.txt,
+    # not sample1.txt.txt.
+    _write(texts_dir, "s1", "Paris is nice")
+    df = pd.DataFrame({"filename": ["s1.txt"], "label": ["B-LOC O O"]})
+    result = validator.validate(df)
+    assert result.is_valid, result.errors
+
+
 def test_error_reporting_is_capped(validator, texts_dir):
     # 60 mismatched rows -> errors are capped with a suppression notice
     n = 60

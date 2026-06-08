@@ -349,7 +349,12 @@ class BaseIngestor(ABC):
         # Catch it once here with a clear, actionable message.
         self._check_csv_encoding(source)
 
-        validators = map_validators(self.category, self.file_options)
+        # Pass the configured label_column through (without permanently
+        # mutating file_options / metadata) so label-aware validators like
+        # BIOLabelValidator check the right column when a custom name is used.
+        validators = map_validators(
+            self.category, {**self.file_options, "label_column": self.label_column}
+        )
         logger.info(f"Running {len(validators)} validator(s) on data source")
         all_valid = True
         validation_errors = []

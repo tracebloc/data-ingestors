@@ -399,6 +399,7 @@
               "semantic_segmentation",
               "instance_segmentation",
               "text_classification",
+              "token_classification",
               "tabular_classification"
             ]
           }

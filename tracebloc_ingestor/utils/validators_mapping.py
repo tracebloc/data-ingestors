@@ -83,10 +83,12 @@ def map_validators(
         )
 
         # Validate BIO labels: one tag per word, valid BIO/IOB2 format.
+        # Honor a custom label column name when one is configured in the YAML.
         validators.append(
             BIOLabelValidator(
                 texts_path="texts",
                 extension=options.get("extension", FileExtension.TXT),
+                label_column=options.get("label_column") or "label",
             )
         )
 

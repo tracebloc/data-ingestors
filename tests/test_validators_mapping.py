@@ -93,6 +93,22 @@ def test_token_classification_with_schema_adds_data_validator():
     assert DataValidator in _types(v)
 
 
+def test_token_classification_threads_custom_label_column():
+    from tracebloc_ingestor.validators.bio_label_validator import BIOLabelValidator
+
+    v = map_validators(TaskCategory.TOKEN_CLASSIFICATION, {"label_column": "ner_tags"})
+    bio = next(x for x in v if isinstance(x, BIOLabelValidator))
+    assert bio.label_column == "ner_tags"
+
+
+def test_token_classification_defaults_label_column_when_unset():
+    from tracebloc_ingestor.validators.bio_label_validator import BIOLabelValidator
+
+    v = map_validators(TaskCategory.TOKEN_CLASSIFICATION, {"label_column": None})
+    bio = next(x for x in v if isinstance(x, BIOLabelValidator))
+    assert bio.label_column == "label"
+
+
 def test_time_series_forecasting_validator_set():
     v = map_validators(
         TaskCategory.TIME_SERIES_FORECASTING,
