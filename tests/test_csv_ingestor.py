@@ -106,3 +106,55 @@ def test_tabular_na_values_applied(tmp_path):
     # "NA"/"NULL" should be parsed as NaN for tabular categories.
     assert pd.isna(records[0]["b"])
     assert pd.isna(records[1]["b"])
+
+
+def test_varchar_empty_cells_yield_python_none(tmp_path):
+    """Missing cells in a VARCHAR column must yield Python None, NOT float NaN
+    or the literal string 'nan'.
+
+    Regression: before the type-coercion branch matched VARCHAR/CHAR (it only
+    matched STRING/TEXT), pandas left the column as float64 with NaN for empty
+    cells. itertuples emitted those NaN floats, dict() preserved them, and the
+    SQL binder stringified them as 'nan' on INSERT — silent data corruption
+    of every missing VARCHAR cell. #167 widened NULL-tolerance in the
+    validator (so all-null VARCHAR no longer fails validation); without this
+    write-side fix the column was happily ingested as a column of 'nan'
+    strings instead of SQL NULLs.
+
+    Surfaced by an end-to-end cluster ingestion with an all-empty VARCHAR(50)
+    column: MySQL row count = 60, all rows had analyte_y = 'nan' (length 3).
+    """
+    p = tmp_path / "d.csv"
+    # 'analyte_y' is all-empty (the original biomarker scenario from #167);
+    # 'notes' mixes a value and an empty.
+    p.write_text("a,analyte_y,notes\n1,,hello\n2,,\n3,,world\n")
+    ing = make_csv_ingestor(
+        schema={"a": "INT", "analyte_y": "VARCHAR(50)", "notes": "VARCHAR(100)"},
+        category=TaskCategory.TABULAR_CLASSIFICATION,
+    )
+    records = list(ing.read_data(str(p)))
+
+    assert len(records) == 3
+    # All-empty VARCHAR column: every value must be None, not NaN, not "nan".
+    for r in records:
+        assert r["analyte_y"] is None, f"expected None, got {r['analyte_y']!r}"
+    # Mixed VARCHAR column: present cells preserved; empty -> None.
+    assert records[0]["notes"] == "hello"
+    assert records[1]["notes"] is None
+    assert records[2]["notes"] == "world"
+
+
+def test_char_empty_cells_yield_python_none(tmp_path):
+    """Same regression for CHAR — pre-fix code only matched STRING/TEXT, so
+    CHAR(N) columns silently stored 'nan' for empties.
+    """
+    p = tmp_path / "d.csv"
+    p.write_text("a,code\n1,A\n2,\n")
+    ing = make_csv_ingestor(
+        schema={"a": "INT", "code": "CHAR(1)"},
+        category=TaskCategory.TABULAR_CLASSIFICATION,
+    )
+    records = list(ing.read_data(str(p)))
+
+    assert records[0]["code"] == "A"
+    assert records[1]["code"] is None
