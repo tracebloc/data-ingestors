@@ -418,3 +418,36 @@ def test_constraints_are_stripped_from_type():
 )
 def test_detect_column_type(series, expected):
     assert DataValidator()._detect_column_type(series) == expected
+
+
+# ---------------------------------------------------------------------------
+# Streaming / large-file validation (bounded memory, full coverage)
+# ---------------------------------------------------------------------------
+
+def test_validate_csv_streams_and_catches_late_chunk(tmp_path):
+    # A bad value PAST the first chunk must still be caught — the validator
+    # scans the whole file chunk by chunk (memory-bounded), not just a sample
+    # and not by loading the entire file. chunk_size forces multiple chunks.
+    p = tmp_path / "big.csv"
+    rows = [str(i) for i in range(50)]
+    rows[35] = "not-an-int"  # lands in the 4th chunk of 10
+    p.write_text("n\n" + "\n".join(rows) + "\n")
+    res = DataValidator(schema={"n": "INT"}).validate(str(p), chunk_size=10)
+    assert not res.is_valid and "non-numeric" in res.errors[0]
+
+
+def test_validate_csv_streaming_clean_file_is_valid(tmp_path):
+    p = tmp_path / "clean.csv"
+    p.write_text("n\n" + "\n".join(str(i) for i in range(50)) + "\n")
+    res = DataValidator(schema={"n": "INT"}).validate(str(p), chunk_size=10)
+    assert res.is_valid and res.metadata["rows_checked"] == 50
+
+
+def test_validate_strips_header_whitespace_to_match_ingestor():
+    # The ingestor strips header whitespace on every chunk (" age" -> "age");
+    # the validator must do the same so it validates the column the ingestor
+    # will actually ingest, rather than silently skipping it.
+    res = DataValidator(schema={"age": "INT"}).validate(
+        pd.DataFrame({" age": [1, "bad"]})
+    )
+    assert not res.is_valid

@@ -383,8 +383,19 @@ class CSVIngestor(BaseIngestor):
             Total number of records if countable, None otherwise
         """
         try:
-            # Use pandas to count lines efficiently
-            return pd.read_csv(file_path).shape[0]
+            # Count rows WITHOUT materialising the whole file. The old
+            # `pd.read_csv(file_path).shape[0]` loaded every column of every row
+            # into memory just to get a count — for a multi-GB dataset that's an
+            # OOM (the pod is Killed/137) before ingestion even starts. Read a
+            # single column in chunks and sum the lengths: CSV-aware (quoting /
+            # embedded newlines handled, unlike a raw line count) and bounded
+            # memory. usecols=[0] keeps each chunk to one column.
+            total = 0
+            for chunk in pd.read_csv(
+                file_path, usecols=[0], chunksize=100_000, encoding="utf-8"
+            ):
+                total += len(chunk)
+            return total
         except Exception as e:
             logger.debug(
                 f"{YELLOW}Unable to count CSV records using pandas: {str(e)}{RESET}"

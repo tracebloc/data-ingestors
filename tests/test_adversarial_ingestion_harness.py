@@ -523,3 +523,43 @@ def test_cr_only_line_endings_parse():
     # Classic-Mac CR-only line endings must parse, not collapse to a single row.
     rows = _ingest({"a": "INT", "b": "INT"}, "a,b\r1,2\r3,4\r")
     assert len(rows) == 2 and rows[1]["a"] == "3"
+
+
+# ===========================================================================
+# Section H — column headers (hardening)
+# ===========================================================================
+
+def test_header_whitespace_collision_rejected():
+    # Two headers differing only by whitespace (" age" and "age") both strip to
+    # "age" -> a post-strip duplicate. Must be rejected, not silently merged
+    # into one ambiguous column.
+    with pytest.raises(Exception):
+        _ingest({"age": "INT"}, "age, age\n1,2\n")
+
+
+def test_case_mismatched_header_is_clear_error():
+    # Schema "age" vs CSV "Age": a clear "schema column not present" error, not a
+    # silent skip (header matching is case-sensitive).
+    with pytest.raises(Exception):
+        _ingest({"age": "INT"}, "Age\n5\n")
+
+
+def test_empty_and_whitespace_only_headers_ignored():
+    # Empty ("a,,c") or whitespace-only header columns aren't in the schema, so
+    # they're simply not ingested — the declared columns still come through.
+    rows = _ingest({"a": "INT", "c": "INT"}, "a,,c\n1,2,3\n")
+    assert rows[0] == {"a": "1", "c": "3"}
+
+
+def test_extra_csv_column_excluded_by_schema():
+    # The schema is the contract for what gets ingested: a CSV column not in the
+    # schema is read but excluded from the record. (A typo'd schema KEY fails
+    # loudly via "schema column not present", so this exclusion can't silently
+    # swallow a column the user actually declared.)
+    ing = _ingestor({"a": "INT"})
+    p = Path(__import__("tempfile").mkdtemp()) / "d.csv"
+    p.write_bytes(b"a,extra\n1,99\n")
+    raw = list(ing.read_data(str(p)))
+    cleaned = ing.process_record(raw[0])
+    assert "extra" in raw[0] and "extra" not in cleaned
+    assert cleaned.get("a") == "1"
