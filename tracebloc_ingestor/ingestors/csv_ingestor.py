@@ -140,8 +140,15 @@ class CSVIngestor(BaseIngestor):
                     # (-> SQL NULL); default errors="raise" still surfaces a
                     # genuinely non-numeric value as a clear per-column error.
                     df[column] = pd.to_numeric(df[column]).astype("Int64")
-                elif "FLOAT" in dtype.upper():
-                    df[column] = pd.to_numeric(df[column], downcast="float")
+                elif any(t in dtype.upper() for t in ("FLOAT", "DOUBLE", "DECIMAL", "NUMERIC")):
+                    # float64 — NOT downcast='float' (float32), which corrupted
+                    # precision: 3.14 -> '3.140000104904175'. Also covers DOUBLE/
+                    # DECIMAL/NUMERIC, which previously matched NO branch and let
+                    # non-numeric junk flow untouched to the DB; errors='raise'
+                    # (the default) now rejects junk with a clear per-column
+                    # error. MySQL still applies the column's own precision/scale
+                    # on write.
+                    df[column] = pd.to_numeric(df[column])
                 elif "BOOL" in dtype.upper():
                     # Map the textual/numeric boolean forms DataValidator accepts
                     # (true/false, yes/no, t/f, y/n, 1/0) to a nullable boolean
@@ -157,8 +164,20 @@ class CSVIngestor(BaseIngestor):
                         else (False if x in _falsy else pd.NA),
                         na_action="ignore",
                     ).astype("boolean")
-                elif "DATE" in dtype.upper() or "DATETIME" in dtype.upper() or "TIMESTAMP" in dtype.upper() or "TIME" in dtype.upper():
-                    df[column] = pd.to_datetime(df[column], errors="coerce", format='mixed')
+                elif "DATETIME" in dtype.upper() or "TIMESTAMP" in dtype.upper():
+                    # Full date+time. Checked before DATE/TIME because the
+                    # substrings "DATE" and "TIME" both appear in "DATETIME"
+                    # (and "TIME" in "TIMESTAMP").
+                    df[column] = pd.to_datetime(df[column], errors="coerce", format="mixed")
+                elif "DATE" in dtype.upper():
+                    # DATE only — emit a plain date so the value doesn't gain a
+                    # spurious time ('2026-01-02' was becoming '2026-01-02 00:00:00').
+                    df[column] = pd.to_datetime(df[column], errors="coerce", format="mixed").dt.date
+                elif "TIME" in dtype.upper():
+                    # TIME only — emit a plain time so the value doesn't gain a
+                    # spurious (today's) date ('14:30:00' was becoming
+                    # '2026-06-08 14:30:00', which MySQL TIME then truncates).
+                    df[column] = pd.to_datetime(df[column], errors="coerce", format="mixed").dt.time
                 elif any(t in dtype.upper() for t in ("STRING", "TEXT", "VARCHAR", "CHAR")):
                     # Coerce to pandas StringDtype so missing cells become pd.NA
                     # (not float NaN), then map pd.NA -> Python None so the DB

@@ -265,46 +265,44 @@ def test_int_typed_codes_keep_zeros():
     assert [r["code"] for r in rows] == ["007", "0012"]
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "BUG: FLOAT columns are downcast to float32 (downcast='float', "
-    "csv_ingestor.py:137), so 3.14 is stringified as '3.140000104904175'. "
-    "Silent precision corruption of every float. Ideal: keep float64 / bind the "
-    "numeric value instead of str()."
-))
 def test_float_precision_preserved():
+    # REGRESSION GUARD (fixed): FLOAT used to be downcast to float32, so 3.14
+    # stringified as '3.140000104904175'. The numeric branch now keeps float64.
     rows = _ingest({"x": "FLOAT"}, "x\n3.14\n")
     assert rows[0]["x"] in ("3.14", 3.14)
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "BUG: a DATE value gains a spurious time component — '2026-01-02' -> "
-    "'2026-01-02 00:00:00' (to_datetime then str(), csv_ingestor.py:141 + "
-    "base.py:314). Ideal: format per target type (.dt.date for DATE)."
-))
 def test_date_no_spurious_time_component():
+    # REGRESSION GUARD (fixed): a DATE used to gain '... 00:00:00'. The DATE
+    # branch now emits a plain date (.dt.date).
     rows = _ingest({"d": "DATE"}, "d\n2026-01-02\n")
     assert rows[0]["d"] == "2026-01-02"
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "BUG: a TIME value gains today's date — '14:30:00' -> "
-    "'2026-06-08 14:30:00'. MySQL TIME then truncates/errors. Ideal: .dt.time "
-    "for TIME columns."
-))
 def test_time_no_spurious_date_component():
+    # REGRESSION GUARD (fixed): a TIME used to gain today's date. The TIME branch
+    # now emits a plain time (.dt.time).
     rows = _ingest({"t": "TIME"}, "t\n14:30:00\n")
     assert rows[0]["t"] == "14:30:00"
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "GAP: DOUBLE/DECIMAL have no branch in _validate_csv (only INT/FLOAT/BOOL/"
-    "DATE/STRING) and no JSON type-check, so junk ('abc') in a DOUBLE column "
-    "passes validation+read untouched and only fails (or coerces) cryptically at "
-    "the DB. Contract: junk in a numeric column must be a clear validation error."
-))
 def test_double_column_rejects_non_numeric():
+    # REGRESSION GUARD (fixed): DOUBLE/DECIMAL had no _validate_csv branch, so
+    # junk flowed straight to the DB. The numeric branch now covers them and
+    # raises a clear per-column error on non-numeric input.
     with pytest.raises(Exception):
         _ingest({"x": "DOUBLE"}, "x\nabc\n")
+
+
+def test_decimal_column_supported_and_coerced():
+    # REGRESSION GUARD (new): DECIMAL/NUMERIC are now first-class — mapped to
+    # SQLAlchemy Numeric in create_table (previously create_table rejected them
+    # with "Unsupported MySQL type") and coerced/validated like other numerics.
+    db = _real_db()
+    table = _create_table(db, "t", {"conc": "DECIMAL(10,2)"})
+    assert "conc" in {c.name for c in table.columns}
+    rows = _ingest({"conc": "DECIMAL(10,2)"}, "conc\n3.14\n")
+    assert rows[0]["conc"] in ("3.14", 3.14)
 
 
 # ===========================================================================

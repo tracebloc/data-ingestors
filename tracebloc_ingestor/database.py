@@ -14,6 +14,7 @@ from sqlalchemy import (
     Float,
     Boolean,
     Double,
+    Numeric,
     inspect,
 
 )
@@ -77,6 +78,8 @@ class Database:
             "BIGINT": BigInteger,
             "FLOAT": Float,
             "DOUBLE": Double,
+            "DECIMAL": Numeric,
+            "NUMERIC": Numeric,
             "BOOLEAN": Boolean,
             "BOOL": Boolean,
             "DATE": Date,
