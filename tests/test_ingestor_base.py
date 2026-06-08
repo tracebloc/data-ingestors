@@ -177,6 +177,24 @@ def test_process_record_preserves_real_values():
     assert rec["b"] == "42"
 
 
+def test_process_record_treats_empty_string_as_null():
+    """Literal "" must become Python None (SQL NULL), matching the
+    `value is None or value == ""` convention JSONIngestor._validate_record
+    uses (#170).
+
+    Regression context: JSONIngestor.read_data reads via `json.load`, not
+    `pd.read_json`, so an empty-string JSON value (`"score": ""`) reaches
+    here as the literal `""` — pd.isna("") is False, so without the `or
+    v == ""` guard the empty string would be written verbatim to MySQL.
+    The CSV path is unaffected because pandas' keep_default_na=True turns
+    "" into NaN at read time (caught by the pd.isna branch).
+    """
+    ing = make_ingestor(schema={"a": "VARCHAR(10)", "b": "INT"}, category=None)
+    rec = ing.process_record({"a": "", "b": "", "filename": "f"})
+    assert rec["a"] is None
+    assert rec["b"] is None
+
+
 # ---------------------------------------------------------------------------
 # _process_batch
 # ---------------------------------------------------------------------------

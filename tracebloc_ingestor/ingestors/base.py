@@ -286,17 +286,23 @@ class BaseIngestor(ABC):
                 columns_to_exclude.add(self.annotation_column)
             if self.unique_id_column:
                 columns_to_exclude.add(self.unique_id_column)
-            # Preserve missing-data semantics: any null-like value (Python
-            # None, float NaN, pd.NA, pd.NaT) becomes Python None so the DB
-            # binder writes SQL NULL. Previously this dict mapped None -> ""
-            # which (a) inserted empty-string into nullable VARCHAR/TEXT
-            # columns instead of NULL, and (b) silently coerced pandas'
-            # NaN/NaT/pd.NA into the literal string "nan"/"NaT"/"<NA>" via
-            # str(v). pd.isna handles all four uniformly and returns False
-            # for ordinary strings/numbers/bools so existing values aren't
-            # touched.
+            # Preserve missing-data semantics: any null-like value becomes
+            # Python None so the DB binder writes SQL NULL. Treats four
+            # representations uniformly:
+            #   - Python None         (explicit absence, JSON null)
+            #   - float NaN / pd.NaT  (from pd.read_csv / pd.to_datetime)
+            #   - pd.NA               (from pandas StringDtype after #172)
+            #   - literal "" string   (JSON empty string — JSONIngestor reads
+            #                         via json.load, not pd.read_json, so ""
+            #                         survives to here; CSVs never hit this
+            #                         case because keep_default_na=True turns
+            #                         "" into NaN at read time)
+            # Mirrors the missing-data convention in
+            # JSONIngestor._validate_record (#170): `value is None or
+            # value == ""`. pd.isna returns False for ordinary
+            # strings/numbers/bools so existing values aren't touched.
             cleaned_record = {
-                k.strip(): (None if pd.isna(v) else str(v).strip())
+                k.strip(): (None if pd.isna(v) or v == "" else str(v).strip())
                 for k, v in record.items()
                 if k in self.schema and k not in columns_to_exclude
             }
