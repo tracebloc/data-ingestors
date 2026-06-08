@@ -300,21 +300,24 @@ def test_utf16_with_correct_encoding_parses(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_default_tabular_na_tokens(tmp_path):
-    """The tabular-family default widens NA to ``["", "NA", "NULL", "None"]``.
-    Pin exactly which tokens are treated as NA under that default: empty and
-    ``NA`` become NaN; ``NaN`` / ``n/a`` / ``-`` are stored verbatim (they
-    are NOT in the default set, and keep_default_na is off). This documents
-    the boundary so a future widening is a conscious change."""
+    """Tabular-family CSVs use ``keep_default_na=True`` plus the explicit
+    ``_TABULAR_NA_VALUES`` widening (``["", "NA", "NULL", "None"]``), so the
+    effective NA set is the union of pandas' built-in tokens (which include
+    ``NaN`` / ``n/a`` / ``null`` / ``NA`` / ``NULL`` / ``None`` / ``""``) and
+    the widening. Tokens NOT in either set — e.g. ``-`` — are stored verbatim.
+    This documents the actual boundary so a future narrowing is a conscious
+    change. See csv_ingestor.py::read_data for the rationale (validators read
+    with pandas defaults, so the ingestor must match)."""
     p = tmp_path / "na.csv"
     p.write_text("a,b\n1,NA\n2,NaN\n3,n/a\n4,-\n5,\n", encoding="utf-8")
     ing = _make_ingestor({"a": "INT", "b": "VARCHAR(10)"})
     records = list(ing.read_data(str(p)))
 
     b = [r["b"] for r in records]
-    assert pd.isna(b[0])      # "NA"  -> NaN
-    assert b[1] == "NaN"      # not in default set -> literal
-    assert b[2] == "n/a"      # not in default set -> literal
-    assert b[3] == "-"        # not in default set -> literal
+    assert pd.isna(b[0])      # "NA"  -> NaN (in widening)
+    assert pd.isna(b[1])      # "NaN" -> NaN (in pandas defaults)
+    assert pd.isna(b[2])      # "n/a" -> NaN (in pandas defaults)
+    assert b[3] == "-"        # "-"   -> literal (in neither set)
     assert pd.isna(b[4])      # ""    -> NaN
 
 
