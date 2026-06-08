@@ -122,3 +122,23 @@ def test_validate_image_resolutions_unprocessable(tmp_path):
     res = ImageResolutionValidator(expected_resolution=(10, 10))._validate_image_resolutions([bad])
     assert not res.is_valid
     assert any("could not be processed" in e for e in res.errors)
+    # the per-file reason is now surfaced, not just the bare path
+    assert any("not a valid image" in e for e in res.errors)
+
+
+# --- _diagnose_image_error: distinct, actionable reasons --------------------
+
+def test_diagnose_empty_file(tmp_path):
+    p = tmp_path / "empty.jpg"
+    p.write_bytes(b"")
+    assert "empty file" in ImageResolutionValidator._diagnose_image_error(p)
+
+
+def test_diagnose_corrupt_file(tmp_path):
+    p = tmp_path / "corrupt.jpg"
+    p.write_bytes(b"this is definitely not an image")
+    assert "not a valid image" in ImageResolutionValidator._diagnose_image_error(p)
+
+
+def test_diagnose_missing_file(tmp_path):
+    assert "not found" in ImageResolutionValidator._diagnose_image_error(tmp_path / "nope.jpg")

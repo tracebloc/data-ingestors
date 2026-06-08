@@ -37,6 +37,48 @@ def test_loads_from_csv(make_csv):
     assert result.is_valid
 
 
+def test_loads_from_json(tmp_path):
+    """JSON top-level array of records must validate, mirroring the file shape
+    JSONIngestor.read_data consumes.
+
+    Regression: DataValidator._load_data only recognised .csv. Any .json input
+    returned None (logged "Unsupported file type"), the caller raised
+    "No data found to validate", and JSON ingestion failed end-to-end on the
+    very first validator — the recent per-record null-tolerance fix (#170)
+    lived behind an unreachable gate.
+
+    Surfaced by an end-to-end cluster ingestion: a 20-record JSON file with
+    explicit schema {id INT, age INT, score FLOAT, active BOOL, label
+    VARCHAR(20)} failed with "Data Validator Validator failed: No data found
+    to validate" before any record was read.
+    """
+    p = tmp_path / "d.json"
+    p.write_text(
+        '[{"id": 1, "age": 30, "score": 0.5, "active": true, "label": "A"},'
+        ' {"id": 2, "age": null, "score": 0.6, "active": false, "label": "B"}]'
+    )
+    result = DataValidator(
+        schema={
+            "id": "INT",
+            "age": "INT",
+            "score": "FLOAT",
+            "active": "BOOL",
+            "label": "VARCHAR(20)",
+        }
+    ).validate(str(p))
+    assert result.is_valid, f"expected valid; errors={result.errors}"
+
+
+def test_loads_from_json_genuine_type_error_still_caught(tmp_path):
+    """JSON support must not weaken type validation — a non-numeric in an INT
+    column must still fail. Pairs with the positive test to pin the boundary.
+    """
+    p = tmp_path / "bad.json"
+    p.write_text('[{"age": "not-an-int"}]')
+    result = DataValidator(schema={"age": "INT"}).validate(str(p))
+    assert not result.is_valid
+
+
 def test_unknown_type_fails():
     df = pd.DataFrame({"a": [1]})
     result = DataValidator(schema={"a": "WEIRDTYPE"}).validate(df)
@@ -193,6 +235,40 @@ def test_varchar_too_long_fails():
     assert "exceeding max length" in result.errors[0]
 
 
+def test_varchar_with_nulls_is_valid():
+    # Regression: a VARCHAR column with genuine missing values was wrongly
+    # reported as containing "non-string" values (NaN != NaN), an error the
+    # user could never clear by editing data. NULLs are valid for any column.
+    df = pd.DataFrame({"s": ["abc", None, "de"]})
+    assert DataValidator(schema={"s": "VARCHAR(255)"}).validate(df).is_valid
+
+
+def test_varchar_all_null_is_valid():
+    # An entirely-empty column (e.g. an unmeasured biomarker / analyte in a
+    # sparse panel) is a column of NULLs — valid, not N "non-string values".
+    df = pd.DataFrame({"s": [None, None, None]})
+    assert DataValidator(schema={"s": "VARCHAR(255)"}).validate(df).is_valid
+
+
+def test_char_with_nulls_is_valid():
+    df = pd.DataFrame({"s": ["ab", None, "cd"]})
+    assert DataValidator(schema={"s": "CHAR(2)"}).validate(df).is_valid
+
+
+def test_text_with_nulls_is_valid():
+    df = pd.DataFrame({"s": ["any length text", None]})
+    assert DataValidator(schema={"s": "TEXT"}).validate(df).is_valid
+
+
+def test_varchar_still_flags_real_non_strings():
+    # NULL tolerance must NOT mask a genuine type error: a real numeric value
+    # in a VARCHAR column is still non-string and must be reported.
+    df = pd.DataFrame({"s": ["abc", 5, "de"]})
+    result = DataValidator(schema={"s": "VARCHAR(255)"}).validate(df)
+    assert not result.is_valid
+    assert "non-string" in result.errors[0]
+
+
 def test_char_wrong_length_fails():
     df = pd.DataFrame({"s": ["ab", "cde"]})
     result = DataValidator(schema={"s": "CHAR(2)"}).validate(df)
@@ -265,6 +341,28 @@ def test_date_family_valid(dtype):
 
 def test_date_invalid_fails():
     df = pd.DataFrame({"d": ["not-a-date", "2024-01-01"]})
+    result = DataValidator(schema={"d": "DATE"}).validate(df)
+    assert not result.is_valid
+    assert "invalid date" in result.errors[0]
+
+
+@pytest.mark.parametrize("dtype", ["DATE", "DATETIME", "TIMESTAMP", "TIME"])
+def test_date_family_with_nulls_is_valid(dtype):
+    # Regression: a date column with genuine missing values was wrongly
+    # reported as "invalid date values" (to_datetime turns NULL into NaT,
+    # then isnull() counted it) — an unclearable error. NULLs are valid.
+    df = pd.DataFrame({"d": ["2024-01-01", None, "2024-02-02"]})
+    assert DataValidator(schema={"d": dtype}).validate(df).is_valid
+
+
+def test_date_all_null_is_valid():
+    df = pd.DataFrame({"d": [None, None, None]})
+    assert DataValidator(schema={"d": "DATE"}).validate(df).is_valid
+
+
+def test_date_still_flags_real_bad_value_with_nulls_present():
+    # NULL tolerance must not mask a genuinely un-parseable date.
+    df = pd.DataFrame({"d": ["2024-01-01", None, "not-a-date"]})
     result = DataValidator(schema={"d": "DATE"}).validate(df)
     assert not result.is_valid
     assert "invalid date" in result.errors[0]

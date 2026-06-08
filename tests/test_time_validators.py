@@ -66,6 +66,31 @@ def test_format_schema_timestamp_with_precision_passes(make_csv):
     assert result.is_valid
 
 
+# --- locale-ambiguous dates (silent-corruption guard) ----------------------
+
+def test_format_ambiguous_eu_dates_rejected(make_csv):
+    # "03.04.2026" is Apr 3 (day-first/EU) or Mar 4 (month-first/US); pandas'
+    # format='mixed' would silently pick one. Both interpretations are valid but
+    # different, so reject as ambiguous instead of corrupting the series.
+    path = make_csv({"timestamp": ["03.04.2026", "07.08.2026"], "v": [1, 2]})
+    result = TimeFormatValidator().validate(str(path))
+    assert not result.is_valid
+    assert "ambiguous" in result.errors[0].lower()
+
+
+def test_format_iso_dates_not_ambiguous(make_csv):
+    # ISO 8601 is unambiguous and must pass cleanly.
+    path = make_csv({"timestamp": ["2024-01-03", "2024-04-05"], "v": [1, 2]})
+    assert TimeFormatValidator().validate(str(path)).is_valid
+
+
+def test_format_unambiguous_dates_not_flagged(make_csv):
+    # day > 12 has only one valid interpretation (here month-first), so it is
+    # NOT ambiguous and must not be falsely rejected.
+    path = make_csv({"timestamp": ["01/25/2024", "02/26/2024"], "v": [1, 2]})
+    assert TimeFormatValidator().validate(str(path)).is_valid
+
+
 # ---------------------------------------------------------------------------
 # TimeOrderedValidator
 # ---------------------------------------------------------------------------

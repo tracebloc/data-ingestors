@@ -139,8 +139,21 @@ class CSVIngestor(BaseIngestor):
                     df[column] = df[column].astype("boolean")
                 elif "DATE" in dtype.upper() or "DATETIME" in dtype.upper() or "TIMESTAMP" in dtype.upper() or "TIME" in dtype.upper():
                     df[column] = pd.to_datetime(df[column], errors="coerce", format='mixed')
-                elif "STRING" in dtype.upper() or "TEXT" in dtype.upper():
-                    df[column] = df[column].astype("string")
+                elif any(t in dtype.upper() for t in ("STRING", "TEXT", "VARCHAR", "CHAR")):
+                    # Coerce to pandas StringDtype so missing cells become pd.NA
+                    # (not float NaN), then map pd.NA -> Python None so the DB
+                    # binder writes SQL NULL. Without this, VARCHAR/CHAR columns
+                    # were left as the float64 dtype pandas inferred for an
+                    # empty/mixed cell, and str(nan) "nan" landed in MySQL —
+                    # silent corruption of missing-data semantics. #167 widened
+                    # NULL-tolerance in the validator so all-null VARCHAR no
+                    # longer fails validation; this completes the fix on the
+                    # write side.
+                    df[column] = (
+                        df[column].astype("string").astype(object).where(
+                            df[column].notna(), None
+                        )
+                    )
             except Exception as e:
                 raise ValueError(
                     f"{RED}Data type validation failed for column {column}: {str(e)}{RESET}"
@@ -196,9 +209,17 @@ class CSVIngestor(BaseIngestor):
 
             first_chunk = True
             for chunk in pd.read_csv(file_path, chunksize=chunk_size, **csv_options):
+                # Strip headers + type-convert EVERY chunk. Doing this only for
+                # the first chunk left every row past chunk_size (default 1000)
+                # un-converted — a DATE column came back as raw strings, numeric
+                # columns fell back to pandas' per-chunk inference, and header
+                # whitespace was stripped only for chunk 1 — all invisible until
+                # a file exceeds a single chunk.
+                chunk.columns = chunk.columns.str.strip()
+                self._validate_csv(chunk)
                 if first_chunk:
-                    chunk.columns = chunk.columns.str.strip()
-                    self._validate_csv(chunk)
+                    # One-time check: the unique_id column exists (columns are
+                    # identical across chunks, so checking the first is enough).
                     if (
                         self.unique_id_column
                         and self.unique_id_column not in chunk.columns
