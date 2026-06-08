@@ -9,10 +9,18 @@ from tracebloc_ingestor.validators.xml_validator import PascalVOCXMLValidator
 from tracebloc_ingestor.validators.time_to_event_validator import TimeToEventValidator
 from tracebloc_ingestor.validators.time_format_validator import TimeFormatValidator
 from tracebloc_ingestor.validators.time_ordered_validator import TimeOrderedValidator
-from tracebloc_ingestor.validators.time_before_today_validator import TimeBeforeTodayValidator
-from tracebloc_ingestor.validators.numeric_columns_validator import NumericColumnsValidator
-from tracebloc_ingestor.validators.keypoint_annotation_validator import KeypointAnnotationValidator
-from tracebloc_ingestor.validators.keypoint_visibility_validator import KeypointVisibilityValidator
+from tracebloc_ingestor.validators.time_before_today_validator import (
+    TimeBeforeTodayValidator,
+)
+from tracebloc_ingestor.validators.numeric_columns_validator import (
+    NumericColumnsValidator,
+)
+from tracebloc_ingestor.validators.keypoint_annotation_validator import (
+    KeypointAnnotationValidator,
+)
+from tracebloc_ingestor.validators.keypoint_visibility_validator import (
+    KeypointVisibilityValidator,
+)
 from tracebloc_ingestor.validators.tokenizer_validator import TokenizerValidator
 from tracebloc_ingestor.validators.file_pairing_validator import FilePairingValidator
 from tracebloc_ingestor.validators.bio_label_validator import BIOLabelValidator
@@ -35,7 +43,9 @@ def map_validators(
             FileTypeValidator(allowed_extension=".xml", path="annotations"),
             PascalVOCXMLValidator(),
             FilePairingValidator(
-                image_path="images", sidecar_path="annotations", sidecar_label="annotation"
+                image_path="images",
+                sidecar_path="annotations",
+                sidecar_label="annotation",
             ),
             ImageResolutionValidator(expected_resolution=options["target_size"]),
             TableNameValidator(),
@@ -61,6 +71,10 @@ def map_validators(
                 path="texts",
             ),
         )
+
+        # Optional user-supplied tokenizer.json — warn (don't fail) if absent;
+        # if present, it must contain [PAD] (text classification pads batches).
+        validators.append(TokenizerValidator(required_tokens=("[PAD]",), optional=True))
 
         # Add data validator if schema is provided
         if options.get("schema"):
@@ -92,6 +106,10 @@ def map_validators(
             )
         )
 
+        # Optional user-supplied tokenizer.json — warn (don't fail) if absent;
+        # if present, it must contain [PAD].
+        validators.append(TokenizerValidator(required_tokens=("[PAD]",), optional=True))
+
         # Add data validator if schema is provided
         if options.get("schema"):
             validators.append(DataValidator(schema=options["schema"]))
@@ -104,20 +122,19 @@ def map_validators(
         validators = []
 
         schema = options.get("schema", {})
-        
+
         validators.append(TimeFormatValidator(schema=schema))
         validators.append(TimeOrderedValidator())
         validators.append(TimeBeforeTodayValidator())
         validators.append(NumericColumnsValidator(schema=schema))
-        
+
         if options.get("schema"):
             schema_without_timestamp = {
-                k: v for k, v in options["schema"].items() 
-                if k.lower() != "timestamp"
+                k: v for k, v in options["schema"].items() if k.lower() != "timestamp"
             }
             if schema_without_timestamp:
                 validators.append(DataValidator(schema=schema_without_timestamp))
-        
+
         validators.append(TableNameValidator())
         validators.append(DuplicateValidator())
 

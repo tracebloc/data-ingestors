@@ -194,9 +194,7 @@ def annotation_transfer(
             return None
 
         if src_path is None:
-            src_path, filename_with_ext = _find_src(
-                "annotations", filename, extension
-            )
+            src_path, filename_with_ext = _find_src("annotations", filename, extension)
             if src_path is None:
                 logger.error(
                     f"{RED}Source file not found: {os.path.join(config.SRC_PATH, 'annotations', filename_with_ext)}{RESET}"
@@ -309,6 +307,21 @@ def mask_transfer(
         raise ValueError(f"{RED}Error processing mask file: {str(e)}{RESET}")
 
 
+def _copy_tokenizer_if_present() -> None:
+    """Copy a user-shipped ``tokenizer.json`` from SRC_PATH to DEST_PATH (once).
+
+    Optional for NLP datasets: the training client looks for
+    ``DEST_PATH/tokenizer.json`` and uses it as a custom tokenizer; if it's
+    absent the client falls back to the HuggingFace tokenizer_id / default.
+    No-op when no tokenizer.json was shipped, or when it was already copied.
+    """
+    tokenizer_src = os.path.join(config.SRC_PATH, "tokenizer.json")
+    tokenizer_dest = os.path.join(config.DEST_PATH, "tokenizer.json")
+    if os.path.isfile(tokenizer_src) and not os.path.exists(tokenizer_dest):
+        _copy_file_with_retry(tokenizer_src, tokenizer_dest)
+        logger.info(f"{GREEN}Copied tokenizer.json to {config.DEST_PATH}{RESET}")
+
+
 def map_file_transfer(
     task_category: TaskCategory, record: Dict[str, Any], options: Dict[str, Any]
 ) -> Dict[str, Any]:
@@ -357,30 +370,25 @@ def map_file_transfer(
         return result
     elif task_category == TaskCategory.TEXT_CLASSIFICATION:
         result = text_transfer(record, options)
+        # Optional: ship a custom tokenizer.json so the client uses it instead
+        # of the HF default; absent is fine (handled by the optional validator).
+        _copy_tokenizer_if_present()
         return result
     elif task_category == TaskCategory.TOKEN_CLASSIFICATION:
         # Same on-disk layout as text classification: one .txt per sample in
         # the ``texts`` subdir. BIO tags travel in the labels CSV, not on disk.
         result = text_transfer(record, options)
+        # Optional custom tokenizer.json (same as text classification).
+        _copy_tokenizer_if_present()
         return result
     elif task_category == TaskCategory.MASKED_LANGUAGE_MODELING:
         result = text_transfer(record, options, src_subdir="sequences")
-        # Copy tokenizer.json once (if provided by the user).
-        # The client's MLM strategy looks for tokenizer.json at
-        # DEST_PATH/tokenizer.json to use the user's custom tokenizer
-        # instead of falling back to bert-base-uncased.  Without this
-        # copy the tokenizer vocab_size may mismatch the model's
-        # nn.Embedding, causing CUDA device-side assert at training.
-        tokenizer_src = os.path.join(config.SRC_PATH, "tokenizer.json")
-        tokenizer_dest = os.path.join(config.DEST_PATH, "tokenizer.json")
-        if (
-            os.path.isfile(tokenizer_src)
-            and not os.path.exists(tokenizer_dest)
-        ):
-            _copy_file_with_retry(tokenizer_src, tokenizer_dest)
-            logger.info(
-                f"{GREEN}Copied tokenizer.json to {config.DEST_PATH}{RESET}"
-            )
+        # Copy the user's tokenizer.json so the MLM client uses it instead of
+        # falling back to bert-base-uncased (a vocab_size mismatch with the
+        # model's nn.Embedding would cause a CUDA device-side assert at
+        # training). For MLM the tokenizer is mandatory — its presence and
+        # [MASK]/[PAD] tokens are enforced by TokenizerValidator at validation.
+        _copy_tokenizer_if_present()
         return result
     elif task_category == TaskCategory.SEMANTIC_SEGMENTATION:
         # Atomic: only copy image+mask together. Pre-verify both sources

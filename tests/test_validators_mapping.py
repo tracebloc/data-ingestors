@@ -14,9 +14,15 @@ from tracebloc_ingestor.validators.duplicate_validator import DuplicateValidator
 from tracebloc_ingestor.validators.xml_validator import PascalVOCXMLValidator
 from tracebloc_ingestor.validators.time_to_event_validator import TimeToEventValidator
 from tracebloc_ingestor.validators.time_format_validator import TimeFormatValidator
-from tracebloc_ingestor.validators.numeric_columns_validator import NumericColumnsValidator
-from tracebloc_ingestor.validators.keypoint_annotation_validator import KeypointAnnotationValidator
-from tracebloc_ingestor.validators.keypoint_visibility_validator import KeypointVisibilityValidator
+from tracebloc_ingestor.validators.numeric_columns_validator import (
+    NumericColumnsValidator,
+)
+from tracebloc_ingestor.validators.keypoint_annotation_validator import (
+    KeypointAnnotationValidator,
+)
+from tracebloc_ingestor.validators.keypoint_visibility_validator import (
+    KeypointVisibilityValidator,
+)
 from tracebloc_ingestor.validators.tokenizer_validator import TokenizerValidator
 
 
@@ -30,7 +36,10 @@ def _types(validators):
 def test_image_classification():
     v = map_validators(TaskCategory.IMAGE_CLASSIFICATION, IMAGE_OPTS)
     assert _types(v) == [
-        FileTypeValidator, ImageResolutionValidator, TableNameValidator, DuplicateValidator
+        FileTypeValidator,
+        ImageResolutionValidator,
+        TableNameValidator,
+        DuplicateValidator,
     ]
 
 
@@ -153,3 +162,14 @@ def test_masked_language_modeling_includes_tokenizer():
 
 def test_unknown_category_returns_empty():
     assert map_validators("not_a_category", {}) == []
+
+
+def test_text_and_token_classification_include_optional_tokenizer_validator():
+    from tracebloc_ingestor.validators.tokenizer_validator import TokenizerValidator
+
+    for cat in (TaskCategory.TEXT_CLASSIFICATION, TaskCategory.TOKEN_CLASSIFICATION):
+        v = map_validators(cat, {})
+        tok = [x for x in v if isinstance(x, TokenizerValidator)]
+        assert tok, f"{cat}: expected an (optional) TokenizerValidator"
+        assert tok[0].optional is True
+        assert tok[0].required_tokens == {"[PAD]"}
