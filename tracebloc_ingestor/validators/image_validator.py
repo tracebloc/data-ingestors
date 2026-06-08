@@ -12,12 +12,13 @@ from tracebloc_ingestor.config import Config
 from tracebloc_ingestor.utils.logging import setup_logging
 
 try:
-    from PIL import Image
+    from PIL import Image, UnidentifiedImageError
 
     PIL_AVAILABLE = True
 except ImportError:
     PIL_AVAILABLE = False
     Image = None
+    UnidentifiedImageError = Exception
 
 from .base import BaseValidator, ValidationResult
 
@@ -199,6 +200,30 @@ class ImageResolutionValidator(BaseValidator):
             logger.warning(f"Could not get resolution for {image_path}: {str(e)}")
             return None
 
+    @staticmethod
+    def _diagnose_image_error(image_path: Path) -> str:
+        """Return a human-readable reason an image could not be read, turning the
+        generic "could not be processed" into an actionable cause: empty file,
+        corrupt/unsupported format, or decompression bomb."""
+        try:
+            p = Path(image_path)
+            if not p.exists():
+                return "file not found"
+            if p.stat().st_size == 0:
+                return "empty file (0 bytes)"
+        except OSError as exc:
+            return f"unreadable ({exc.__class__.__name__})"
+        try:
+            with Image.open(image_path) as img:
+                img.verify()  # integrity check without a full decode
+            return "unreadable image"
+        except UnidentifiedImageError:
+            return "not a valid image (corrupt or unsupported format)"
+        except Image.DecompressionBombError:
+            return "exceeds the safe pixel limit (possible decompression bomb)"
+        except Exception as exc:
+            return f"{exc.__class__.__name__}: {exc}"
+
     def _validate_image_resolutions(self, image_files: List[Path]) -> ValidationResult:
         """Validate image resolutions for uniformity.
 
@@ -237,7 +262,9 @@ class ImageResolutionValidator(BaseValidator):
                 try:
                     resolution = self._get_image_resolution(image_path)
                     if resolution is None:
-                        invalid_files.append(str(image_path))
+                        invalid_files.append(
+                            f"{image_path}: {self._diagnose_image_error(image_path)}"
+                        )
                         continue
 
                     resolutions_found.add(resolution)
