@@ -139,8 +139,21 @@ class CSVIngestor(BaseIngestor):
                     df[column] = df[column].astype("boolean")
                 elif "DATE" in dtype.upper() or "DATETIME" in dtype.upper() or "TIMESTAMP" in dtype.upper() or "TIME" in dtype.upper():
                     df[column] = pd.to_datetime(df[column], errors="coerce", format='mixed')
-                elif "STRING" in dtype.upper() or "TEXT" in dtype.upper():
-                    df[column] = df[column].astype("string")
+                elif any(t in dtype.upper() for t in ("STRING", "TEXT", "VARCHAR", "CHAR")):
+                    # Coerce to pandas StringDtype so missing cells become pd.NA
+                    # (not float NaN), then map pd.NA -> Python None so the DB
+                    # binder writes SQL NULL. Without this, VARCHAR/CHAR columns
+                    # were left as the float64 dtype pandas inferred for an
+                    # empty/mixed cell, and str(nan) "nan" landed in MySQL —
+                    # silent corruption of missing-data semantics. #167 widened
+                    # NULL-tolerance in the validator so all-null VARCHAR no
+                    # longer fails validation; this completes the fix on the
+                    # write side.
+                    df[column] = (
+                        df[column].astype("string").astype(object).where(
+                            df[column].notna(), None
+                        )
+                    )
             except Exception as e:
                 raise ValueError(
                     f"{RED}Data type validation failed for column {column}: {str(e)}{RESET}"
