@@ -196,9 +196,17 @@ class CSVIngestor(BaseIngestor):
 
             first_chunk = True
             for chunk in pd.read_csv(file_path, chunksize=chunk_size, **csv_options):
+                # Strip headers + type-convert EVERY chunk. Doing this only for
+                # the first chunk left every row past chunk_size (default 1000)
+                # un-converted — a DATE column came back as raw strings, numeric
+                # columns fell back to pandas' per-chunk inference, and header
+                # whitespace was stripped only for chunk 1 — all invisible until
+                # a file exceeds a single chunk.
+                chunk.columns = chunk.columns.str.strip()
+                self._validate_csv(chunk)
                 if first_chunk:
-                    chunk.columns = chunk.columns.str.strip()
-                    self._validate_csv(chunk)
+                    # One-time check: the unique_id column exists (columns are
+                    # identical across chunks, so checking the first is enough).
                     if (
                         self.unique_id_column
                         and self.unique_id_column not in chunk.columns
