@@ -37,6 +37,76 @@ def test_loads_from_csv(make_csv):
     assert result.is_valid
 
 
+def test_loads_from_json(tmp_path):
+    """JSON top-level array of records must validate, mirroring the file shape
+    JSONIngestor.read_data consumes.
+
+    Regression: DataValidator._load_data only recognised .csv. Any .json input
+    returned None (logged "Unsupported file type"), the caller raised
+    "No data found to validate", and JSON ingestion failed end-to-end on the
+    very first validator — the recent per-record null-tolerance fix (#170)
+    lived behind an unreachable gate.
+
+    Surfaced by an end-to-end cluster ingestion: a 20-record JSON file with
+    explicit schema {id INT, age INT, score FLOAT, active BOOL, label
+    VARCHAR(20)} failed with "Data Validator Validator failed: No data found
+    to validate" before any record was read.
+    """
+    p = tmp_path / "d.json"
+    p.write_text(
+        '[{"id": 1, "age": 30, "score": 0.5, "active": true, "label": "A"},'
+        ' {"id": 2, "age": null, "score": 0.6, "active": false, "label": "B"}]'
+    )
+    result = DataValidator(
+        schema={
+            "id": "INT",
+            "age": "INT",
+            "score": "FLOAT",
+            "active": "BOOL",
+            "label": "VARCHAR(20)",
+        }
+    ).validate(str(p))
+    assert result.is_valid, f"expected valid; errors={result.errors}"
+
+
+def test_loads_from_json_genuine_type_error_still_caught(tmp_path):
+    """JSON support must not weaken type validation — a non-numeric in an INT
+    column must still fail. Pairs with the positive test to pin the boundary.
+    """
+    p = tmp_path / "bad.json"
+    p.write_text('[{"age": "not-an-int"}]')
+    result = DataValidator(schema={"age": "INT"}).validate(str(p))
+    assert not result.is_valid
+
+
+def test_loads_from_json_empty_string_is_missing(tmp_path):
+    """Empty strings in JSON INT/FLOAT cells must be treated as missing, the
+    same way `null` is — matching JSONIngestor._validate_record's convention
+    (`if value is None or value == ""`, #170).
+
+    Regression: pd.read_json (unlike pd.read_csv with keep_default_na=True)
+    preserves "" as the literal empty string. The INT validator then reported
+    `"Column 'age' contains N non-numeric value(s). Sample invalid values:
+    ['', '']"` even though those rows would have been ingested as missing —
+    so a JSON file that JSONIngestor handles fine was rejected by the
+    validator that runs before it.
+
+    Surfaced by an end-to-end cluster ingestion against v0.3.5-rc2: 20-record
+    JSON file with mixed `null` and `""` in INT/FLOAT columns failed
+    validation with the above error.
+    """
+    p = tmp_path / "d.json"
+    p.write_text(
+        '[{"id": 1, "age": 30,   "score": 0.5},'
+        ' {"id": 2, "age": null, "score": 0.6},'
+        ' {"id": 3, "age": "",   "score": ""}]'
+    )
+    result = DataValidator(
+        schema={"id": "INT", "age": "INT", "score": "FLOAT"}
+    ).validate(str(p))
+    assert result.is_valid, f"expected valid; errors={result.errors}"
+
+
 def test_unknown_type_fails():
     df = pd.DataFrame({"a": [1]})
     result = DataValidator(schema={"a": "WEIRDTYPE"}).validate(df)
@@ -299,6 +369,28 @@ def test_date_family_valid(dtype):
 
 def test_date_invalid_fails():
     df = pd.DataFrame({"d": ["not-a-date", "2024-01-01"]})
+    result = DataValidator(schema={"d": "DATE"}).validate(df)
+    assert not result.is_valid
+    assert "invalid date" in result.errors[0]
+
+
+@pytest.mark.parametrize("dtype", ["DATE", "DATETIME", "TIMESTAMP", "TIME"])
+def test_date_family_with_nulls_is_valid(dtype):
+    # Regression: a date column with genuine missing values was wrongly
+    # reported as "invalid date values" (to_datetime turns NULL into NaT,
+    # then isnull() counted it) — an unclearable error. NULLs are valid.
+    df = pd.DataFrame({"d": ["2024-01-01", None, "2024-02-02"]})
+    assert DataValidator(schema={"d": dtype}).validate(df).is_valid
+
+
+def test_date_all_null_is_valid():
+    df = pd.DataFrame({"d": [None, None, None]})
+    assert DataValidator(schema={"d": "DATE"}).validate(df).is_valid
+
+
+def test_date_still_flags_real_bad_value_with_nulls_present():
+    # NULL tolerance must not mask a genuinely un-parseable date.
+    df = pd.DataFrame({"d": ["2024-01-01", None, "not-a-date"]})
     result = DataValidator(schema={"d": "DATE"}).validate(df)
     assert not result.is_valid
     assert "invalid date" in result.errors[0]

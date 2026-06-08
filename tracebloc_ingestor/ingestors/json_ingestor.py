@@ -128,13 +128,22 @@ class JSONIngestor(BaseIngestor):
         for field in common_fields:
             value = record[field]
             dtype = self.schema[field]
+            # NULL tolerance. A JSON ``null`` (Python ``None``) and an empty
+            # string are both legitimate missing values for any type; calling
+            # ``int(None)`` / ``float(None)`` raises TypeError, which the
+            # validator would otherwise surface as "Data type validation
+            # failed" — an error the user can never clear (JSON null IS the
+            # representation of missing). Mirrors the same NULL-tolerance the
+            # CSV-side validators got in #167 / #168.
+            if value is None or value == "":
+                continue
             try:
                 if "INT" in dtype.upper():
-                    int(value) if value != "" else None
+                    int(value)
                 elif "FLOAT" in dtype.upper():
-                    float(value) if value != "" else None
+                    float(value)
                 elif "BOOL" in dtype.upper():
-                    bool(value) if value != "" else None
+                    bool(value)
                 # Add more type validations as needed
             except Exception as e:
                 raise ValueError(

@@ -1,5 +1,6 @@
 from setuptools import setup, find_packages
 import os
+import re
 
 # read the contents of your README file
 from pathlib import Path
@@ -7,12 +8,29 @@ from pathlib import Path
 this_directory = Path(__file__).parent
 long_description = (this_directory / "Readme.md").read_text()
 
+
+def _read_version():
+    """Single-source the version from tracebloc_ingestor/__init__.py.
+
+    Parsed as text (not imported) so building the sdist never has to import the
+    package or its dependencies. Keeping the version literal in exactly one
+    place is what stops setup.py and __version__ drifting again (#175).
+    """
+    init_py = (this_directory / "tracebloc_ingestor" / "__init__.py").read_text()
+    match = re.search(r'^__version__\s*=\s*["\']([^"\']+)["\']', init_py, re.M)
+    if match is None:
+        raise RuntimeError(
+            "Unable to find __version__ in tracebloc_ingestor/__init__.py"
+        )
+    return match.group(1)
+
+
 with open("requirements.txt", "r") as f:
     requirements = f.read().splitlines()
 
 setup(
     name="tracebloc_ingestor",
-    version="0.3.4",
+    version=_read_version(),
     author="Tracebloc",
     author_email="support@tracebloc.com",
     description="A flexible data ingestion library for various file formats",

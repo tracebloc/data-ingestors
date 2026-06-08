@@ -94,6 +94,32 @@ def test_validate_record_allows_empty_string():
     ing._validate_record({"n": ""})
 
 
+def test_validate_record_allows_json_null_for_int():
+    # Regression: a JSON ``null`` (Python None) was passed to int(None), which
+    # raises TypeError and surfaced as "Data type validation failed for field
+    # n" — an error the user can never clear since JSON null IS the
+    # representation of missing.
+    ing = make_json_ingestor(schema={"n": "INT"})
+    ing._validate_record({"n": None})
+
+
+def test_validate_record_allows_json_null_for_float():
+    ing = make_json_ingestor(schema={"x": "FLOAT"})
+    ing._validate_record({"x": None})
+
+
+def test_validate_record_allows_json_null_for_bool():
+    ing = make_json_ingestor(schema={"b": "BOOL"})
+    ing._validate_record({"b": None})
+
+
+def test_validate_record_still_rejects_real_type_errors():
+    # NULL tolerance must NOT mask a genuine bad value.
+    ing = make_json_ingestor(schema={"n": "INT"})
+    with pytest.raises(ValueError, match="Data type validation failed"):
+        ing._validate_record({"n": "not-an-int"})
+
+
 def test_count_records_array(tmp_path):
     p = _write_json(tmp_path, [{"a": 1}, {"a": 2}, {"a": 3}])
     assert make_json_ingestor()._count_records(str(p)) == 3
