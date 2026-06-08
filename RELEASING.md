@@ -12,7 +12,7 @@ How to cut a new release of `tracebloc-ingestor` (PyPI package) and `ghcr.io/tra
 
 Each publisher runs the schema-load smoke probe (`tracebloc_ingestor.cli.run._load_schema()`) before publishing. If the bundled `schema/ingest.v1.json` ever goes missing from the artifact (the v0.3.0-rc1 bug), the workflow aborts and nothing ships.
 
-The image and the PyPI package release **independently**. A tag without a `setup.py` bump produces an image whose pip-reported version lags. A `master` merge without a tag produces a PyPI release with no image. Doing the bump *inside* the sync PR (step 2) keeps them aligned.
+The image and the PyPI package release **independently**. A tag without a version bump produces an image whose pip-reported version lags. A `master` merge without a tag produces a PyPI release with no image. Doing the bump *inside* the sync PR (step 2) keeps them aligned.
 
 ## Pre-flight
 
@@ -39,16 +39,19 @@ gh run list --repo tracebloc/data-ingestors \
   --workflow publish-dev.yml --branch develop --limit 5
 ```
 
-## 2. Bump the version in `setup.py`
+## 2. Bump the version in `tracebloc_ingestor/__init__.py`
+
+The version is **single-sourced** in `tracebloc_ingestor/__init__.py` (`__version__`); `setup.py` parses that literal at build time, so this is the only file you edit and the two can no longer drift. (They drifted once — `setup.py` 0.3.5 vs `__version__` 0.3.4, #171/#175 — because the bump touched only one file; single-sourcing is the fix.)
 
 Pick the next SemVer per [semver.org](https://semver.org/) — patch for fixes, minor for backwards-compatible features, major for breaking changes. Export it once so the rest of this doc copy-pastes cleanly:
 
 ```bash
 export VERSION=X.Y.Z   # e.g. 0.3.1
 git checkout -b release/v${VERSION} origin/develop
-# Edit setup.py: version="X.Y.Z"
-git diff setup.py     # confirm only the version string changed
-git add setup.py
+# Edit tracebloc_ingestor/__init__.py: __version__ = "X.Y.Z"   (do NOT touch setup.py)
+git diff tracebloc_ingestor/__init__.py   # confirm only the version string changed
+python setup.py --version                 # must print X.Y.Z — proves setup.py picked it up
+git add tracebloc_ingestor/__init__.py
 git commit -m "chore(release): bump version to ${VERSION}"
 git push -u origin release/v${VERSION}
 
@@ -56,6 +59,8 @@ gh pr create --base develop \
   --title "chore(release): bump version to ${VERSION}" \
   --body "Version bump ahead of v${VERSION} release. Companion sync PR will follow."
 ```
+
+On the release ticket, this collapses the old two-line acceptance item (`setup.py` **and** `__init__.py` bumped) into a single check — **`__version__` bumped in `tracebloc_ingestor/__init__.py`** (`setup.py` derives it; verified by `tests/test_version_single_source.py`).
 
 Get it reviewed and merged into `develop` like any other PR.
 
@@ -171,7 +176,7 @@ gh workflow run release-image.yml --repo tracebloc/data-ingestors \
 - **No `:latest`** is published (deliberate, see #45). Consumers pin to a major, minor, or specific patch.
 - **No CHANGELOG.md** in the repo — release notes are auto-generated from the digest. If you want a human-written summary, edit it in afterwards: `gh release edit v${VERSION} --notes-file <(...)`.
 - **PR base is always `develop`** for normal work. The `sync/develop-to-master-vX.Y.Z` PR is the only one targeting `master`.
-- **Version bump lives in the sync flow**, not as a tag-time afterthought, so the PyPI version and image-baked version don't drift.
+- **Version is single-sourced** in `tracebloc_ingestor/__init__.py`; `setup.py` parses that literal, so bump the one file and never hardcode a version back into `setup.py` (that re-introduces the 0.3.4/0.3.5 drift, #175 — guarded by `tests/test_version_single_source.py`). The bump lives in the sync flow, not as a tag-time afterthought, so the PyPI version and image-baked version stay aligned.
 - **The image entrypoint requires `MYSQL_HOST`** at runtime (see `docker-entrypoint.sh`). Smoke probes bypass it with `--entrypoint`; if you're sanity-checking by hand outside CI, you'll need the same flag.
 
 ## Troubleshooting
