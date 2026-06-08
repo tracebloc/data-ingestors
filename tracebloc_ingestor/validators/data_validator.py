@@ -242,8 +242,12 @@ class DataValidator(BaseValidator):
         length_match = re.search(r"VARCHAR\((\d+)\)", expected_type.upper())
         max_length = int(length_match.group(1)) if length_match else None
 
-        # Check for non-string values
-        non_string_count = series.astype(str).ne(series).sum()
+        # Check for non-string values. A NULL is valid for any column, and
+        # ``NaN != NaN`` would otherwise count every missing value as
+        # "non-string" — an error the user can never clear (inserting NaN
+        # doesn't help). Mirror the INT/FLOAT validators: only flag values
+        # that are non-null AND not strings.
+        non_string_count = (series.notna() & series.astype(str).ne(series)).sum()
         if non_string_count > 0:
             errors.append(
                 f"Column '{column_name}' contains {non_string_count} non-string values"
@@ -251,7 +255,7 @@ class DataValidator(BaseValidator):
 
         # Check length constraints
         if max_length:
-            string_series = series.astype(str)
+            string_series = series.dropna().astype(str)
             too_long = string_series.str.len() > max_length
             too_long_count = too_long.sum()
 
@@ -282,8 +286,12 @@ class DataValidator(BaseValidator):
         length_match = re.search(r"CHAR\((\d+)\)", expected_type.upper())
         max_length = int(length_match.group(1)) if length_match else None
 
-        # Check for non-string values
-        non_string_count = series.astype(str).ne(series).sum()
+        # Check for non-string values. A NULL is valid for any column, and
+        # ``NaN != NaN`` would otherwise count every missing value as
+        # "non-string" — an error the user can never clear (inserting NaN
+        # doesn't help). Mirror the INT/FLOAT validators: only flag values
+        # that are non-null AND not strings.
+        non_string_count = (series.notna() & series.astype(str).ne(series)).sum()
         if non_string_count > 0:
             errors.append(
                 f"Column '{column_name}' contains {non_string_count} non-string values"
@@ -291,7 +299,7 @@ class DataValidator(BaseValidator):
 
         # Check length constraints (CHAR should be fixed length)
         if max_length:
-            string_series = series.astype(str)
+            string_series = series.dropna().astype(str)
             wrong_length = string_series.str.len() != max_length
             wrong_length_count = wrong_length.sum()
 
@@ -318,8 +326,12 @@ class DataValidator(BaseValidator):
         errors = []
         warnings = []
 
-        # Check for non-string values
-        non_string_count = series.astype(str).ne(series).sum()
+        # Check for non-string values. A NULL is valid for any column, and
+        # ``NaN != NaN`` would otherwise count every missing value as
+        # "non-string" — an error the user can never clear (inserting NaN
+        # doesn't help). Mirror the INT/FLOAT validators: only flag values
+        # that are non-null AND not strings.
+        non_string_count = (series.notna() & series.astype(str).ne(series)).sum()
         if non_string_count > 0:
             errors.append(
                 f"Column '{column_name}' contains {non_string_count} non-string values"
