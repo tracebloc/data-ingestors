@@ -298,6 +298,29 @@ def test_ingest_happy_path():
     ing.api_client.create_dataset.assert_called_once()
 
 
+@pytest.mark.parametrize("failing_step", [
+    "send_generate_edge_label_meta",
+    "send_global_meta_meta",
+    "prepare_dataset",
+])
+def test_ingest_fails_loud_when_backend_registration_step_fails(failing_step):
+    # REGRESSION GUARD: a False return from ANY backend registration step leaves
+    # the dataset half-created — rows are committed to MySQL but the dataset is
+    # not registered. The old nested-if cascade silently skipped the remaining
+    # steps (including create_dataset) and the run STILL returned cleanly (exit
+    # 0), so the user saw a "success" over an unregistered dataset. Each step
+    # must now RAISE so the run exits non-zero and the failure is visible.
+    records = [{"a": "1", "filename": "f1"}]
+    ing = make_ingestor(records=records, category=None)
+    getattr(ing.api_client, failing_step).return_value = False
+    with patch.object(base_mod, "Session") as Sess:
+        Sess.return_value.__enter__.return_value = MagicMock()
+        with pytest.raises(RuntimeError, match="NOT registered"):
+            ing.ingest("src", batch_size=10)
+    # The chain must stop — create_dataset is never reached on a failed step.
+    ing.api_client.create_dataset.assert_not_called()
+
+
 def test_ingest_skips_records_that_fail_processing():
     # invalid intent -> process_record returns None -> counted as skipped
     records = [{"a": "1", "filename": "f1"}]
