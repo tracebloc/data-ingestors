@@ -238,10 +238,18 @@ class Database:
 
                     processed_records.append(processed_record)
 
-                # Create an "INSERT ... ON DUPLICATE KEY UPDATE" statement
+                # Create an "INSERT ... ON DUPLICATE KEY UPDATE" statement.
+                # Use insert_stmt.inserted[...] rather than a raw
+                # text(f"VALUES({column.name})"): the f-string left the column
+                # name unquoted in the VALUES() clause, so any header with a
+                # special character (e.g. proteomics "UniProt|gene" columns
+                # like `P01033|TIMP1`, or isoform names like `P02751-1|FN1`)
+                # produced invalid SQL — MySQL parsed the `|`/`-` as operators
+                # and raised 1064 (syntax error), failing the whole batch.
+                # insert_stmt.inserted renders the column name backtick-quoted.
                 insert_stmt = insert(table)
                 update_dict = {
-                    column.name: text(f"VALUES({column.name})")
+                    column.name: insert_stmt.inserted[column.name]
                     for column in table.columns
                     if column.name not in ["id", "created_at", "data_id"]
                 }

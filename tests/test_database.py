@@ -250,3 +250,58 @@ def test_create_table_rejects_overlong_column_name():
     long_name = "Protein_" + "X" * 70  # 78 chars, > 64
     with pytest.raises(ValueError, match="64-character"):
         db.create_table("t", {long_name: "FLOAT", "feature_0": "FLOAT"})
+
+
+# ---------------------------------------------------------------------------
+# upsert quoting (regression): special-character column names
+# ---------------------------------------------------------------------------
+
+def test_upsert_backtick_quotes_special_char_columns_in_values_clause():
+    """ON DUPLICATE KEY UPDATE must backtick-quote the column name inside
+    VALUES(...).
+
+    Proteomics panels use "UniProt|gene" headers (e.g. `P01033|TIMP1`) and
+    isoform names (`P02751-1|FN1`). The previous construction built the update
+    clause with a raw f-string ``text(f"VALUES({column.name})")``, leaving the
+    name unquoted on the right-hand side. MySQL then parsed the `|` (and `-`)
+    as operators and raised 1064 (syntax error) — failing the entire batch.
+
+    Surfaced by Henrik's IBD_Biomarkers ingestion (LMU): all 207 records failed
+    with ``near '|TIMP1), `P02452|COL1A1` = VALUES(P02452|COL1A1)'``. Note the
+    left-hand side was already correctly quoted; only the VALUES() argument was
+    not — which is exactly what this test pins.
+
+    Compiles for the MySQL dialect (no live DB) and asserts both the fixed form
+    is present and the broken form is gone.
+    """
+    from sqlalchemy import MetaData, Table, Column, BigInteger, Float
+    from sqlalchemy.dialects import mysql
+    from sqlalchemy.dialects.mysql import insert
+
+    pipe_col = "P01033|TIMP1"
+    isoform_col = "P02751-1|FN1"
+    table = Table(
+        "IBD_Biomarkers",
+        MetaData(),
+        Column("id", BigInteger, primary_key=True),
+        Column("data_id", mysql.VARCHAR(255)),
+        Column(pipe_col, Float),
+        Column(isoform_col, Float),
+    )
+    insert_stmt = insert(table)
+    update_dict = {
+        column.name: insert_stmt.inserted[column.name]
+        for column in table.columns
+        if column.name not in ["id", "created_at", "data_id"]
+    }
+    stmt = insert_stmt.values(
+        [{"data_id": "x", pipe_col: 1.0, isoform_col: 2.0}]
+    ).on_duplicate_key_update(**update_dict)
+    sql = str(stmt.compile(dialect=mysql.dialect()))
+
+    # Fixed: the name is backtick-quoted inside VALUES(...).
+    assert "VALUES(`P01033|TIMP1`)" in sql
+    assert "VALUES(`P02751-1|FN1`)" in sql
+    # Regression guard: the unquoted form that broke MySQL must not reappear.
+    assert "VALUES(P01033|TIMP1)" not in sql
+    assert "VALUES(P02751-1|FN1)" not in sql
