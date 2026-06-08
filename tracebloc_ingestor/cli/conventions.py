@@ -45,6 +45,7 @@ IMAGE_CATEGORIES: FrozenSet[str] = frozenset({
 
 TEXT_CATEGORIES: FrozenSet[str] = frozenset({
     TaskCategory.TEXT_CLASSIFICATION,
+    TaskCategory.TOKEN_CLASSIFICATION,
 })
 
 TABULAR_CATEGORIES: FrozenSet[str] = frozenset({

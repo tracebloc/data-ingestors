@@ -1,0 +1,15 @@
+# Token classification (NER/POS): CSV + .txt sidecar files (one per row).
+# Each .txt holds whitespace-tokenized words; the `label` column holds the
+# space-separated BIO tags — exactly one tag per word.
+# `texts:` is convention-mapped; default extension is .txt.
+apiVersion: tracebloc.io/v1
+kind: IngestConfig
+table: ner_conll_train
+intent: train
+category: token_classification
+csv: /data/shared/ner/labels.csv
+texts: /data/shared/ner/texts/
+schema:
+  filename: VARCHAR(255)
+  label: VARCHAR(2048)
+label: label

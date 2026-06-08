@@ -15,6 +15,7 @@ from tracebloc_ingestor.validators.keypoint_annotation_validator import Keypoint
 from tracebloc_ingestor.validators.keypoint_visibility_validator import KeypointVisibilityValidator
 from tracebloc_ingestor.validators.tokenizer_validator import TokenizerValidator
 from tracebloc_ingestor.validators.file_pairing_validator import FilePairingValidator
+from tracebloc_ingestor.validators.bio_label_validator import BIOLabelValidator
 from tracebloc_ingestor.utils.constants import TaskCategory, FileExtension
 
 
@@ -59,6 +60,34 @@ def map_validators(
                 allowed_extension=options.get("extension", FileExtension.TXT),
                 path="texts",
             ),
+        )
+
+        # Add data validator if schema is provided
+        if options.get("schema"):
+            validators.append(DataValidator(schema=options["schema"]))
+
+        validators.append(TableNameValidator())
+        validators.append(DuplicateValidator())
+
+        return validators
+    elif task_category == TaskCategory.TOKEN_CLASSIFICATION:
+        validators = []
+
+        # Validate text file extensions (one .txt of whitespace-tokenized words
+        # per sample, same layout as text classification).
+        validators.append(
+            FileTypeValidator(
+                allowed_extension=options.get("extension", FileExtension.TXT),
+                path="texts",
+            ),
+        )
+
+        # Validate BIO labels: one tag per word, valid BIO/IOB2 format.
+        validators.append(
+            BIOLabelValidator(
+                texts_path="texts",
+                extension=options.get("extension", FileExtension.TXT),
+            )
         )
 
         # Add data validator if schema is provided

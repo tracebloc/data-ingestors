@@ -78,6 +78,21 @@ def test_text_classification_defaults_extension():
     assert _types(v)[0] is FileTypeValidator
 
 
+def test_token_classification_includes_bio_validator():
+    from tracebloc_ingestor.validators.bio_label_validator import BIOLabelValidator
+
+    v = map_validators(TaskCategory.TOKEN_CLASSIFICATION, {})
+    types = _types(v)
+    assert types[0] is FileTypeValidator
+    assert BIOLabelValidator in types
+    assert TableNameValidator in types and DuplicateValidator in types
+
+
+def test_token_classification_with_schema_adds_data_validator():
+    v = map_validators(TaskCategory.TOKEN_CLASSIFICATION, {"schema": {"a": "INT"}})
+    assert DataValidator in _types(v)
+
+
 def test_time_series_forecasting_validator_set():
     v = map_validators(
         TaskCategory.TIME_SERIES_FORECASTING,

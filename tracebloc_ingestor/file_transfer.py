@@ -358,6 +358,11 @@ def map_file_transfer(
     elif task_category == TaskCategory.TEXT_CLASSIFICATION:
         result = text_transfer(record, options)
         return result
+    elif task_category == TaskCategory.TOKEN_CLASSIFICATION:
+        # Same on-disk layout as text classification: one .txt per sample in
+        # the ``texts`` subdir. BIO tags travel in the labels CSV, not on disk.
+        result = text_transfer(record, options)
+        return result
     elif task_category == TaskCategory.MASKED_LANGUAGE_MODELING:
         result = text_transfer(record, options, src_subdir="sequences")
         # Copy tokenizer.json once (if provided by the user).

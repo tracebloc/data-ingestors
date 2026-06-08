@@ -212,6 +212,16 @@ def test_map_mlm_copies_tokenizer(dirs):
     assert (dest / "tokenizer.json").exists()
 
 
+def test_map_token_classification(dirs):
+    src, dest = dirs
+    _seed(src, "texts", "doc.txt", b"John Smith")
+    rec = file_transfer.map_file_transfer(
+        TaskCategory.TOKEN_CLASSIFICATION, {"filename": "doc"}, {"extension": ".txt"}
+    )
+    assert rec is not None
+    assert (dest / "doc.txt").exists()
+
+
 def test_map_keypoint_detection(dirs):
     src, dest = dirs
     _seed(src, "images", "p.jpg")

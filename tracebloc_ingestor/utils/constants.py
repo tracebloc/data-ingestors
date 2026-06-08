@@ -39,6 +39,7 @@ class TaskCategory:
     OBJECT_DETECTION = "object_detection"
     KEYPOINT_DETECTION = "keypoint_detection"
     TEXT_CLASSIFICATION = "text_classification"
+    TOKEN_CLASSIFICATION = "token_classification"
     TABULAR_CLASSIFICATION = "tabular_classification"
     TABULAR_REGRESSION = "tabular_regression"
     TIME_SERIES_FORECASTING = "time_series_forecasting"
@@ -60,6 +61,7 @@ class TaskCategory:
             cls.OBJECT_DETECTION,
             cls.KEYPOINT_DETECTION,
             cls.TEXT_CLASSIFICATION,
+            cls.TOKEN_CLASSIFICATION,
             cls.TABULAR_CLASSIFICATION,
             cls.TABULAR_REGRESSION,
             cls.TIME_SERIES_FORECASTING,

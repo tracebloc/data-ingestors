@@ -222,6 +222,34 @@ CASES = [
     ),
 
     # -----------------------------------------------------------------------
+    # token_classification — same on-disk layout as text_classification
+    # (.txt in texts/, label_column="label"); the label is a space-separated
+    # BIO tag sequence rather than a single class.
+    # -----------------------------------------------------------------------
+    pytest.param(
+        _yaml(
+            category=TaskCategory.TOKEN_CLASSIFICATION,
+            table="token_classification_train",
+            intent="train",
+            csv="/data/labels.csv",
+            texts="/data/texts/",
+            schema={"filename": "VARCHAR(255)", "label": "VARCHAR(2048)"},
+            label="label",
+        ),
+        {
+            "category": TaskCategory.TOKEN_CLASSIFICATION,
+            "data_format": DataFormat.TEXT,
+            "intent": Intent.TRAIN,
+            "label_column": "label",
+            "label_policy": PASSTHROUGH,
+            "unique_id_column": None,
+            "annotation_column": None,
+            "file_options": {"extension": FileExtension.TXT},
+        },
+        id="token_classification",
+    ),
+
+    # -----------------------------------------------------------------------
     # masked_language_modeling — self-supervised, no label column. CSV manifest
     # points at .txt sidecar files containing space-separated token sequences;
     # the MLM client masks tokens on-the-fly during training. Sidecar dir is

@@ -466,6 +466,7 @@ class BaseIngestor(ABC):
                                 TaskCategory.IMAGE_CLASSIFICATION,
                                 TaskCategory.OBJECT_DETECTION,
                                 TaskCategory.TEXT_CLASSIFICATION,
+                                TaskCategory.TOKEN_CLASSIFICATION,
                                 TaskCategory.SEMANTIC_SEGMENTATION,
                                 TaskCategory.KEYPOINT_DETECTION,
                                 TaskCategory.MASKED_LANGUAGE_MODELING,
