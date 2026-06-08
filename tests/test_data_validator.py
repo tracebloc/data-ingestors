@@ -193,6 +193,40 @@ def test_varchar_too_long_fails():
     assert "exceeding max length" in result.errors[0]
 
 
+def test_varchar_with_nulls_is_valid():
+    # Regression: a VARCHAR column with genuine missing values was wrongly
+    # reported as containing "non-string" values (NaN != NaN), an error the
+    # user could never clear by editing data. NULLs are valid for any column.
+    df = pd.DataFrame({"s": ["abc", None, "de"]})
+    assert DataValidator(schema={"s": "VARCHAR(255)"}).validate(df).is_valid
+
+
+def test_varchar_all_null_is_valid():
+    # An entirely-empty column (e.g. an unmeasured biomarker / analyte in a
+    # sparse panel) is a column of NULLs — valid, not N "non-string values".
+    df = pd.DataFrame({"s": [None, None, None]})
+    assert DataValidator(schema={"s": "VARCHAR(255)"}).validate(df).is_valid
+
+
+def test_char_with_nulls_is_valid():
+    df = pd.DataFrame({"s": ["ab", None, "cd"]})
+    assert DataValidator(schema={"s": "CHAR(2)"}).validate(df).is_valid
+
+
+def test_text_with_nulls_is_valid():
+    df = pd.DataFrame({"s": ["any length text", None]})
+    assert DataValidator(schema={"s": "TEXT"}).validate(df).is_valid
+
+
+def test_varchar_still_flags_real_non_strings():
+    # NULL tolerance must NOT mask a genuine type error: a real numeric value
+    # in a VARCHAR column is still non-string and must be reported.
+    df = pd.DataFrame({"s": ["abc", 5, "de"]})
+    result = DataValidator(schema={"s": "VARCHAR(255)"}).validate(df)
+    assert not result.is_valid
+    assert "non-string" in result.errors[0]
+
+
 def test_char_wrong_length_fails():
     df = pd.DataFrame({"s": ["ab", "cde"]})
     result = DataValidator(schema={"s": "CHAR(2)"}).validate(df)
