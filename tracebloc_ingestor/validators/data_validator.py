@@ -614,7 +614,11 @@ class DataValidator(BaseValidator):
         # Try to convert to datetime
         try:
             date_series = pd.to_datetime(series, errors="coerce")
-            invalid_dates = date_series.isnull().sum()
+            # A NULL is valid for any column; only a value that was present
+            # but un-parseable is an "invalid date". Without the
+            # ``series.notna()`` mask every missing cell counts as invalid —
+            # an unclearable error (mirrors the INT/FLOAT validators).
+            invalid_dates = (date_series.isna() & series.notna()).sum()
 
             if invalid_dates > 0:
                 errors.append(

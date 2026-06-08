@@ -304,6 +304,28 @@ def test_date_invalid_fails():
     assert "invalid date" in result.errors[0]
 
 
+@pytest.mark.parametrize("dtype", ["DATE", "DATETIME", "TIMESTAMP", "TIME"])
+def test_date_family_with_nulls_is_valid(dtype):
+    # Regression: a date column with genuine missing values was wrongly
+    # reported as "invalid date values" (to_datetime turns NULL into NaT,
+    # then isnull() counted it) — an unclearable error. NULLs are valid.
+    df = pd.DataFrame({"d": ["2024-01-01", None, "2024-02-02"]})
+    assert DataValidator(schema={"d": dtype}).validate(df).is_valid
+
+
+def test_date_all_null_is_valid():
+    df = pd.DataFrame({"d": [None, None, None]})
+    assert DataValidator(schema={"d": "DATE"}).validate(df).is_valid
+
+
+def test_date_still_flags_real_bad_value_with_nulls_present():
+    # NULL tolerance must not mask a genuinely un-parseable date.
+    df = pd.DataFrame({"d": ["2024-01-01", None, "not-a-date"]})
+    result = DataValidator(schema={"d": "DATE"}).validate(df)
+    assert not result.is_valid
+    assert "invalid date" in result.errors[0]
+
+
 # ---------------------------------------------------------------------------
 # type parsing + auto-detect helper
 # ---------------------------------------------------------------------------
