@@ -81,11 +81,19 @@ class TimeFormatValidator(BaseValidator):
             # and corrupts the whole series with no error. If a value parses
             # successfully BOTH ways but to different dates, it is ambiguous —
             # reject it and steer the user to unambiguous ISO 8601.
+            #
+            # Exempt ISO-8601 values (YYYY-…): pandas with dayfirst=True still
+            # swaps their components, which would falsely flag every ISO date.
             day_first = pd.to_datetime(
                 df["timestamp"], format='mixed', dayfirst=True, errors="coerce"
             )
+            ts_str = df["timestamp"].astype(str)
+            iso_like = ts_str.str.match(r"^\d{4}-")
             ambiguous_mask = (
-                timestamps.notna() & day_first.notna() & (timestamps != day_first)
+                timestamps.notna()
+                & day_first.notna()
+                & (timestamps != day_first)
+                & ~iso_like
             )
             if ambiguous_mask.any():
                 ambiguous_count = int(ambiguous_mask.sum())
