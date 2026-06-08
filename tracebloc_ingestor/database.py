@@ -160,6 +160,45 @@ class Database:
             # Reflect existing table using MetaData
             self.metadata.reflect(self.engine, only=[table_name])
             table = self.metadata.tables[table_name]
+
+            # Fail fast if the existing table's feature columns don't match the
+            # incoming schema. Reflecting and silently reusing a mismatched table
+            # makes every record insert die downstream with SQLAlchemy's cryptic
+            # "Unconsumed column names: ..." — the record keys (built from the
+            # current schema) reference columns the reflected table doesn't have.
+            # This happens when a table is left over from an earlier ingestion:
+            # e.g. a prior run created the table and then failed before inserting,
+            # or the dataset's column names changed between pushes (a customer
+            # renaming proteomics headers like `P01033|TIMP1` -> `P01033_TIMP1`
+            # to work around an unrelated error is exactly this case). Surface an
+            # actionable error naming the drift instead.
+            _STANDARD_COLUMNS = {
+                "id", "created_at", "updated_at", "status", "label",
+                "data_intent", "data_id", "filename", "extension",
+                "annotation", "ingestor_id",
+            }
+            existing_features = {c.name for c in table.columns} - _STANDARD_COLUMNS
+            expected_features = set(schema) - _STANDARD_COLUMNS
+            if expected_features and existing_features != expected_features:
+                missing = sorted(expected_features - existing_features)
+                extra = sorted(existing_features - expected_features)
+
+                def _preview(cols):
+                    head = ", ".join(cols[:8])
+                    return f"{head}{'' if len(cols) <= 8 else f', … (+{len(cols) - 8} more)'}"
+
+                raise ValueError(
+                    f"Table '{table_name}' already exists with feature columns "
+                    f"that do not match the dataset schema. This usually means a "
+                    f"stale table from an earlier ingestion (one that failed "
+                    f"before inserting, or a dataset whose column names changed "
+                    f"between pushes). "
+                    f"In the schema but not the table: [{_preview(missing)}]. "
+                    f"In the table but not the schema: [{_preview(extra)}]. "
+                    f"Drop the existing '{table_name}' table, or ingest under a "
+                    f"new dataset name, and re-run."
+                )
+
             self.tables[table_name] = table
             return table
 
