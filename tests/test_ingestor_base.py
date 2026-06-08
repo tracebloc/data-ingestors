@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Any, Dict, Generator, List
 from unittest.mock import MagicMock, patch
 
+import pandas as pd
 import pytest
 
 from tracebloc_ingestor.ingestors import base as base_mod
@@ -134,6 +135,64 @@ def test_process_record_applies_bucket_label_policy():
     rec = ing.process_record({"a": "12345", "filename": "f"})
     # bucket policy hashes the raw value -> not equal to the raw value
     assert rec["label"] != "12345"
+
+
+def test_process_record_preserves_none_for_sql_null():
+    """Null-like values (Python None, NaN, pd.NA, NaT) must round-trip as
+    Python None so the DB binder writes SQL NULL — not as the literal
+    string "nan"/"NaT"/"<NA>", and not as "".
+
+    Regression: the cleaning dict mapped `None -> ""` and applied
+    `str(v).strip()` to everything else, so pandas' NaN/NaT/pd.NA were
+    silently stringified ("nan", "NaT", "<NA>") and explicit None inputs
+    landed as empty-string. Both broke missing-data semantics in MySQL
+    — a nullable VARCHAR ended up either with the 3-char string "nan"
+    (before the upstream CSV-side fix in #172) or with "" (after #172,
+    because this dict still mapped None -> ""). Surfaced by an
+    end-to-end cluster ingestion of a 60-row CSV with an all-empty
+    VARCHAR(50) column.
+    """
+    import numpy as np
+
+    ing = make_ingestor(schema={"a": "VARCHAR(10)", "b": "INT", "c": "VARCHAR(50)"}, category=None)
+    rec = ing.process_record({
+        "a": None,            # explicit Python None
+        "b": np.nan,           # float NaN (e.g. from pd.read_csv)
+        "c": pd.NA,           # pd.NA (e.g. from pandas StringDtype)
+        "filename": "f",
+    })
+    assert rec is not None
+    assert rec["a"] is None, f"expected None, got {rec['a']!r}"
+    assert rec["b"] is None, f"expected None, got {rec['b']!r}"
+    assert rec["c"] is None, f"expected None, got {rec['c']!r}"
+
+
+def test_process_record_preserves_real_values():
+    """Non-null values continue to be stringified + stripped as before —
+    this fix must not weaken the existing contract for present values.
+    """
+    ing = make_ingestor(schema={"a": "VARCHAR(10)", "b": "INT"}, category=None)
+    rec = ing.process_record({"a": "  hello  ", "b": 42, "filename": "f"})
+    assert rec["a"] == "hello"
+    assert rec["b"] == "42"
+
+
+def test_process_record_treats_empty_string_as_null():
+    """Literal "" must become Python None (SQL NULL), matching the
+    `value is None or value == ""` convention JSONIngestor._validate_record
+    uses (#170).
+
+    Regression context: JSONIngestor.read_data reads via `json.load`, not
+    `pd.read_json`, so an empty-string JSON value (`"score": ""`) reaches
+    here as the literal `""` — pd.isna("") is False, so without the `or
+    v == ""` guard the empty string would be written verbatim to MySQL.
+    The CSV path is unaffected because pandas' keep_default_na=True turns
+    "" into NaN at read time (caught by the pd.isna branch).
+    """
+    ing = make_ingestor(schema={"a": "VARCHAR(10)", "b": "INT"}, category=None)
+    rec = ing.process_record({"a": "", "b": "", "filename": "f"})
+    assert rec["a"] is None
+    assert rec["b"] is None
 
 
 # ---------------------------------------------------------------------------

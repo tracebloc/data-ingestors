@@ -79,6 +79,34 @@ def test_loads_from_json_genuine_type_error_still_caught(tmp_path):
     assert not result.is_valid
 
 
+def test_loads_from_json_empty_string_is_missing(tmp_path):
+    """Empty strings in JSON INT/FLOAT cells must be treated as missing, the
+    same way `null` is — matching JSONIngestor._validate_record's convention
+    (`if value is None or value == ""`, #170).
+
+    Regression: pd.read_json (unlike pd.read_csv with keep_default_na=True)
+    preserves "" as the literal empty string. The INT validator then reported
+    `"Column 'age' contains N non-numeric value(s). Sample invalid values:
+    ['', '']"` even though those rows would have been ingested as missing —
+    so a JSON file that JSONIngestor handles fine was rejected by the
+    validator that runs before it.
+
+    Surfaced by an end-to-end cluster ingestion against v0.3.5-rc2: 20-record
+    JSON file with mixed `null` and `""` in INT/FLOAT columns failed
+    validation with the above error.
+    """
+    p = tmp_path / "d.json"
+    p.write_text(
+        '[{"id": 1, "age": 30,   "score": 0.5},'
+        ' {"id": 2, "age": null, "score": 0.6},'
+        ' {"id": 3, "age": "",   "score": ""}]'
+    )
+    result = DataValidator(
+        schema={"id": "INT", "age": "INT", "score": "FLOAT"}
+    ).validate(str(p))
+    assert result.is_valid, f"expected valid; errors={result.errors}"
+
+
 def test_unknown_type_fails():
     df = pd.DataFrame({"a": [1]})
     result = DataValidator(schema={"a": "WEIRDTYPE"}).validate(df)
