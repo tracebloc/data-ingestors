@@ -178,33 +178,27 @@ def test_semicolon_delimiter_with_option_works():
     assert rows[0]["a"] == "1" and rows[0]["b"] == "2"
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "GAP: a ragged row (wrong field count) is silently dropped via "
-    "on_bad_lines='warn' (csv_ingestor.py:203). Rows vanish while the run still "
-    "reports success. Contract: drop must be a hard error or counted as a failure."
-))
-def test_ragged_row_not_silently_dropped():
-    rows = _ingest({"a": "INT", "b": "INT"}, "a,b\n1,2\n3,4,5\n6,7\n")
-    assert len(rows) == 3  # the 3-field row must not just disappear
+def test_ragged_row_is_a_hard_error_not_silent_drop():
+    # REGRESSION GUARD (fixed): a ragged row (wrong field count) used to be
+    # silently dropped (on_bad_lines='warn'), shrinking the dataset with no
+    # signal and a still-green success. read_data now uses on_bad_lines='error',
+    # so a malformed row fails loudly (naming the line) instead of vanishing.
+    with pytest.raises(Exception):
+        _ingest({"a": "INT", "b": "INT"}, "a,b\n1,2\n3,4,5\n6,7\n")
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "GAP: duplicate header names are silently de-duplicated by pandas (col -> "
-    "col.1) and the second column is dropped by the schema filter. Contract: "
-    "duplicate headers must be rejected with a clear error."
-))
 def test_duplicate_headers_rejected():
+    # REGRESSION GUARD (fixed): duplicate header names used to be silently
+    # de-duplicated by pandas (x -> x.1) and the second column dropped. read_data
+    # now rejects them with a clear error before parsing.
     with pytest.raises(Exception):
         _ingest({"x": "INT"}, "x,x\n1,2\n")
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "GAP: no column-count / row-byte-width guard. A very wide panel (here 5000 "
-    "columns) exceeds MySQL's ~4096-column and 65535-byte row limits and surfaces "
-    "as a raw MySQL 1117/1118 at CREATE TABLE. Contract: pre-flight count guard "
-    "with an actionable message (mirrors the existing 64-char-name guard)."
-))
 def test_wide_file_column_count_guarded():
+    # REGRESSION GUARD (fixed): create_table now fails fast above ~4000 columns
+    # (MySQL's hard limit is 4096) with an actionable message, instead of a raw
+    # MySQL 1117/1118 deep inside CREATE TABLE.
     db = _real_db()
     schema = {"f%d" % i: "FLOAT" for i in range(5000)}
     with pytest.raises(ValueError, match="column"):
@@ -387,14 +381,11 @@ def test_validator_rejects_infinity():
     assert not res.is_valid
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "GAP: DataValidator samples only the first sample_size rows (default 1000, "
-    "data_validator.py:92). A bad value past row 1000 passes validation and then "
-    "corrupts/crashes at ingest. Contract: type validation must scan the whole "
-    "column (or the sampling must be a documented, enforced hard limit)."
-))
 def test_validator_scans_beyond_first_1000_rows():
+    # REGRESSION GUARD (fixed): DataValidator used to sample only the first 1000
+    # rows, so a bad value past row 1000 passed validation and then corrupted or
+    # crashed the ingest. It now scans the whole column (default sample_size=None).
     good = ["1"] * 1500
-    good[1200] = "not-an-int"  # poison well past the sample window
+    good[1200] = "not-an-int"  # poison well past the old 1000-row window
     res = DataValidator(schema={"n": "INT"}).validate(pd.DataFrame({"n": good}))
     assert not res.is_valid

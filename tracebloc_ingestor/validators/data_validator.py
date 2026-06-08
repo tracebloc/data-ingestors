@@ -89,7 +89,12 @@ class DataValidator(BaseValidator):
                     metadata={"schema_provided": False},
                 )
 
-            sample_size = kwargs.get("sample_size", 1000)
+            # Validate the ENTIRE column, not a sample. The old default of 1000
+            # meant a bad value past row 1000 (a non-numeric in an INT column, a
+            # too-long VARCHAR) passed validation and then corrupted or crashed
+            # the ingest — validation success did not predict ingestion success.
+            # Callers can still pass an explicit sample_size to cap it.
+            sample_size = kwargs.get("sample_size", None)
 
             # Load data
             df = self._load_data(data, sample_size)

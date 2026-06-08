@@ -5,6 +5,7 @@ pandas-based reading and validation capabilities.
 """
 
 from typing import Dict, Any, Generator, Optional, List
+import csv as _csv
 import pandas as pd
 import logging
 from pathlib import Path
@@ -260,12 +261,50 @@ class CSVIngestor(BaseIngestor):
                 "keep_default_na": is_tabular,
                 "na_values": na_values,
                 "encoding": "utf-8",
-                "on_bad_lines": "warn",
+                # Fail loudly on a malformed (ragged) row instead of silently
+                # dropping it. A wrong-field-count line almost always signals a
+                # real problem (wrong delimiter, an unquoted/embedded comma), and
+                # silently shrinking the dataset corrupts it with no signal and a
+                # still-green "success". pandas' error names the offending line +
+                # field counts. (This also matches _count_records, which reads
+                # with pandas' default on_bad_lines='error'.)
+                "on_bad_lines": "error",
                 "low_memory": False,  # Prevent mixed type inference warnings
                 "engine": "c",  # Use faster C engine
             }
 
             csv_options = {**default_options, **self.csv_options}
+
+            # Reject duplicate column names before pandas silently disambiguates
+            # them (a, a -> a, a.1) and the schema mapping then targets the wrong
+            # physical column — invisible corruption. Read just the raw header row
+            # with the stdlib csv module (NOT pandas) so this is independent of
+            # the pd.read_csv path (and the same delimiter/encoding as the main
+            # read). csv.reader needs a single-char delimiter; a multi-char/regex
+            # sep or a bad encoding falls back to "no header read" (the main read
+            # then surfaces the real error).
+            _sep = csv_options.get("sep", csv_options.get("delimiter", ","))
+            _header = []
+            try:
+                with open(
+                    file_path,
+                    "r",
+                    encoding=csv_options.get("encoding", "utf-8"),
+                    newline="",
+                ) as _fh:
+                    _row = next(_csv.reader(_fh, delimiter=_sep), [])
+                _header = [str(h).strip() for h in _row]
+            except (OSError, UnicodeDecodeError, _csv.Error, TypeError):
+                _header = []
+            _dup_headers = sorted({h for h in _header if _header.count(h) > 1})
+            if _dup_headers:
+                raise ValueError(
+                    f"{RED}Duplicate column name(s) in the CSV header: "
+                    f"{_dup_headers}. Each column must be unique — otherwise the "
+                    f"second is silently renamed '<name>.1' by the parser and the "
+                    f"schema maps onto the wrong column. Rename the duplicates and "
+                    f"re-ingest.{RESET}"
+                )
 
             first_chunk = True
             for chunk in pd.read_csv(file_path, chunksize=chunk_size, **csv_options):
