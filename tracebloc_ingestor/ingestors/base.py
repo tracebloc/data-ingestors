@@ -301,16 +301,24 @@ class BaseIngestor(ABC):
             # JSONIngestor._validate_record (#170): `value is None or
             # value == ""`. pd.isna returns False for ordinary
             # strings/numbers/bools so existing values aren't touched.
-            # Python bool must NOT be stringified — mysql-connector-python
-            # writes True/False directly as TINYINT 1/0, but `str(True)` is
-            # the four-character string "True", which MySQL rejects against
-            # a BOOL column with `Incorrect integer value: 'True' for column
-            # 'active' at row 1`. Pass bools through; stringify everything
-            # else as before (the rest of the pipeline expects strings).
+            # Booleans must NOT be stringified — mysql-connector-python writes
+            # True/False directly as TINYINT 1/0, but `str(True)` is the
+            # four-character string "True", which MySQL rejects against a BOOL
+            # column with `Incorrect integer value: 'True' for column 'active'
+            # at row 1`. This must catch BOTH Python `bool` AND `numpy.bool_`:
+            # a CSV BOOL column comes back from pandas/itertuples as numpy.bool_,
+            # and `isinstance(np.True_, bool)` is False — so the previous
+            # `isinstance(v, bool)` check missed it and every CSV boolean was
+            # stringified to "True"/"False" and rejected by MySQL. `is_bool`
+            # covers both; convert to a plain Python bool so the binder writes
+            # 1/0. Checked FIRST so a bool never reaches the `v == ""` compare
+            # (numpy scalar-vs-str comparison would warn) and pd.NA (is_bool
+            # False) falls through to the null branch. The rest of the pipeline
+            # expects strings, so everything non-bool/non-null is stringified.
             cleaned_record = {
                 k.strip(): (
-                    None if pd.isna(v) or v == ""
-                    else v if isinstance(v, bool)
+                    bool(v) if pd.api.types.is_bool(v)
+                    else None if pd.isna(v) or v == ""
                     else str(v).strip()
                 )
                 for k, v in record.items()

@@ -132,11 +132,31 @@ class CSVIngestor(BaseIngestor):
             dtype = self.schema[column]
             try:
                 if "INT" in dtype.upper():
-                    df[column] = pd.to_numeric(df[column], downcast="integer")
+                    # Nullable Int64, NOT to_numeric(downcast="integer"): under
+                    # the old code any missing cell forced the column to float64,
+                    # so 7 round-tripped as "7.0" — silent corruption of every
+                    # integer in any INT column that had a single blank cell.
+                    # Int64 keeps integers integral and stores missing as pd.NA
+                    # (-> SQL NULL); default errors="raise" still surfaces a
+                    # genuinely non-numeric value as a clear per-column error.
+                    df[column] = pd.to_numeric(df[column]).astype("Int64")
                 elif "FLOAT" in dtype.upper():
                     df[column] = pd.to_numeric(df[column], downcast="float")
                 elif "BOOL" in dtype.upper():
-                    df[column] = df[column].astype("boolean")
+                    # Map the textual/numeric boolean forms DataValidator accepts
+                    # (true/false, yes/no, t/f, y/n, 1/0) to a nullable boolean
+                    # column. df.astype("boolean") alone raises "Need to pass
+                    # bool-like values" on those strings — a direct contradiction
+                    # with the validator, which blesses them, so a CSV with a
+                    # yes/no column passed validation then crashed the ingestor.
+                    _truthy = {"true", "t", "yes", "y", "1", "1.0"}
+                    _falsy = {"false", "f", "no", "n", "0", "0.0"}
+                    _norm = df[column].astype("string").str.strip().str.lower()
+                    df[column] = _norm.map(
+                        lambda x: True if x in _truthy
+                        else (False if x in _falsy else pd.NA),
+                        na_action="ignore",
+                    ).astype("boolean")
                 elif "DATE" in dtype.upper() or "DATETIME" in dtype.upper() or "TIMESTAMP" in dtype.upper() or "TIME" in dtype.upper():
                     df[column] = pd.to_datetime(df[column], errors="coerce", format='mixed')
                 elif any(t in dtype.upper() for t in ("STRING", "TEXT", "VARCHAR", "CHAR")):
@@ -194,9 +214,30 @@ class CSVIngestor(BaseIngestor):
             is_tabular = self.category in _TABULAR_FAMILY_CATEGORIES
             na_values = _TABULAR_NA_VALUES if is_tabular else [""]
 
+            # Pin string-family schema columns to dtype=str so pandas can't infer
+            # them numeric and silently strip meaning. An all-digit code column
+            # (zip / UniProt accession / zero-padded ID) like "007" is otherwise
+            # inferred as int64 at read time and is already 7 by the time the
+            # VARCHAR cast in _validate_csv runs -> "7", with the leading zeros
+            # gone. na_values are still applied first, so empty/NA cells become
+            # NaN (-> SQL NULL) before the str pin; only present values are kept
+            # verbatim. dtype keys for columns absent from the file are ignored
+            # by pandas, so this is safe when the schema lists more columns than
+            # the CSV carries.
+            _STRING_TYPES = ("VARCHAR", "CHAR", "TEXT", "STRING")
+            string_dtype = {
+                col: str
+                for col, t in self.schema.items()
+                if isinstance(t, str)
+                and t.upper().split("(")[0].strip() in _STRING_TYPES
+            }
+
             # Enhanced default options for pandas
             default_options = {
-                "dtype": None,  # Let pandas infer types initially
+                # Pin string-family columns to str; let pandas infer the rest
+                # (numeric/bool/date columns are coerced explicitly in
+                # _validate_csv). None when there are no string columns.
+                "dtype": string_dtype or None,
                 "keep_default_na": is_tabular,
                 "na_values": na_values,
                 "encoding": "utf-8",

@@ -215,25 +215,21 @@ def test_wide_file_column_count_guarded():
 # Section C — Type casting (the soft underbelly)
 # ===========================================================================
 
-@pytest.mark.xfail(strict=True, reason=(
-    "BUG: a CSV BOOL column yields numpy.bool_, which process_record does NOT "
-    "recognise as bool (isinstance(np.True_, bool) is False), so it stringifies "
-    "to 'True'/'False'. MySQL then rejects 'True' for a BOOL/TINYINT column and "
-    "every row fails. base.py:310-318."
-))
 def test_bool_true_false_not_stringified():
+    # REGRESSION GUARD (fixed): a CSV BOOL column comes back from pandas as
+    # numpy.bool_; process_record now recognises it via pd.api.types.is_bool and
+    # emits a Python bool, so MySQL writes TINYINT 1/0 instead of rejecting the
+    # string 'True'. (base.py process_record.)
     rows = _ingest({"flag": "BOOL"}, "flag\nTrue\nFalse\n")
     assert rows[0]["flag"] in (True, False, 1, 0)
     assert rows[0]["flag"] != "True"
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "BUG: string booleans (yes/no/true/false) that DataValidator EXPLICITLY "
-    "accepts crash the ingestor — astype('boolean') raises 'Need to pass "
-    "bool-like values' (csv_ingestor.py:139). Validator says OK, ingestor dies: "
-    "a direct validator<->ingestor contradiction."
-))
-def test_string_booleans_ingest_or_clear_error():
+def test_string_booleans_ingest_cleanly():
+    # REGRESSION GUARD (fixed): string booleans (yes/no/true/false/t/f/y/n/1/0)
+    # that DataValidator accepts used to crash astype('boolean') ('Need to pass
+    # bool-like values'). The BOOL branch now maps the accepted forms to a
+    # nullable boolean, so validator and ingestor agree. (csv_ingestor._validate_csv.)
     rows = _ingest({"flag": "BOOL"}, "flag\nyes\nno\n")
     assert rows[0]["flag"] in (True, 1) and rows[1]["flag"] in (False, 0)
 
@@ -250,15 +246,11 @@ def test_int_scientific_notation_clean():
     assert rows[0]["n"] == "1000000000"
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "BUG: leading-zero codes are lost even for VARCHAR-typed columns. pandas "
-    "read_csv infers an all-digit column as int64 (dtype=None, "
-    "csv_ingestor.py:199) BEFORE the VARCHAR cast, so '007' is already 7 by the "
-    "time astype('string') runs -> '7'. Typing a column VARCHAR does NOT protect "
-    "zip/accession/gene codes. Ideal: read schema string-family columns with "
-    "dtype=str so the raw text is never inferred away."
-))
 def test_varchar_leading_zero_codes_preserved():
+    # REGRESSION GUARD (fixed): leading-zero codes used to be lost even for
+    # VARCHAR columns because pandas inferred the all-digit column as int at read
+    # (dtype=None) before the VARCHAR cast. read_data now pins string-family
+    # schema columns to dtype=str, so zip/accession/gene codes survive verbatim.
     rows = _ingest({"code": "VARCHAR(10)"}, "code\n007\n0012\n")
     assert [r["code"] for r in rows] == ["007", "0012"]
 
@@ -332,14 +324,10 @@ def test_missing_int_cell_becomes_none():
     assert rows[0]["n"] is None
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "BUG (H4, silent corruption): a single blank cell promotes the WHOLE INT "
-    "column to float64 (pd.to_numeric on a NaN-bearing column returns float), so "
-    "every present value gains '.0' — here 7 -> '7.0'. Any INT column with one "
-    "missing value has all its integers corrupted. Ideal: nullable Int64 "
-    "(astype('Int64')) so NaN-bearing integer columns stay integer."
-))
 def test_int_column_missing_cell_does_not_float_promote():
+    # REGRESSION GUARD (fixed): a single blank cell used to promote the whole INT
+    # column to float64, so 7 round-tripped as '7.0'. The INT branch now casts to
+    # nullable Int64, so present integers stay integral and missing -> SQL NULL.
     rows = _ingest({"a": "VARCHAR(5)", "n": "INT"}, "a,n\nx,\ny,7\n")
     assert rows[1]["n"] == "7"
 
