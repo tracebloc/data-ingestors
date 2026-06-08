@@ -389,3 +389,137 @@ def test_validator_scans_beyond_first_1000_rows():
     good[1200] = "not-an-int"  # poison well past the old 1000-row window
     res = DataValidator(schema={"n": "INT"}).validate(pd.DataFrame({"n": good}))
     assert not res.is_valid
+
+
+# ===========================================================================
+# Section G — extended battery: special characters & size (the long tail)
+# Each case was probed empirically against the current pipeline before being
+# pinned here. "Anything that could go wrong" — headers, values, SQL safety,
+# overflow, line endings.
+# ===========================================================================
+
+# --- Special characters in HEADERS (read/cast layer) -----------------------
+
+@pytest.mark.parametrize("header", [
+    "gene name",        # space
+    "conc (mg/L)",      # parentheses + slash
+    "feature.1",        # dot
+    "温度",             # non-latin unicode
+    "col_🔥",           # emoji
+    "select",           # SQL reserved word
+])
+def test_special_char_header_ingests(header):
+    rows = _ingest({header: "INT"}, "%s\n5\n" % header)
+    assert rows[0][header] == "5"
+
+
+# --- SQL safety of headers at the DDL layer (the injection-adjacent worry) --
+
+def test_header_with_backtick_is_escaped_in_ddl():
+    # A backtick in a header must be doubled (MySQL identifier escaping) so it
+    # cannot break out of the quoted identifier.
+    db = _real_db()
+    table = _create_table(db, "t", {"a`b": "FLOAT"})
+    assert "`a``b`" in _ddl(table)
+
+
+def test_sql_injection_header_is_neutralised_in_ddl():
+    # A crafted "injection" header is emitted as ONE backtick-quoted identifier
+    # (backtick doubled); the trailing SQL is inert inside it, never an
+    # executable statement. A CSV header therefore cannot inject SQL at CREATE
+    # TABLE. Locks SQLAlchemy's quoting against a future hand-rolled DDL path
+    # that might string-interpolate the name.
+    db = _real_db()
+    evil = "x`; DROP TABLE y; --"
+    ddl = _ddl(_create_table(db, "t", {evil: "FLOAT"}))
+    assert "`x``; DROP TABLE y; --`" in ddl
+
+
+def _capture_upsert_sql(table_name, schema, record):
+    """Drive the real insert_batch with a capturing connection; return the
+    compiled ON DUPLICATE KEY UPDATE statement (MySQL dialect)."""
+    db = _real_db()
+    _create_table(db, table_name, schema)
+    sqls = []
+    conn = MagicMock()
+
+    def _exec(stmt, *a, **k):
+        try:
+            sqls.append(str(stmt.compile(dialect=mysql.dialect())))
+        except Exception:
+            sqls.append("")
+        res = MagicMock()
+        res.fetchall.return_value = []
+        res.fetchone.return_value = None
+        return res
+
+    conn.execute.side_effect = _exec
+    db.engine.connect.return_value.__enter__.return_value = conn
+    db.insert_batch(table_name, [record])
+    return next((s for s in sqls if "DUPLICATE" in s.upper()), "")
+
+
+@pytest.mark.xfail(strict=True, reason=(
+    "PENDING #184: the upsert ON DUPLICATE KEY UPDATE builds VALUES(col) via a "
+    "raw f-string that does NOT backtick-quote the column name, so a special-char "
+    "header (P08254|MMP3) breaks the SQL (1064) and is injection-adjacent. #184 "
+    "switches to insert_stmt.inserted[col], which quotes. Flips to pass when #184 "
+    "merges. (Contrast: CREATE TABLE DDL already escapes — the two tests above.)"
+))
+def test_upsert_quotes_special_char_column():
+    sql = _capture_upsert_sql(
+        "t", {"P08254|MMP3": "FLOAT"}, {"data_id": "x", "P08254|MMP3": 1.0}
+    )
+    assert "VALUES(`P08254|MMP3`)" in sql
+
+
+# --- Special characters in VALUES (preserved via parameterised binding) ----
+
+@pytest.mark.parametrize("value,payload", [
+    ('He said "hi"', 's\n"He said ""hi"""\n'),   # escaped embedded quotes
+    ("C:\\new",      "s\nC:\\new\n"),             # backslash (Windows path)
+    ("line1\nline2", 's\n"line1\nline2"\n'),      # embedded newline in a quoted field
+    ("a;b;c",        "s\na;b;c\n"),               # semicolons (not the delimiter)
+    ("🔥hot",        "s\n🔥hot\n"),               # emoji
+])
+def test_special_char_value_preserved(value, payload):
+    rows = _ingest({"s": "VARCHAR(40)"}, payload)
+    assert rows[0]["s"] == value
+
+
+# --- Size / overflow -------------------------------------------------------
+
+def test_bigint_overflow_is_clear_error():
+    # A value beyond Int64 range must fail clearly, not wrap or corrupt.
+    with pytest.raises(Exception):
+        _ingest({"n": "BIGINT"}, "n\n99999999999999999999\n")
+
+
+def test_float_overflow_is_clear_error():
+    with pytest.raises(Exception):
+        _ingest({"x": "FLOAT"}, "x\n1e400\n")
+
+
+def test_value_exceeding_varchar_length_rejected():
+    # A cell longer than the declared VARCHAR(n) is caught by DataValidator (now
+    # a full-column scan) with an actionable "exceeding max length" error, rather
+    # than silently truncating at MySQL write time.
+    res = DataValidator(schema={"s": "VARCHAR(10)"}).validate(
+        pd.DataFrame({"s": ["x" * 5000]})
+    )
+    assert not res.is_valid and "max length" in res.errors[0]
+
+
+def test_mixed_type_column_is_clear_error():
+    # A non-numeric mixed into an INT column fails with a clear per-column error,
+    # not a silent coerce or a cryptic crash.
+    with pytest.raises(Exception):
+        _ingest({"n": "INT"}, "n\n1\n2\nabc\n4\n")
+
+
+# --- Structure: line endings -----------------------------------------------
+
+def test_cr_only_line_endings_parse():
+    # Classic-Mac CR-only line endings must parse, not collapse to a single row.
+    rows = _ingest({"a": "INT", "b": "INT"}, "a,b\r1,2\r3,4\r")
+    assert len(rows) == 2 and rows[1]["a"] == "3"
