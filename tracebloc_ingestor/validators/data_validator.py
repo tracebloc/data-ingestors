@@ -126,10 +126,21 @@ class DataValidator(BaseValidator):
                 return data.head(sample_size)
             elif isinstance(data, (str, Path)):
                 path = Path(data)
-                if path.suffix.lower() == ".csv":
+                suffix = path.suffix.lower()
+                if suffix == ".csv":
                     df = pd.read_csv(
                         path, nrows=sample_size, encoding="utf-8", on_bad_lines="warn"
                     )
+                    return df
+                elif suffix == ".json":
+                    # Mirror JSONIngestor.read_data: file is a top-level JSON
+                    # array of records. Without this branch DataValidator
+                    # returned None for every JSON input, the caller raised
+                    # "No data found to validate", and JSON ingestion was
+                    # impossible end-to-end — the recent per-record
+                    # null-tolerance fix (#170) lived behind an unreachable
+                    # gate.
+                    df = pd.read_json(path, orient="records").head(sample_size)
                     return df
                 else:
                     logger.warning(f"Unsupported file type: {path.suffix}, \n\n{path}")

@@ -37,6 +37,48 @@ def test_loads_from_csv(make_csv):
     assert result.is_valid
 
 
+def test_loads_from_json(tmp_path):
+    """JSON top-level array of records must validate, mirroring the file shape
+    JSONIngestor.read_data consumes.
+
+    Regression: DataValidator._load_data only recognised .csv. Any .json input
+    returned None (logged "Unsupported file type"), the caller raised
+    "No data found to validate", and JSON ingestion failed end-to-end on the
+    very first validator — the recent per-record null-tolerance fix (#170)
+    lived behind an unreachable gate.
+
+    Surfaced by an end-to-end cluster ingestion: a 20-record JSON file with
+    explicit schema {id INT, age INT, score FLOAT, active BOOL, label
+    VARCHAR(20)} failed with "Data Validator Validator failed: No data found
+    to validate" before any record was read.
+    """
+    p = tmp_path / "d.json"
+    p.write_text(
+        '[{"id": 1, "age": 30, "score": 0.5, "active": true, "label": "A"},'
+        ' {"id": 2, "age": null, "score": 0.6, "active": false, "label": "B"}]'
+    )
+    result = DataValidator(
+        schema={
+            "id": "INT",
+            "age": "INT",
+            "score": "FLOAT",
+            "active": "BOOL",
+            "label": "VARCHAR(20)",
+        }
+    ).validate(str(p))
+    assert result.is_valid, f"expected valid; errors={result.errors}"
+
+
+def test_loads_from_json_genuine_type_error_still_caught(tmp_path):
+    """JSON support must not weaken type validation — a non-numeric in an INT
+    column must still fail. Pairs with the positive test to pin the boundary.
+    """
+    p = tmp_path / "bad.json"
+    p.write_text('[{"age": "not-an-int"}]')
+    result = DataValidator(schema={"age": "INT"}).validate(str(p))
+    assert not result.is_valid
+
+
 def test_unknown_type_fails():
     df = pd.DataFrame({"a": [1]})
     result = DataValidator(schema={"a": "WEIRDTYPE"}).validate(df)
