@@ -78,6 +78,30 @@ class APIClient:
 
         return session
 
+    @staticmethod
+    def _parse_json(response, *, required: bool):
+        """Parse a JSON response body, turning a non-JSON 200 (an HTML error
+        page, an empty body, a proxy interstitial) into a *handled* outcome
+        instead of an opaque JSONDecodeError mid-ingest.
+
+        ``required=True`` (the body IS the result — an auth token or a created
+        dataset) raises a clear ValueError. ``required=False`` (we only log the
+        body) warns and returns ``{}`` so a successful call isn't flipped to a
+        false failure just because its response wasn't JSON.
+        """
+        try:
+            return response.json()
+        except ValueError:  # json + requests JSONDecodeError both subclass ValueError
+            snippet = (response.text or "")[:200]
+            msg = (
+                f"Backend returned a non-JSON response "
+                f"(HTTP {response.status_code}): {snippet!r}"
+            )
+            if required:
+                raise ValueError(f"{RED}{msg}{RESET}")
+            logger.warning(f"{YELLOW}{msg}{RESET}")
+            return {}
+
     def authenticate(self) -> str:
         """Authenticate and return the token."""
         try:
@@ -95,7 +119,7 @@ class APIClient:
                     f"HTTP {response.status_code}: {response.text}"
                 )
             print(f"{BOLD}{GREEN}Authentication successful{RESET}")
-            return response.json().get("token")
+            return self._parse_json(response, required=True).get("token")
 
         except requests.exceptions.RequestException as e:
             if hasattr(e.response, "text"):
@@ -215,7 +239,8 @@ class APIClient:
                     f"HTTP {response.status_code}: {response.text}"
                 )
             logger.info(
-                f"{GREEN}Successfully sent global metadata. Response: {response.json()}{RESET}"
+                f"{GREEN}Successfully sent global metadata. "
+                f"Response: {self._parse_json(response, required=False)}{RESET}"
             )
             return True
 
@@ -312,7 +337,8 @@ class APIClient:
                     f"HTTP {response.status_code}: {response.text}"
                 )
             logger.info(
-                f"{GREEN}Successfully prepared data. Response: {response.json()}{RESET}"
+                f"{GREEN}Successfully prepared data. "
+                f"Response: {self._parse_json(response, required=False)}{RESET}"
             )
             return True
 
@@ -385,10 +411,11 @@ class APIClient:
                 raise requests.exceptions.HTTPError(
                     f"HTTP {response.status_code}: {response.text}"
                 )
+            dataset = self._parse_json(response, required=True)
             logger.info(
-                f"{GREEN}Successfully created dataset. Response: {response.json()}{RESET}"
+                f"{GREEN}Successfully created dataset. Response: {dataset}{RESET}"
             )
-            return response.json()
+            return dataset
 
         except requests.exceptions.RequestException as e:
             logger.error(f"{RED}Error creating dataset: {str(e)[:100]}{RESET}")
