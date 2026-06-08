@@ -141,6 +141,14 @@ class DataValidator(BaseValidator):
                     # null-tolerance fix (#170) lived behind an unreachable
                     # gate.
                     df = pd.read_json(path, orient="records").head(sample_size)
+                    # pd.read_json (unlike pd.read_csv with keep_default_na=True)
+                    # preserves "" as the literal empty string. Normalise to NaN
+                    # so per-type validators below treat "" identically to JSON
+                    # null — matches the JSONIngestor._validate_record convention
+                    # `if value is None or value == ""` (#170). Without this, an
+                    # INT column with `""` is reported as "non-numeric value"
+                    # even though JSONIngestor would have read it as missing.
+                    df = df.replace("", np.nan)
                     return df
                 else:
                     logger.warning(f"Unsupported file type: {path.suffix}, \n\n{path}")

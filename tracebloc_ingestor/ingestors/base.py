@@ -3,6 +3,7 @@ from typing import Dict, Any, Generator, List, Optional, NamedTuple
 from sqlalchemy.orm import Session
 from sqlalchemy.engine import Engine
 import logging
+import pandas as pd
 from tqdm import tqdm
 import uuid
 from pathlib import Path
@@ -285,8 +286,17 @@ class BaseIngestor(ABC):
                 columns_to_exclude.add(self.annotation_column)
             if self.unique_id_column:
                 columns_to_exclude.add(self.unique_id_column)
+            # Preserve missing-data semantics: any null-like value (Python
+            # None, float NaN, pd.NA, pd.NaT) becomes Python None so the DB
+            # binder writes SQL NULL. Previously this dict mapped None -> ""
+            # which (a) inserted empty-string into nullable VARCHAR/TEXT
+            # columns instead of NULL, and (b) silently coerced pandas'
+            # NaN/NaT/pd.NA into the literal string "nan"/"NaT"/"<NA>" via
+            # str(v). pd.isna handles all four uniformly and returns False
+            # for ordinary strings/numbers/bools so existing values aren't
+            # touched.
             cleaned_record = {
-                k.strip(): ("" if v is None else str(v).strip())
+                k.strip(): (None if pd.isna(v) else str(v).strip())
                 for k, v in record.items()
                 if k in self.schema and k not in columns_to_exclude
             }
