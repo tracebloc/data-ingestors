@@ -123,6 +123,59 @@ def test_create_table_existing_in_db_reflects(db):
     db.metadata.reflect.assert_called_once()
 
 
+def test_create_table_existing_matching_schema_reflects_ok(db):
+    """An existing table whose feature columns match the incoming schema is
+    reused without error — the normal re-ingest-same-dataset path. Only the
+    feature columns are compared; the standard framework columns (id, data_id,
+    …) are ignored."""
+    inspector = MagicMock()
+    inspector.get_table_names.return_value = ["panel"]
+
+    def fake_reflect(engine, only=None):
+        Table(
+            "panel", db.metadata,
+            Column("id", BigInteger, primary_key=True),
+            Column("data_id", String(255)),
+            Column("P01033_TIMP1", String(255)),
+            Column("P02452_COL1A1", String(255)),
+        )
+
+    db.metadata.reflect = MagicMock(side_effect=fake_reflect)
+    with patch.object(db_mod, "inspect", return_value=inspector):
+        table = db.create_table(
+            "panel", {"P01033_TIMP1": "FLOAT", "P02452_COL1A1": "FLOAT"}
+        )
+    assert db.tables["panel"] is table
+
+
+def test_create_table_existing_schema_mismatch_fails_fast(db):
+    """A stale table whose feature columns don't match the incoming schema must
+    fail fast with an actionable error — instead of being silently reused and
+    then dying on every insert with SQLAlchemy's cryptic 'Unconsumed column
+    names'.
+
+    Regression (Henrik/LMU): a prior ingestion left `IBD_Biomarker` with the
+    original proteomics headers (`P02452|COL1A1`); the customer then renamed the
+    CSV headers to sanitized identifiers (`P02452_COL1A1`) to dodge an unrelated
+    SQL error. create_table reflected the stale table, ignored the new schema,
+    and all 207 records failed with 'Unconsumed column names'."""
+    inspector = MagicMock()
+    inspector.get_table_names.return_value = ["IBD_Biomarker"]
+
+    def fake_reflect(engine, only=None):
+        Table(
+            "IBD_Biomarker", db.metadata,
+            Column("id", BigInteger, primary_key=True),
+            Column("data_id", String(255)),
+            Column("P02452|COL1A1", String(255)),  # original header (stale table)
+        )
+
+    db.metadata.reflect = MagicMock(side_effect=fake_reflect)
+    with patch.object(db_mod, "inspect", return_value=inspector):
+        with pytest.raises(ValueError, match="do not match|stale table"):
+            db.create_table("IBD_Biomarker", {"P02452_COL1A1": "FLOAT"})  # sanitized
+
+
 # ---------------------------------------------------------------------------
 # insert_batch
 # ---------------------------------------------------------------------------
