@@ -122,8 +122,8 @@ python object_detection.py
 ## Configuration
 
 The script uses the following configuration:
-- **Target Size**: (256, 256) - Images will be resized to this dimension
-- **Extension**: PNG - Expected image file extension
+- **Target Size**: (1920, 1080) - Images will be resized to this dimension (height = width)
+- **Extension**: JPG - Expected image file extension (jpeg, jpg are also accepted)
 - **Chunk Size**: 100 - Number of records to process in each batch
 - **Category**: OBJECT_DETECTION
 - **Data Format**: IMAGE

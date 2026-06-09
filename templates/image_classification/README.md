@@ -80,8 +80,8 @@ python image_classification.py
 ## Configuration
 
 The script uses the following configuration:
-- **Target Size**: (512, 512) - Images will be resized to this dimension (height = width)
-- **Extension**: JPG - Expected image file extension (jpeg, jpg, and png are also accepted)
+- **Target Size**: (256, 256) - Images will be resized to this dimension (height = width)
+- **Extension**: JPEG - Expected image file extension
 - **Chunk Size**: 1000 - Number of records to process in each batch
 - **Category**: IMAGE_CLASSIFICATION
 - **Data Format**: IMAGE
