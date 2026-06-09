@@ -23,8 +23,10 @@ logger = logging.getLogger(__name__)
 
 # Image specific options including CSV options
 image_options = {
-    "target_size": (512, 512),  # image size. Height = Width
-    "extension": FileExtension.JPG,  # allowed extension for images: jpeg, jpg, png
+    # Matches the bundled onboarding sample under data/images/ (#198).
+    # Override per dataset when running against your own data.
+    "target_size": (256, 256),  # image size. Height = Width
+    "extension": FileExtension.JPEG,
 }
 
 # CSV specific options

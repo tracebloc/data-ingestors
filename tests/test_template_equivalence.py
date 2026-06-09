@@ -82,7 +82,9 @@ def _yaml(**fields) -> Dict[str, Any]:
 
 CASES = [
     # -----------------------------------------------------------------------
-    # image_classification — template uses 512×512, intent=TEST, label_column="label"
+    # image_classification — template + convention default now align with the
+    # bundled onboarding sample (256×256 .jpeg, #198). intent=TEST,
+    # label_column="label" unchanged.
     # -----------------------------------------------------------------------
     pytest.param(
         _yaml(
@@ -101,13 +103,16 @@ CASES = [
             "label_policy": PASSTHROUGH,
             "unique_id_column": None,
             "annotation_column": None,
-            "file_options": {"target_size": [512, 512], "extension": FileExtension.JPG},
+            "file_options": {"target_size": [256, 256], "extension": FileExtension.JPEG},
         },
         id="image_classification",
     ),
 
     # -----------------------------------------------------------------------
-    # object_detection — template uses 448×448, label_column="image_label"
+    # object_detection — template + convention default now align with the
+    # bundled VisDrone aerial sample (1920×1080, #199). The sample is kept at
+    # native resolution because aggressive downscaling obliterates the
+    # tiny-object content the sample exists to demonstrate.
     # -----------------------------------------------------------------------
     pytest.param(
         _yaml(
@@ -127,7 +132,7 @@ CASES = [
             "label_policy": PASSTHROUGH,
             "unique_id_column": None,
             "annotation_column": None,
-            "file_options": {"target_size": [448, 448], "extension": FileExtension.JPG},
+            "file_options": {"target_size": [1920, 1080], "extension": FileExtension.JPG},
         },
         id="object_detection",
     ),
