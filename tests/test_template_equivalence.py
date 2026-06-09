@@ -210,7 +210,10 @@ CASES = [
             intent="train",
             csv="/data/labels.csv",
             texts="/data/texts/",
-            schema={"text_id": "VARCHAR(255)", "label": "VARCHAR(64)"},
+            # text_classification's filename + label are framework-managed
+            # (see #197); this synthetic schema only declares extra columns
+            # to exercise resolve()'s schema-bridging code path.
+            schema={"extra_feature": "VARCHAR(255)"},
             label="label",
         ),
         {
