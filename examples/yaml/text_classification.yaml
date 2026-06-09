@@ -1,6 +1,19 @@
-# Text classification: CSV + .txt sidecar files (one per row, named by text_id).
+# Text classification: CSV + .txt sidecar files (one per row).
 # `texts:` directory is convention-mapped; default extension is .txt.
-# `schema:` is required so DataValidator can typecheck the CSV columns.
+#
+# Required CSV columns: `filename` (the .txt sidecar's filename, with or
+# without extension — the default .txt is appended if missing), and the
+# label column you set below. Both columns are framework-managed (filename
+# is reserved by the DB layer), so they do NOT belong in a `schema:` block.
+#
+# `schema:` is optional for text_classification (used only if you have
+# additional feature columns to type-check). The previous example shipped
+# with `schema: { text_id: VARCHAR(255), label: VARCHAR(64) }` which (a)
+# used the wrong column name (`text_id` — actual is `filename`, see the
+# shipped sample CSV at templates/text_classification/data/) and (b) tried
+# to declare reserved framework columns in the schema. Following it
+# literally caused every record to skip at file-transfer with
+# "No filename found in record". Issue #197.
 apiVersion: tracebloc.io/v1
 kind: IngestConfig
 table: support_tickets_train
@@ -8,7 +21,4 @@ intent: train
 category: text_classification
 csv: /data/shared/support-tickets/labels.csv
 texts: /data/shared/support-tickets/texts/
-schema:
-  text_id: VARCHAR(255)
-  label: VARCHAR(64)
 label: label
