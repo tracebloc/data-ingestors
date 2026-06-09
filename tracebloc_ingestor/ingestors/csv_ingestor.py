@@ -245,12 +245,45 @@ class CSVIngestor(BaseIngestor):
             # by pandas, so this is safe when the schema lists more columns than
             # the CSV carries.
             _STRING_TYPES = ("VARCHAR", "CHAR", "TEXT", "STRING")
-            string_dtype = {
-                col: str
+            _string_schema_cols = {
+                col
                 for col, t in self.schema.items()
                 if isinstance(t, str)
                 and t.upper().split("(")[0].strip() in _STRING_TYPES
             }
+            # Pandas applies `dtype` keyed by the RAW header literal — before
+            # `chunk.columns.str.strip()` runs. If a header carries surrounding
+            # whitespace (" code "), keying the dtype dict by the clean schema
+            # name ("code") misses, pandas infers numeric, and "007" lands as
+            # 7 — the leading zeros silently lost on the very read this pin was
+            # meant to prevent. Read the raw header up front (same csv module
+            # path we use for duplicate detection) and pin every raw spelling
+            # whose stripped form matches a string-family schema column.
+            _string_raw_headers = set()
+            try:
+                _sep_probe = self.csv_options.get(
+                    "sep", self.csv_options.get("delimiter", ",")
+                )
+                with open(
+                    file_path,
+                    "r",
+                    encoding=self.csv_options.get("encoding", "utf-8"),
+                    newline="",
+                ) as _fh:
+                    _raw = next(_csv.reader(_fh, delimiter=_sep_probe), [])
+                for _h in _raw:
+                    if str(_h).strip() in _string_schema_cols:
+                        _string_raw_headers.add(_h)
+            except (OSError, UnicodeDecodeError, _csv.Error, TypeError, StopIteration):
+                # Probe failed; fall back to keying by the schema name only —
+                # files without leading/trailing whitespace headers (the
+                # common case) still get pinned.
+                _string_raw_headers = set(_string_schema_cols)
+            else:
+                # Always include the bare schema name too, so a file without
+                # the whitespace variant still gets pinned cleanly.
+                _string_raw_headers |= _string_schema_cols
+            string_dtype = {h: str for h in _string_raw_headers}
 
             # Enhanced default options for pandas
             default_options = {

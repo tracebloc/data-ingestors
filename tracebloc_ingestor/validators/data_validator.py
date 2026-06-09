@@ -5,6 +5,7 @@ It validates that data types in CSV files match the data types specified
 in the schema and provides clear errors when mismatches are found.
 """
 
+import csv as _csv
 import logging
 import re
 from pathlib import Path
@@ -143,9 +144,37 @@ class DataValidator(BaseValidator):
         past the first problem. A clean file scans to the end and reports the
         total rows checked.
         """
+        # Preflight read rules MUST match CSVIngestor.read_data — otherwise a
+        # file can pass validation and then explode at ingest time on a
+        # structural error the validator never surfaced. Two mismatches were
+        # silent until #190's bugbot caught them:
+        #   1. on_bad_lines="error" (CSVIngestor.read_data #76711e6) so a
+        #      ragged row is rejected here too, not silently warned-and-dropped.
+        #   2. Reject duplicate headers up front so they fail in validation,
+        #      not later in the ingestor — same error CSVIngestor raises.
+        try:
+            with open(path, "r", encoding="utf-8", newline="") as _fh:
+                _raw_header = next(_csv.reader(_fh), [])
+            _stripped = [str(h).strip() for h in _raw_header]
+            _dups = sorted({h for h in _stripped if _stripped.count(h) > 1})
+            if _dups:
+                return self._create_result(
+                    is_valid=False,
+                    errors=[
+                        f"Duplicate column name(s) in the CSV header: {_dups}. "
+                        f"Each column must be unique — otherwise the second is "
+                        f"silently renamed '<name>.1' by the parser and the "
+                        f"schema maps onto the wrong column."
+                    ],
+                    metadata={"rows_checked": 0},
+                )
+        except (OSError, UnicodeDecodeError, _csv.Error, TypeError, StopIteration):
+            # Header probe failed; let pd.read_csv surface the real error below.
+            pass
+
         try:
             reader = pd.read_csv(
-                path, chunksize=chunk_size, encoding="utf-8", on_bad_lines="warn"
+                path, chunksize=chunk_size, encoding="utf-8", on_bad_lines="error"
             )
         except pd.errors.EmptyDataError:
             return self._create_result(

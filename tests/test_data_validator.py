@@ -37,6 +37,30 @@ def test_loads_from_csv(make_csv):
     assert result.is_valid
 
 
+def test_streaming_validator_rejects_duplicate_headers(tmp_path):
+    # Regression (#190 bugbot): the streaming CSV validator used to accept
+    # duplicate headers (pandas silently disambiguates "a, a" to "a, a.1"),
+    # while CSVIngestor.read_data rejects them outright — so a file passed
+    # validation and then exploded at ingest with a structural error the
+    # preflight step never surfaced. Align: reject up front.
+    p = tmp_path / "dups.csv"
+    p.write_text("a,a\n1,2\n3,4\n")
+    result = DataValidator(schema={"a": "INT"}).validate(str(p))
+    assert not result.is_valid
+    assert "Duplicate column" in result.errors[0]
+
+
+def test_streaming_validator_rejects_ragged_rows(tmp_path):
+    # Regression (#190 bugbot): the streaming validator used on_bad_lines=
+    # "warn" — a ragged row was silently dropped, validation reported success,
+    # then CSVIngestor.read_data (on_bad_lines="error") failed at ingest. Now
+    # both fail at the same point.
+    p = tmp_path / "ragged.csv"
+    p.write_text("a,b\n1,2\n3,4,5\n6,7\n")
+    result = DataValidator(schema={"a": "INT", "b": "INT"}).validate(str(p))
+    assert not result.is_valid
+
+
 def test_loads_from_json(tmp_path):
     """JSON top-level array of records must validate, mirroring the file shape
     JSONIngestor.read_data consumes.
