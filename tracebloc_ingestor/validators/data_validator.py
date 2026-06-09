@@ -59,6 +59,13 @@ class DataValidator(BaseValidator):
             "FLOAT": self._validate_float,
             "DOUBLE": self._validate_double,
             "DECIMAL": self._validate_decimal,
+            # NUMERIC is a MySQL alias for DECIMAL and is accepted by both
+            # Database._get_sqlalchemy_type (DDL) and CSVIngestor._validate_csv
+            # (type cast). Without this entry the preflight DataValidator
+            # rejects a NUMERIC(p,s) schema with "Unknown data type" even
+            # though ingestion would happily proceed — the two layers must
+            # accept the same vocabulary, not diverge.
+            "NUMERIC": self._validate_decimal,
             "BOOLEAN": self._validate_boolean,
             "BOOL": self._validate_boolean,
             "DATE": self._validate_date,
