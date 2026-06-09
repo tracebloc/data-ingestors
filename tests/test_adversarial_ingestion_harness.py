@@ -349,13 +349,9 @@ def test_overlong_column_name_clear_error():
         _create_table(db, "t", {long_name: "FLOAT", "f0": "FLOAT"})
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "PENDING #185: an existing table whose columns don't match the incoming "
-    "schema is silently reflected and reused, then every insert dies with "
-    "'Unconsumed column names'. #185 adds a fail-fast guard. Flips to pass when "
-    "#185 merges to develop."
-))
 def test_stale_table_schema_mismatch_clear_error():
+    # Was xfail pending #185; #185 merged and the fail-fast guard now raises
+    # a clear ValueError instead of silently reflecting + dying at insert time.
     db = _real_db()
     with pytest.raises(ValueError, match="match the dataset schema|stale"):
         _create_table(db, "IBD", {"P02452_COL1A1": "FLOAT"},
@@ -459,14 +455,10 @@ def _capture_upsert_sql(table_name, schema, record):
     return next((s for s in sqls if "DUPLICATE" in s.upper()), "")
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "PENDING #184: the upsert ON DUPLICATE KEY UPDATE builds VALUES(col) via a "
-    "raw f-string that does NOT backtick-quote the column name, so a special-char "
-    "header (P08254|MMP3) breaks the SQL (1064) and is injection-adjacent. #184 "
-    "switches to insert_stmt.inserted[col], which quotes. Flips to pass when #184 "
-    "merges. (Contrast: CREATE TABLE DDL already escapes — the two tests above.)"
-))
 def test_upsert_quotes_special_char_column():
+    # Was xfail pending #184; #184 merged with text(f"VALUES(`{col}`)") so the
+    # column name is now backtick-quoted in the upsert RHS — special-character
+    # proteomics headers (P08254|MMP3) compile to valid SQL.
     sql = _capture_upsert_sql(
         "t", {"P08254|MMP3": "FLOAT"}, {"data_id": "x", "P08254|MMP3": 1.0}
     )
