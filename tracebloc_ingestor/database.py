@@ -327,9 +327,20 @@ class Database:
                 # rows). Sticking with the legacy ``VALUES(`col`)`` syntax
                 # preserves the prior behaviour (works regardless of which
                 # columns the row actually has) while fixing the quoting bug.
+                #
+                # Embedded backticks in the name are doubled (MySQL identifier
+                # escape rule, mirrors the CREATE TABLE DDL path). Without
+                # that, a header containing a backtick — even one that
+                # round-trips through pandas — would close the quoted
+                # identifier early and break SQL parsing or alter the
+                # statement. Pipe / dash / dot headers worked because they
+                # carry no backtick; this guards the residual case bugbot
+                # flagged on #190.
                 insert_stmt = insert(table)
                 update_dict = {
-                    column.name: text(f"VALUES(`{column.name}`)")
+                    column.name: text(
+                        f"VALUES(`{column.name.replace('`', '``')}`)"
+                    )
                     for column in table.columns
                     if column.name not in ["id", "created_at", "data_id"]
                 }

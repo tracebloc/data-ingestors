@@ -388,3 +388,43 @@ def test_upsert_backtick_quotes_special_char_columns_in_values_clause():
     # the INSERT list — the e2e failure that flipped the original PR red.
     assert " AS new " not in sql
     assert "new.status" not in sql
+
+
+def test_upsert_doubles_embedded_backticks_in_column_name():
+    """Identifier-escape regression (#190 bugbot finding #4).
+
+    A column name containing a literal backtick must be escaped by doubling
+    it (`` -> ````) — MySQL's identifier-escape rule, same one the CREATE
+    TABLE DDL path already follows. Without that, an embedded backtick
+    closes the quoted identifier early, the rest of the name leaks into the
+    SQL as literal tokens, and the statement is either rejected or — worse —
+    silently altered. Bugbot flagged that the upsert RHS wraps in backticks
+    but does NOT double embedded ones; this test pins the fix.
+    """
+    from sqlalchemy import MetaData, Table, Column, BigInteger, Float, text
+    from sqlalchemy.dialects import mysql
+    from sqlalchemy.dialects.mysql import insert
+
+    weird = "ev`il"  # the name itself contains a backtick
+    table = Table(
+        "t",
+        MetaData(),
+        Column("id", BigInteger, primary_key=True),
+        Column("data_id", mysql.VARCHAR(255)),
+        Column(weird, Float),
+    )
+    insert_stmt = insert(table)
+    update_dict = {
+        column.name: text(f"VALUES(`{column.name.replace('`', '``')}`)")
+        for column in table.columns
+        if column.name not in ["id", "created_at", "data_id"]
+    }
+    stmt = insert_stmt.values(
+        [{"data_id": "x", weird: 1.0}]
+    ).on_duplicate_key_update(**update_dict)
+    sql = str(stmt.compile(dialect=mysql.dialect()))
+
+    # Escaped form ` -> `` is present.
+    assert "VALUES(`ev``il`)" in sql
+    # Unescaped form would close the identifier early — must not appear.
+    assert "VALUES(`ev`il`)" not in sql
