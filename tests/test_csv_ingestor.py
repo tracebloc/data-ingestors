@@ -50,6 +50,20 @@ def test_read_data_strips_column_whitespace(tmp_path):
     assert "a" in records[0] and "b" in records[0]
 
 
+def test_read_data_preserves_leading_zeros_with_whitespace_header(tmp_path):
+    # Regression (#190 bugbot): the dtype=str pin keyed by clean schema column
+    # names is applied by pandas against the RAW header literals — before
+    # `chunk.columns.str.strip()`. A header " code " missed the pin, pandas
+    # inferred int from "007" -> 7, and the leading zeros were silently lost.
+    # The fix probes the raw header and pins both the spaced and clean spellings.
+    p = tmp_path / "d.csv"
+    p.write_text(" code ,n\n007,1\n042,2\n")
+    ing = make_csv_ingestor(schema={"code": "VARCHAR(10)", "n": "INT"})
+    records = list(ing.read_data(str(p)))
+    assert records[0]["code"] == "007", f"leading zeros lost; got {records[0]['code']!r}"
+    assert records[1]["code"] == "042"
+
+
 def test_read_data_schema_column_missing_raises(make_csv):
     path = make_csv({"a": [1]})
     ing = make_csv_ingestor(schema={"a": "INT", "missing": "INT"})

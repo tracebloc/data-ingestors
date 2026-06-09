@@ -86,6 +86,24 @@ def test_get_sqlalchemy_type_unsupported_raises(db):
         db._get_sqlalchemy_type("GEOMETRY")
 
 
+def test_get_sqlalchemy_type_decimal_precision_scale(db):
+    # Regression (#190 bugbot): DECIMAL(10,2) used to fail int("10,2") and
+    # fall back to a bare Numeric() — declared precision and scale silently
+    # dropped, MySQL then used its default and clipped values.
+    result = db._get_sqlalchemy_type("DECIMAL(10,2)")
+    assert isinstance(result, db_mod.Numeric)
+    assert result.precision == 10
+    assert result.scale == 2
+
+
+def test_get_sqlalchemy_type_numeric_precision_scale(db):
+    # NUMERIC is an alias for DECIMAL; same precision/scale handling.
+    result = db._get_sqlalchemy_type("NUMERIC(8, 3)")
+    assert isinstance(result, db_mod.Numeric)
+    assert result.precision == 8
+    assert result.scale == 3
+
+
 # ---------------------------------------------------------------------------
 # create_table
 # ---------------------------------------------------------------------------

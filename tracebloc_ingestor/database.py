@@ -95,14 +95,24 @@ class Database:
         
         if base_type in type_mapping:
             alchemy_type = type_mapping[base_type]
-            # Extract length for VARCHAR types
-            length = None
+            # Extract parenthesised arguments. Two shapes:
+            #   - VARCHAR(255) / CHAR(10)      -> single int length
+            #   - DECIMAL(10, 2) / NUMERIC(p,s) -> precision, scale (both honoured;
+            #     previously int("10,2") raised ValueError and we silently fell
+            #     back to a bare Numeric, dropping the declared scale and writing
+            #     the column at MySQL's default — losing precision on the values
+            #     it then bound).
             if "(" in mysql_type_upper:
                 try:
-                    length = int(mysql_type_upper.split("(")[1].split(")")[0])
+                    inside = mysql_type_upper.split("(", 1)[1].rsplit(")", 1)[0]
+                    parts = [int(p.strip()) for p in inside.split(",") if p.strip()]
                 except (ValueError, IndexError):
-                    pass
-            return alchemy_type(length) if length else alchemy_type
+                    parts = []
+                if len(parts) == 2 and base_type in ("DECIMAL", "NUMERIC"):
+                    return alchemy_type(parts[0], parts[1])
+                if len(parts) == 1:
+                    return alchemy_type(parts[0])
+            return alchemy_type
 
         raise ValueError(f"Unsupported MySQL type: {mysql_type}")
 
