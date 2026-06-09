@@ -274,12 +274,17 @@ def test_upsert_backtick_quotes_special_char_columns_in_values_clause():
     Compiles for the MySQL dialect (no live DB) and asserts both the fixed form
     is present and the broken form is gone.
     """
-    from sqlalchemy import MetaData, Table, Column, BigInteger, Float
+    from sqlalchemy import MetaData, Table, Column, BigInteger, Float, text
     from sqlalchemy.dialects import mysql
     from sqlalchemy.dialects.mysql import insert
 
     pipe_col = "P01033|TIMP1"
     isoform_col = "P02751-1|FN1"
+    # Include a column that WILL NOT appear in the inserted record. The
+    # production code iterates every table column; the fix must keep working
+    # when an update target isn't in the INSERT list (the e2e regression that
+    # `insert_stmt.inserted[col]` introduced — MySQL 8 row-alias `new.col`
+    # requires the column to be in the INSERT list and raised 1054).
     table = Table(
         "IBD_Biomarkers",
         MetaData(),
@@ -287,10 +292,12 @@ def test_upsert_backtick_quotes_special_char_columns_in_values_clause():
         Column("data_id", mysql.VARCHAR(255)),
         Column(pipe_col, Float),
         Column(isoform_col, Float),
+        Column("status", mysql.VARCHAR(50)),
     )
     insert_stmt = insert(table)
+    # Mirror the production construction exactly (database.py):
     update_dict = {
-        column.name: insert_stmt.inserted[column.name]
+        column.name: text(f"VALUES(`{column.name}`)")
         for column in table.columns
         if column.name not in ["id", "created_at", "data_id"]
     }
@@ -305,3 +312,8 @@ def test_upsert_backtick_quotes_special_char_columns_in_values_clause():
     # Regression guard: the unquoted form that broke MySQL must not reappear.
     assert "VALUES(P01033|TIMP1)" not in sql
     assert "VALUES(P02751-1|FN1)" not in sql
+    # Second regression guard: never re-introduce the MySQL-8 row-alias form
+    # (`AS new ... new.col`) which requires every referenced column to be in
+    # the INSERT list — the e2e failure that flipped the original PR red.
+    assert " AS new " not in sql
+    assert "new.status" not in sql

@@ -239,17 +239,26 @@ class Database:
                     processed_records.append(processed_record)
 
                 # Create an "INSERT ... ON DUPLICATE KEY UPDATE" statement.
-                # Use insert_stmt.inserted[...] rather than a raw
-                # text(f"VALUES({column.name})"): the f-string left the column
-                # name unquoted in the VALUES() clause, so any header with a
-                # special character (e.g. proteomics "UniProt|gene" columns
-                # like `P01033|TIMP1`, or isoform names like `P02751-1|FN1`)
-                # produced invalid SQL — MySQL parsed the `|`/`-` as operators
-                # and raised 1064 (syntax error), failing the whole batch.
-                # insert_stmt.inserted renders the column name backtick-quoted.
+                # Build the VALUES(...) RHS as a backtick-quoted raw fragment.
+                #
+                # The previous f-string ``VALUES({column.name})`` left the name
+                # unquoted, so any header with a character MySQL treats as an
+                # operator — proteomics ``UniProt|gene`` columns like
+                # ``P01033|TIMP1`` or isoform names like ``P02751-1|FN1`` —
+                # produced 1064 (syntax error) and failed the whole batch.
+                #
+                # The natural SQLAlchemy alternative ``insert_stmt.inserted[
+                # column.name]`` looks right but, against MySQL 8, the dialect
+                # compiles it as the row-alias form ``AS new ... new.col`` —
+                # which *requires* every referenced column to appear in the
+                # INSERT column list and breaks any batch whose records don't
+                # supply every column on the table (e.g. created_at-only
+                # rows). Sticking with the legacy ``VALUES(`col`)`` syntax
+                # preserves the prior behaviour (works regardless of which
+                # columns the row actually has) while fixing the quoting bug.
                 insert_stmt = insert(table)
                 update_dict = {
-                    column.name: insert_stmt.inserted[column.name]
+                    column.name: text(f"VALUES(`{column.name}`)")
                     for column in table.columns
                     if column.name not in ["id", "created_at", "data_id"]
                 }
