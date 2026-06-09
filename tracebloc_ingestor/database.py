@@ -14,6 +14,7 @@ from sqlalchemy import (
     Float,
     Boolean,
     Double,
+    Numeric,
     inspect,
 
 )
@@ -77,6 +78,8 @@ class Database:
             "BIGINT": BigInteger,
             "FLOAT": Float,
             "DOUBLE": Double,
+            "DECIMAL": Numeric,
+            "NUMERIC": Numeric,
             "BOOLEAN": Boolean,
             "BOOL": Boolean,
             "DATE": Date,
@@ -92,14 +95,24 @@ class Database:
         
         if base_type in type_mapping:
             alchemy_type = type_mapping[base_type]
-            # Extract length for VARCHAR types
-            length = None
+            # Extract parenthesised arguments. Two shapes:
+            #   - VARCHAR(255) / CHAR(10)      -> single int length
+            #   - DECIMAL(10, 2) / NUMERIC(p,s) -> precision, scale (both honoured;
+            #     previously int("10,2") raised ValueError and we silently fell
+            #     back to a bare Numeric, dropping the declared scale and writing
+            #     the column at MySQL's default — losing precision on the values
+            #     it then bound).
             if "(" in mysql_type_upper:
                 try:
-                    length = int(mysql_type_upper.split("(")[1].split(")")[0])
+                    inside = mysql_type_upper.split("(", 1)[1].rsplit(")", 1)[0]
+                    parts = [int(p.strip()) for p in inside.split(",") if p.strip()]
                 except (ValueError, IndexError):
-                    pass
-            return alchemy_type(length) if length else alchemy_type
+                    parts = []
+                if len(parts) == 2 and base_type in ("DECIMAL", "NUMERIC"):
+                    return alchemy_type(parts[0], parts[1])
+                if len(parts) == 1:
+                    return alchemy_type(parts[0])
+            return alchemy_type
 
         raise ValueError(f"Unsupported MySQL type: {mysql_type}")
 
@@ -150,6 +163,25 @@ class Database:
                 f"database column-name limit and must be shortened: {preview}{more}"
             )
 
+        # Fail fast on too many columns before CREATE TABLE turns it into a raw
+        # MySQL 1117 ("Too many columns"). MySQL's hard limit is 4096 columns per
+        # table; the framework adds ~11 standard columns on top of the schema, so
+        # bound the user schema below that. A very wide panel (genomics /
+        # proteomics matrices with thousands of feature columns) is the realistic
+        # trigger. (MySQL also caps the row at ~65535 bytes — that limit binds
+        # first for very wide VARCHAR panels and still surfaces at CREATE TABLE as
+        # 1118; this count guard catches the common numeric-panel case with an
+        # actionable message.)
+        _MAX_FEATURE_COLUMNS = 4000
+        if len(schema) > _MAX_FEATURE_COLUMNS:
+            raise ValueError(
+                f"Schema has {len(schema)} columns, exceeding the supported "
+                f"maximum of {_MAX_FEATURE_COLUMNS} (MySQL's hard limit is 4096 "
+                f"columns per table, and the framework reserves ~11). Reduce the "
+                f"column count — e.g. narrow the feature panel, or pivot a very "
+                f"wide matrix to long form."
+            )
+
         # Return existing table if already created
         if table_name in self.tables:
             return self.tables[table_name]
@@ -160,6 +192,45 @@ class Database:
             # Reflect existing table using MetaData
             self.metadata.reflect(self.engine, only=[table_name])
             table = self.metadata.tables[table_name]
+
+            # Fail fast if the existing table's feature columns don't match the
+            # incoming schema. Reflecting and silently reusing a mismatched table
+            # makes every record insert die downstream with SQLAlchemy's cryptic
+            # "Unconsumed column names: ..." — the record keys (built from the
+            # current schema) reference columns the reflected table doesn't have.
+            # This happens when a table is left over from an earlier ingestion:
+            # e.g. a prior run created the table and then failed before inserting,
+            # or the dataset's column names changed between pushes (a customer
+            # renaming proteomics headers like `P01033|TIMP1` -> `P01033_TIMP1`
+            # to work around an unrelated error is exactly this case). Surface an
+            # actionable error naming the drift instead.
+            _STANDARD_COLUMNS = {
+                "id", "created_at", "updated_at", "status", "label",
+                "data_intent", "data_id", "filename", "extension",
+                "annotation", "ingestor_id",
+            }
+            existing_features = {c.name for c in table.columns} - _STANDARD_COLUMNS
+            expected_features = set(schema) - _STANDARD_COLUMNS
+            if expected_features and existing_features != expected_features:
+                missing = sorted(expected_features - existing_features)
+                extra = sorted(existing_features - expected_features)
+
+                def _preview(cols):
+                    head = ", ".join(cols[:8])
+                    return f"{head}{'' if len(cols) <= 8 else f', … (+{len(cols) - 8} more)'}"
+
+                raise ValueError(
+                    f"Table '{table_name}' already exists with feature columns "
+                    f"that do not match the dataset schema. This usually means a "
+                    f"stale table from an earlier ingestion (one that failed "
+                    f"before inserting, or a dataset whose column names changed "
+                    f"between pushes). "
+                    f"In the schema but not the table: [{_preview(missing)}]. "
+                    f"In the table but not the schema: [{_preview(extra)}]. "
+                    f"Drop the existing '{table_name}' table, or ingest under a "
+                    f"new dataset name, and re-run."
+                )
+
             self.tables[table_name] = table
             return table
 
@@ -238,10 +309,37 @@ class Database:
 
                     processed_records.append(processed_record)
 
-                # Create an "INSERT ... ON DUPLICATE KEY UPDATE" statement
+                # Create an "INSERT ... ON DUPLICATE KEY UPDATE" statement.
+                # Build the VALUES(...) RHS as a backtick-quoted raw fragment.
+                #
+                # The previous f-string ``VALUES({column.name})`` left the name
+                # unquoted, so any header with a character MySQL treats as an
+                # operator — proteomics ``UniProt|gene`` columns like
+                # ``P01033|TIMP1`` or isoform names like ``P02751-1|FN1`` —
+                # produced 1064 (syntax error) and failed the whole batch.
+                #
+                # The natural SQLAlchemy alternative ``insert_stmt.inserted[
+                # column.name]`` looks right but, against MySQL 8, the dialect
+                # compiles it as the row-alias form ``AS new ... new.col`` —
+                # which *requires* every referenced column to appear in the
+                # INSERT column list and breaks any batch whose records don't
+                # supply every column on the table (e.g. created_at-only
+                # rows). Sticking with the legacy ``VALUES(`col`)`` syntax
+                # preserves the prior behaviour (works regardless of which
+                # columns the row actually has) while fixing the quoting bug.
+                # Embedded backticks in the name are doubled (MySQL identifier
+                # escape rule, mirrors the CREATE TABLE DDL path). Without
+                # that, a header containing a literal backtick would close
+                # the quoted identifier early and either break SQL parsing or
+                # silently alter the statement. Pipe / dash / dot headers
+                # worked because they carry no backtick; this guards the
+                # residual case bugbot flagged on #190 (the fix was authored
+                # in #191 but dropped by the squash-merge — re-applying).
                 insert_stmt = insert(table)
                 update_dict = {
-                    column.name: text(f"VALUES({column.name})")
+                    column.name: text(
+                        f"VALUES(`{column.name.replace('`', '``')}`)"
+                    )
                     for column in table.columns
                     if column.name not in ["id", "created_at", "data_id"]
                 }

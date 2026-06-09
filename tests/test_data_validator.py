@@ -37,6 +37,30 @@ def test_loads_from_csv(make_csv):
     assert result.is_valid
 
 
+def test_streaming_validator_rejects_duplicate_headers(tmp_path):
+    # Regression (#190 bugbot): the streaming CSV validator used to accept
+    # duplicate headers (pandas silently disambiguates "a, a" to "a, a.1"),
+    # while CSVIngestor.read_data rejects them outright — so a file passed
+    # validation and then exploded at ingest with a structural error the
+    # preflight step never surfaced. Align: reject up front.
+    p = tmp_path / "dups.csv"
+    p.write_text("a,a\n1,2\n3,4\n")
+    result = DataValidator(schema={"a": "INT"}).validate(str(p))
+    assert not result.is_valid
+    assert "Duplicate column" in result.errors[0]
+
+
+def test_streaming_validator_rejects_ragged_rows(tmp_path):
+    # Regression (#190 bugbot): the streaming validator used on_bad_lines=
+    # "warn" — a ragged row was silently dropped, validation reported success,
+    # then CSVIngestor.read_data (on_bad_lines="error") failed at ingest. Now
+    # both fail at the same point.
+    p = tmp_path / "ragged.csv"
+    p.write_text("a,b\n1,2\n3,4,5\n6,7\n")
+    result = DataValidator(schema={"a": "INT", "b": "INT"}).validate(str(p))
+    assert not result.is_valid
+
+
 def test_loads_from_json(tmp_path):
     """JSON top-level array of records must validate, mirroring the file shape
     JSONIngestor.read_data consumes.
@@ -153,8 +177,12 @@ def test_bigint_delegates_to_int():
 # FLOAT / DOUBLE / DECIMAL
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("dtype", ["FLOAT", "DOUBLE", "DECIMAL(10,2)"])
+@pytest.mark.parametrize("dtype", ["FLOAT", "DOUBLE", "DECIMAL(10,2)", "NUMERIC(8,3)", "NUMERIC"])
 def test_float_family_valid(dtype):
+    # NUMERIC is a MySQL alias for DECIMAL; #190 bugbot caught that the DDL
+    # and ingestor type-cast layers accepted NUMERIC but the validator's
+    # type_validators dict didn't, so a schema using NUMERIC failed preflight
+    # with "Unknown data type" even though ingest would proceed.
     df = pd.DataFrame({"x": [1.5, 2.25]})
     assert DataValidator(schema={"x": dtype}).validate(df).is_valid
 
@@ -418,3 +446,36 @@ def test_constraints_are_stripped_from_type():
 )
 def test_detect_column_type(series, expected):
     assert DataValidator()._detect_column_type(series) == expected
+
+
+# ---------------------------------------------------------------------------
+# Streaming / large-file validation (bounded memory, full coverage)
+# ---------------------------------------------------------------------------
+
+def test_validate_csv_streams_and_catches_late_chunk(tmp_path):
+    # A bad value PAST the first chunk must still be caught — the validator
+    # scans the whole file chunk by chunk (memory-bounded), not just a sample
+    # and not by loading the entire file. chunk_size forces multiple chunks.
+    p = tmp_path / "big.csv"
+    rows = [str(i) for i in range(50)]
+    rows[35] = "not-an-int"  # lands in the 4th chunk of 10
+    p.write_text("n\n" + "\n".join(rows) + "\n")
+    res = DataValidator(schema={"n": "INT"}).validate(str(p), chunk_size=10)
+    assert not res.is_valid and "non-numeric" in res.errors[0]
+
+
+def test_validate_csv_streaming_clean_file_is_valid(tmp_path):
+    p = tmp_path / "clean.csv"
+    p.write_text("n\n" + "\n".join(str(i) for i in range(50)) + "\n")
+    res = DataValidator(schema={"n": "INT"}).validate(str(p), chunk_size=10)
+    assert res.is_valid and res.metadata["rows_checked"] == 50
+
+
+def test_validate_strips_header_whitespace_to_match_ingestor():
+    # The ingestor strips header whitespace on every chunk (" age" -> "age");
+    # the validator must do the same so it validates the column the ingestor
+    # will actually ingest, rather than silently skipping it.
+    res = DataValidator(schema={"age": "INT"}).validate(
+        pd.DataFrame({" age": [1, "bad"]})
+    )
+    assert not res.is_valid

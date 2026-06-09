@@ -251,8 +251,25 @@ class BaseIngestor(ABC):
             # regression-class categories ``"bucket"`` replaces the raw target
             # with a stable hash-bucket ID so the value never leaks to the
             # central backend (#44 / parent client#85).
+            #
+            # Coerce numpy / pandas scalar types to native Python before the
+            # policy runs. After the INT-cast switch to nullable ``Int64``,
+            # itertuples yields ``numpy.int64`` (the old ``downcast='integer'``
+            # incidentally produced plain ``int``) — and mysql-connector-python
+            # refuses to bind numpy scalars, failing the passthrough path with
+            # "Python type numpy.int64 cannot be converted" on every row of any
+            # INT label column (tabular_classification on the e2e job). The
+            # other policies (e.g. ``bucket``) stringify their output so they
+            # never hit this; the fix lives here so passthrough also yields a
+            # binder-friendly value.
+            label_val = record.get(self.label_column)
+            if hasattr(label_val, "item") and not isinstance(label_val, str):
+                try:
+                    label_val = label_val.item()
+                except (ValueError, AttributeError):
+                    pass
             cleaned_record["label"] = label_policy_module.apply(
-                record.get(self.label_column), self.label_policy
+                label_val, self.label_policy
             )
 
         if self.intent:
@@ -301,16 +318,24 @@ class BaseIngestor(ABC):
             # JSONIngestor._validate_record (#170): `value is None or
             # value == ""`. pd.isna returns False for ordinary
             # strings/numbers/bools so existing values aren't touched.
-            # Python bool must NOT be stringified — mysql-connector-python
-            # writes True/False directly as TINYINT 1/0, but `str(True)` is
-            # the four-character string "True", which MySQL rejects against
-            # a BOOL column with `Incorrect integer value: 'True' for column
-            # 'active' at row 1`. Pass bools through; stringify everything
-            # else as before (the rest of the pipeline expects strings).
+            # Booleans must NOT be stringified — mysql-connector-python writes
+            # True/False directly as TINYINT 1/0, but `str(True)` is the
+            # four-character string "True", which MySQL rejects against a BOOL
+            # column with `Incorrect integer value: 'True' for column 'active'
+            # at row 1`. This must catch BOTH Python `bool` AND `numpy.bool_`:
+            # a CSV BOOL column comes back from pandas/itertuples as numpy.bool_,
+            # and `isinstance(np.True_, bool)` is False — so the previous
+            # `isinstance(v, bool)` check missed it and every CSV boolean was
+            # stringified to "True"/"False" and rejected by MySQL. `is_bool`
+            # covers both; convert to a plain Python bool so the binder writes
+            # 1/0. Checked FIRST so a bool never reaches the `v == ""` compare
+            # (numpy scalar-vs-str comparison would warn) and pd.NA (is_bool
+            # False) falls through to the null branch. The rest of the pipeline
+            # expects strings, so everything non-bool/non-null is stringified.
             cleaned_record = {
                 k.strip(): (
-                    None if pd.isna(v) or v == ""
-                    else v if isinstance(v, bool)
+                    bool(v) if pd.api.types.is_bool(v)
+                    else None if pd.isna(v) or v == ""
                     else str(v).strip()
                 )
                 for k, v in record.items()
@@ -581,35 +606,56 @@ class BaseIngestor(ABC):
                 session.commit()
                 pbar.close()
 
-                # Send edge label metadata
-                if self.api_client.send_generate_edge_label_meta(
+                # Register the dataset with the backend. Every step here is
+                # REQUIRED: the rows are already committed to MySQL above, so if
+                # any step fails the dataset is half-created — rows present but
+                # not registered. The previous code nested these as
+                # `if A: if B: if C: create()`, so a False return at ANY step
+                # silently skipped the rest (including create_dataset AND the
+                # summary) and the run STILL exited 0 — leaving committed rows
+                # with no registered dataset and no error the user could see.
+                # Fail loudly instead: raise so the process exits non-zero and
+                # the failure surfaces (the CLI streams these logs live and marks
+                # the Job failed). The api_client has already logged the
+                # underlying HTTP detail before returning False.
+                if not self.api_client.send_generate_edge_label_meta(
                     self.table_name, self.ingestor_id, self.intent
                 ):
+                    raise RuntimeError(
+                        "Backend rejected edge-label metadata; the dataset was "
+                        "NOT registered (its rows are already in the database). "
+                        "See the logged API error above."
+                    )
 
-                    # schema dict
-                    schema_dict = self.database.get_table_schema(self.table_name)
-                    add_info = self.file_options
-                    # Send global metadata
-                    if self.api_client.send_global_meta_meta(
-                        self.table_name, schema_dict, add_info
-                    ):
+                schema_dict = self.database.get_table_schema(self.table_name)
+                if not self.api_client.send_global_meta_meta(
+                    self.table_name, schema_dict, self.file_options
+                ):
+                    raise RuntimeError(
+                        "Backend rejected the dataset schema/metadata; the "
+                        "dataset was NOT registered (its rows are already in the "
+                        "database). See the logged API error above."
+                    )
 
-                        # Prepare dataset
-                        if self.api_client.prepare_dataset(
-                            self.category,
-                            self.ingestor_id,
-                            self.data_format,
-                            self.intent,
-                        ):
+                if not self.api_client.prepare_dataset(
+                    self.category,
+                    self.ingestor_id,
+                    self.data_format,
+                    self.intent,
+                ):
+                    raise RuntimeError(
+                        "Backend failed to prepare the dataset; it was NOT "
+                        "registered (its rows are already in the database). See "
+                        "the logged API error above."
+                    )
 
-                            self.api_client.create_dataset(
-                                category=self.category, ingestor_id=self.ingestor_id
-                            )
+                self.api_client.create_dataset(
+                    category=self.category, ingestor_id=self.ingestor_id
+                )
 
-                            # Create and log summary
-                            summary = IngestionSummary(**stats)
-
-                            self._log_summary(summary)
+                # Create and log summary — only after successful registration.
+                summary = IngestionSummary(**stats)
+                self._log_summary(summary)
 
             except Exception as e:
                 session.rollback()

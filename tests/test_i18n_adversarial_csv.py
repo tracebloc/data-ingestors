@@ -353,12 +353,13 @@ def test_single_column_label_only_file(tmp_path):
     assert list(records[0].keys()) == ["label"]
 
 
-def test_ragged_trailing_semicolon_row_is_dropped_with_warning(tmp_path):
-    """A ragged row (extra trailing ``;`` -> one field too many) is dropped
-    under the engine's ``on_bad_lines="warn"`` policy, emitting a
-    ParserWarning. This is data loss, but NOT silent — assert both the
-    warning and the resulting row count so the behaviour is explicit and a
-    regression to silent ``skip``/``error`` is caught."""
+def test_ragged_row_raises_not_silently_dropped(tmp_path):
+    """A ragged row (extra trailing ``;`` -> one field too many) must now FAIL
+    LOUDLY (``on_bad_lines="error"``) rather than be silently dropped. Silently
+    shrinking the dataset corrupts it under a still-green success, and a
+    malformed row almost always signals a real structural problem (wrong
+    delimiter, unquoted comma) the user must fix. Replaces the former
+    drop-with-ParserWarning behaviour."""
     p = tmp_path / "rag.csv"
     # Row 2 has a trailing ';' -> 4 fields where 3 are expected.
     p.write_text("a;b;c\n1;2;3\n4;5;6;\n7;8;9\n", encoding="utf-8")
@@ -367,29 +368,17 @@ def test_ragged_trailing_semicolon_row_is_dropped_with_warning(tmp_path):
         csv_options={"sep": ";"},
     )
 
-    with pytest.warns(pd.errors.ParserWarning):
-        records = list(ing.read_data(str(p)))
-
-    # 3 data rows in, the ragged one dropped -> 2 out.
-    assert len(records) == 2
-    assert records[0] == {"a": 1, "b": 2, "c": 3}
-    assert records[1] == {"a": 7, "b": 8, "c": 9}
+    with pytest.raises(Exception):
+        list(ing.read_data(str(p)))
 
 
-def test_duplicate_header_names_are_pandas_mangled(tmp_path):
-    """Duplicate header names are silently de-duplicated by pandas (second
-    ``age`` -> ``age.1``). The engine does not reject this, so the second
-    column leaks through under a renamed key. Assert the documented mangling
-    explicitly: the declared ``age`` keeps the first column's value and the
-    duplicate surfaces as ``age.1`` — making the gap visible rather than
-    letting it pass unexamined."""
+def test_duplicate_header_names_are_rejected(tmp_path):
+    """Duplicate header names are now rejected with a clear error BEFORE pandas
+    silently de-duplicates them (second ``age`` -> ``age.1``) and the schema
+    maps onto the wrong physical column. Replaces the former
+    documented-mangling behaviour."""
     p = tmp_path / "dup.csv"
     p.write_text("age,age,label\n10,20,x\n", encoding="utf-8")
     ing = _make_ingestor({"age": "INT", "label": "VARCHAR(5)"})
-    records = list(ing.read_data(str(p)))
-
-    rec = records[0]
-    assert rec["age"] == 10          # first 'age' column
-    assert "age.1" in rec            # pandas-mangled duplicate leaks through
-    assert rec["age.1"] == 20
-    assert rec["label"] == "x"
+    with pytest.raises(ValueError, match="[Dd]uplicate"):
+        list(ing.read_data(str(p)))

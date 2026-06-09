@@ -86,6 +86,24 @@ def test_get_sqlalchemy_type_unsupported_raises(db):
         db._get_sqlalchemy_type("GEOMETRY")
 
 
+def test_get_sqlalchemy_type_decimal_precision_scale(db):
+    # Regression (#190 bugbot): DECIMAL(10,2) used to fail int("10,2") and
+    # fall back to a bare Numeric() — declared precision and scale silently
+    # dropped, MySQL then used its default and clipped values.
+    result = db._get_sqlalchemy_type("DECIMAL(10,2)")
+    assert isinstance(result, db_mod.Numeric)
+    assert result.precision == 10
+    assert result.scale == 2
+
+
+def test_get_sqlalchemy_type_numeric_precision_scale(db):
+    # NUMERIC is an alias for DECIMAL; same precision/scale handling.
+    result = db._get_sqlalchemy_type("NUMERIC(8, 3)")
+    assert isinstance(result, db_mod.Numeric)
+    assert result.precision == 8
+    assert result.scale == 3
+
+
 # ---------------------------------------------------------------------------
 # create_table
 # ---------------------------------------------------------------------------
@@ -121,6 +139,59 @@ def test_create_table_existing_in_db_reflects(db):
         table = db.create_table("existing", {})
     assert db.tables["existing"] is table
     db.metadata.reflect.assert_called_once()
+
+
+def test_create_table_existing_matching_schema_reflects_ok(db):
+    """An existing table whose feature columns match the incoming schema is
+    reused without error — the normal re-ingest-same-dataset path. Only the
+    feature columns are compared; the standard framework columns (id, data_id,
+    …) are ignored."""
+    inspector = MagicMock()
+    inspector.get_table_names.return_value = ["panel"]
+
+    def fake_reflect(engine, only=None):
+        Table(
+            "panel", db.metadata,
+            Column("id", BigInteger, primary_key=True),
+            Column("data_id", String(255)),
+            Column("P01033_TIMP1", String(255)),
+            Column("P02452_COL1A1", String(255)),
+        )
+
+    db.metadata.reflect = MagicMock(side_effect=fake_reflect)
+    with patch.object(db_mod, "inspect", return_value=inspector):
+        table = db.create_table(
+            "panel", {"P01033_TIMP1": "FLOAT", "P02452_COL1A1": "FLOAT"}
+        )
+    assert db.tables["panel"] is table
+
+
+def test_create_table_existing_schema_mismatch_fails_fast(db):
+    """A stale table whose feature columns don't match the incoming schema must
+    fail fast with an actionable error — instead of being silently reused and
+    then dying on every insert with SQLAlchemy's cryptic 'Unconsumed column
+    names'.
+
+    Regression (Henrik/LMU): a prior ingestion left `IBD_Biomarker` with the
+    original proteomics headers (`P02452|COL1A1`); the customer then renamed the
+    CSV headers to sanitized identifiers (`P02452_COL1A1`) to dodge an unrelated
+    SQL error. create_table reflected the stale table, ignored the new schema,
+    and all 207 records failed with 'Unconsumed column names'."""
+    inspector = MagicMock()
+    inspector.get_table_names.return_value = ["IBD_Biomarker"]
+
+    def fake_reflect(engine, only=None):
+        Table(
+            "IBD_Biomarker", db.metadata,
+            Column("id", BigInteger, primary_key=True),
+            Column("data_id", String(255)),
+            Column("P02452|COL1A1", String(255)),  # original header (stale table)
+        )
+
+    db.metadata.reflect = MagicMock(side_effect=fake_reflect)
+    with patch.object(db_mod, "inspect", return_value=inspector):
+        with pytest.raises(ValueError, match="do not match|stale table"):
+            db.create_table("IBD_Biomarker", {"P02452_COL1A1": "FLOAT"})  # sanitized
 
 
 # ---------------------------------------------------------------------------
@@ -250,3 +321,112 @@ def test_create_table_rejects_overlong_column_name():
     long_name = "Protein_" + "X" * 70  # 78 chars, > 64
     with pytest.raises(ValueError, match="64-character"):
         db.create_table("t", {long_name: "FLOAT", "feature_0": "FLOAT"})
+
+
+# ---------------------------------------------------------------------------
+# upsert quoting (regression): special-character column names
+# ---------------------------------------------------------------------------
+
+def test_upsert_backtick_quotes_special_char_columns_in_values_clause():
+    """ON DUPLICATE KEY UPDATE must backtick-quote the column name inside
+    VALUES(...).
+
+    Proteomics panels use "UniProt|gene" headers (e.g. `P01033|TIMP1`) and
+    isoform names (`P02751-1|FN1`). The previous construction built the update
+    clause with a raw f-string ``text(f"VALUES({column.name})")``, leaving the
+    name unquoted on the right-hand side. MySQL then parsed the `|` (and `-`)
+    as operators and raised 1064 (syntax error) — failing the entire batch.
+
+    Surfaced by Henrik's IBD_Biomarkers ingestion (LMU): all 207 records failed
+    with ``near '|TIMP1), `P02452|COL1A1` = VALUES(P02452|COL1A1)'``. Note the
+    left-hand side was already correctly quoted; only the VALUES() argument was
+    not — which is exactly what this test pins.
+
+    Compiles for the MySQL dialect (no live DB) and asserts both the fixed form
+    is present and the broken form is gone.
+    """
+    from sqlalchemy import MetaData, Table, Column, BigInteger, Float, text
+    from sqlalchemy.dialects import mysql
+    from sqlalchemy.dialects.mysql import insert
+
+    pipe_col = "P01033|TIMP1"
+    isoform_col = "P02751-1|FN1"
+    # Include a column that WILL NOT appear in the inserted record. The
+    # production code iterates every table column; the fix must keep working
+    # when an update target isn't in the INSERT list (the e2e regression that
+    # `insert_stmt.inserted[col]` introduced — MySQL 8 row-alias `new.col`
+    # requires the column to be in the INSERT list and raised 1054).
+    table = Table(
+        "IBD_Biomarkers",
+        MetaData(),
+        Column("id", BigInteger, primary_key=True),
+        Column("data_id", mysql.VARCHAR(255)),
+        Column(pipe_col, Float),
+        Column(isoform_col, Float),
+        Column("status", mysql.VARCHAR(50)),
+    )
+    insert_stmt = insert(table)
+    # Mirror the production construction exactly (database.py):
+    update_dict = {
+        column.name: text(f"VALUES(`{column.name}`)")
+        for column in table.columns
+        if column.name not in ["id", "created_at", "data_id"]
+    }
+    stmt = insert_stmt.values(
+        [{"data_id": "x", pipe_col: 1.0, isoform_col: 2.0}]
+    ).on_duplicate_key_update(**update_dict)
+    sql = str(stmt.compile(dialect=mysql.dialect()))
+
+    # Fixed: the name is backtick-quoted inside VALUES(...).
+    assert "VALUES(`P01033|TIMP1`)" in sql
+    assert "VALUES(`P02751-1|FN1`)" in sql
+    # Regression guard: the unquoted form that broke MySQL must not reappear.
+    assert "VALUES(P01033|TIMP1)" not in sql
+    assert "VALUES(P02751-1|FN1)" not in sql
+    # Second regression guard: never re-introduce the MySQL-8 row-alias form
+    # (`AS new ... new.col`) which requires every referenced column to be in
+    # the INSERT list — the e2e failure that flipped the original PR red.
+    assert " AS new " not in sql
+    assert "new.status" not in sql
+
+
+def test_upsert_doubles_embedded_backticks_in_column_name():
+    """Identifier-escape regression (#190 bugbot, re-applied).
+
+    A column name containing a literal backtick must be escaped by doubling
+    it (` -> ``) — MySQL's identifier-escape rule, same one CREATE TABLE DDL
+    already follows. Without that, an embedded backtick closes the quoted
+    identifier early and the rest of the name leaks into the SQL as literal
+    tokens — the statement is either rejected or silently altered.
+
+    Bugbot flagged that the upsert RHS wraps in backticks but does NOT
+    double embedded ones; this test pins the fix. (The original was authored
+    in #191 but dropped by GitHub's squash-merge — re-applying.)
+    """
+    from sqlalchemy import MetaData, Table, Column, BigInteger, Float, text
+    from sqlalchemy.dialects import mysql
+    from sqlalchemy.dialects.mysql import insert
+
+    weird = "ev`il"
+    table = Table(
+        "t",
+        MetaData(),
+        Column("id", BigInteger, primary_key=True),
+        Column("data_id", mysql.VARCHAR(255)),
+        Column(weird, Float),
+    )
+    insert_stmt = insert(table)
+    update_dict = {
+        column.name: text(f"VALUES(`{column.name.replace('`', '``')}`)")
+        for column in table.columns
+        if column.name not in ["id", "created_at", "data_id"]
+    }
+    stmt = insert_stmt.values(
+        [{"data_id": "x", weird: 1.0}]
+    ).on_duplicate_key_update(**update_dict)
+    sql = str(stmt.compile(dialect=mysql.dialect()))
+
+    # Escaped form ` -> `` is present.
+    assert "VALUES(`ev``il`)" in sql
+    # Unescaped form would close the identifier early — must not appear.
+    assert "VALUES(`ev`il`)" not in sql
