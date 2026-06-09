@@ -8,6 +8,7 @@ conversion capabilities.
 from typing import Dict, Any, Generator, Optional, List
 import json
 import logging
+import math
 import re
 from pathlib import Path
 
@@ -80,15 +81,36 @@ def _validate_value_against_dtype(value: Any, dtype_upper: str) -> None:
             f = float(value)
         except (TypeError, ValueError):
             raise ValueError(f"value {value!r} is not numeric")
+        # Reject non-finite (inf / -inf / NaN) before is_integer(). inf and
+        # NaN both return False from is_integer() in CPython today, so the
+        # check below already rejects them — but make the guard explicit so
+        # the contract doesn't depend on a CPython detail and so the error
+        # message names the real problem (mirrors DataValidator's
+        # ``_non_finite_error`` on the CSV path).
+        if not math.isfinite(f):
+            raise ValueError(
+                f"value {value!r} is non-finite (inf/NaN) and cannot be "
+                f"stored in an INT column"
+            )
         if not f.is_integer():
             raise ValueError(
                 f"value {value!r} is not an integer (would silently truncate)"
             )
     elif any(t in dtype_upper for t in ("FLOAT", "DOUBLE", "DECIMAL", "NUMERIC")):
         try:
-            float(value)
+            f = float(value)
         except (TypeError, ValueError):
             raise ValueError(f"value {value!r} is not numeric")
+        # Reject inf / -inf / NaN. ``float("Infinity")`` returns +inf
+        # without raising, so the bare float() above lets non-finite values
+        # through silently; DataValidator's FLOAT branch already rejects
+        # them on the CSV path (``_non_finite_error``). Match that here so
+        # JSON and CSV give the same verdict on the same record.
+        if not math.isfinite(f):
+            raise ValueError(
+                f"value {value!r} is non-finite (inf/NaN) and cannot be "
+                f"stored in a numeric column"
+            )
     elif any(t in dtype_upper for t in ("VARCHAR", "CHAR", "TEXT")):
         # MySQL binds any scalar as a string against a string column (see
         # issue #188), so accept ints/floats/bools too. The only constraint

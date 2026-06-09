@@ -186,6 +186,30 @@ def test_validate_record_accepts_iso_date():
     ing._validate_record({"d": "2024-01-15"})
 
 
+# ---------------------------------------------------------------------------
+# #204 bugbot — non-finite (inf / NaN) must be rejected for INT and FLOAT
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("v", [float("inf"), float("-inf"), float("nan"), "Infinity"])
+def test_validate_record_rejects_non_finite_for_int(v):
+    # float("Infinity") returns +inf without raising, and float.is_integer()
+    # is False on inf/NaN — but the contract shouldn't depend on that detail.
+    # Mirror DataValidator's _non_finite_error on the CSV path and reject
+    # explicitly with an informative message.
+    ing = make_json_ingestor(schema={"n": "INT"})
+    with pytest.raises(ValueError, match="non-finite|not an integer"):
+        ing._validate_record({"n": v})
+
+
+@pytest.mark.parametrize("v", [float("inf"), float("-inf"), float("nan"), "Infinity"])
+def test_validate_record_rejects_non_finite_for_float(v):
+    # Bare float() lets inf through silently — DataValidator already rejects
+    # this for CSV (_non_finite_error). Match here so JSON and CSV agree.
+    ing = make_json_ingestor(schema={"x": "FLOAT"})
+    with pytest.raises(ValueError, match="non-finite"):
+        ing._validate_record({"x": v})
+
+
 def test_count_records_array(tmp_path):
     p = _write_json(tmp_path, [{"a": 1}, {"a": 2}, {"a": 3}])
     assert make_json_ingestor()._count_records(str(p)) == 3
