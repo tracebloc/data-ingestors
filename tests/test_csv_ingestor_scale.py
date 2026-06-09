@@ -10,6 +10,8 @@ LARGER than chunk_size and assert every row across all chunks is correct.
 
 from __future__ import annotations
 
+import datetime
+
 from unittest.mock import MagicMock
 
 import pandas as pd
@@ -46,7 +48,8 @@ def test_date_column_converted_in_every_chunk(tmp_path):
     ing = _ingestor({"ts": "DATE", "label": "str"}, chunk_size=3)  # 10 rows -> 4 chunks
     recs = list(ing.read_data(path))
     assert len(recs) == 10
-    assert all(isinstance(r["ts"], pd.Timestamp) for r in recs)
+    # DATE now coerces to plain datetime.date (no spurious time), in every chunk.
+    assert all(isinstance(r["ts"], datetime.date) for r in recs)
 
 
 def test_header_whitespace_stripped_in_every_chunk(tmp_path):
@@ -64,4 +67,5 @@ def test_single_chunk_behaviour_unchanged(tmp_path):
     ing = _ingestor({"ts": "DATE", "label": "str"}, chunk_size=1000)
     recs = list(ing.read_data(path))
     assert len(recs) == 2
-    assert all(isinstance(r["ts"], pd.Timestamp) for r in recs)
+    # DATE now coerces to plain datetime.date (no spurious time), in every chunk.
+    assert all(isinstance(r["ts"], datetime.date) for r in recs)

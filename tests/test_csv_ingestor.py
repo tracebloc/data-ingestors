@@ -79,9 +79,15 @@ def test_validate_csv_type_coercion():
         "b": [True, False],
         "d": ["2024-01-01", "2024-02-02"],
     })
-    # Should not raise; coerces in place.
+    # Should not raise; coerces in place. A DATE column now becomes plain
+    # datetime.date objects (object dtype), NOT datetime64 — so no spurious
+    # 00:00:00 time component is appended downstream (DATE vs DATETIME split).
+    import datetime
     ing._validate_csv(df)
-    assert str(df["d"].dtype).startswith("datetime")
+    assert all(
+        isinstance(v, datetime.date) and not isinstance(v, datetime.datetime)
+        for v in df["d"]
+    )
 
 
 def test_count_records(make_csv):

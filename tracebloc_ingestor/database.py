@@ -14,6 +14,7 @@ from sqlalchemy import (
     Float,
     Boolean,
     Double,
+    Numeric,
     inspect,
 
 )
@@ -77,6 +78,8 @@ class Database:
             "BIGINT": BigInteger,
             "FLOAT": Float,
             "DOUBLE": Double,
+            "DECIMAL": Numeric,
+            "NUMERIC": Numeric,
             "BOOLEAN": Boolean,
             "BOOL": Boolean,
             "DATE": Date,
@@ -148,6 +151,25 @@ class Database:
             raise ValueError(
                 f"{len(_too_long)} column name(s) exceed the {_MAX_IDENTIFIER}-character "
                 f"database column-name limit and must be shortened: {preview}{more}"
+            )
+
+        # Fail fast on too many columns before CREATE TABLE turns it into a raw
+        # MySQL 1117 ("Too many columns"). MySQL's hard limit is 4096 columns per
+        # table; the framework adds ~11 standard columns on top of the schema, so
+        # bound the user schema below that. A very wide panel (genomics /
+        # proteomics matrices with thousands of feature columns) is the realistic
+        # trigger. (MySQL also caps the row at ~65535 bytes — that limit binds
+        # first for very wide VARCHAR panels and still surfaces at CREATE TABLE as
+        # 1118; this count guard catches the common numeric-panel case with an
+        # actionable message.)
+        _MAX_FEATURE_COLUMNS = 4000
+        if len(schema) > _MAX_FEATURE_COLUMNS:
+            raise ValueError(
+                f"Schema has {len(schema)} columns, exceeding the supported "
+                f"maximum of {_MAX_FEATURE_COLUMNS} (MySQL's hard limit is 4096 "
+                f"columns per table, and the framework reserves ~11). Reduce the "
+                f"column count — e.g. narrow the feature panel, or pivot a very "
+                f"wide matrix to long form."
             )
 
         # Return existing table if already created

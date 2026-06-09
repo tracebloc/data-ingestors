@@ -89,9 +89,30 @@ class DataValidator(BaseValidator):
                     metadata={"schema_provided": False},
                 )
 
-            sample_size = kwargs.get("sample_size", 1000)
+            # Validate the ENTIRE column, not a sample. The old default of 1000
+            # meant a bad value past row 1000 (a non-numeric in an INT column, a
+            # too-long VARCHAR) passed validation and then corrupted or crashed
+            # the ingest — validation success did not predict ingestion success.
+            # Callers can still pass an explicit sample_size to cap it.
+            sample_size = kwargs.get("sample_size", None)
 
-            # Load data
+            # Full-column scan of a CSV is done CHUNK BY CHUNK so a very large
+            # file is never materialised at once — the old full load OOM'd the
+            # pod (Killed/137) on multi-GB datasets. Each chunk is validated and
+            # we return on the FIRST failing chunk (reporting that problem
+            # without scanning further or holding the whole file). DataFrame /
+            # JSON inputs, and any explicit sample_size, keep the single-shot
+            # path below.
+            if (
+                sample_size is None
+                and isinstance(data, (str, Path))
+                and Path(data).suffix.lower() == ".csv"
+            ):
+                return self._validate_csv_streaming(
+                    Path(data), chunk_size=kwargs.get("chunk_size", 50_000)
+                )
+
+            # Load data (DataFrame, JSON, or an explicitly capped CSV sample)
             df = self._load_data(data, sample_size)
             if df is None or df.empty:
                 return self._create_result(
@@ -110,6 +131,52 @@ class DataValidator(BaseValidator):
                 errors=[f"Data type validation error: {str(e)}"],
                 metadata={"error_type": "validation_exception"},
             )
+
+    def _validate_csv_streaming(
+        self, path: Path, chunk_size: int = 50_000
+    ) -> ValidationResult:
+        """Validate a CSV's full contents chunk by chunk, with bounded memory.
+
+        Reads ``chunk_size`` rows at a time, validates each against the schema,
+        and returns on the FIRST failing chunk — so a bad value anywhere in a
+        large file is caught without materialising the whole file or scanning
+        past the first problem. A clean file scans to the end and reports the
+        total rows checked.
+        """
+        try:
+            reader = pd.read_csv(
+                path, chunksize=chunk_size, encoding="utf-8", on_bad_lines="warn"
+            )
+        except pd.errors.EmptyDataError:
+            return self._create_result(
+                is_valid=False,
+                errors=["No data found to validate"],
+                metadata={"rows_checked": 0},
+            )
+
+        rows_checked = 0
+        saw_data = False
+        for chunk in reader:
+            if chunk.empty:
+                continue
+            saw_data = True
+            rows_checked += len(chunk)
+            result = self._validate_schema(chunk)
+            if not result.is_valid:
+                if isinstance(result.metadata, dict):
+                    result.metadata["rows_checked"] = rows_checked
+                return result
+
+        if not saw_data:
+            return self._create_result(
+                is_valid=False,
+                errors=["No data found to validate"],
+                metadata={"rows_checked": 0},
+            )
+        return self._create_result(
+            is_valid=True,
+            metadata={"rows_checked": rows_checked, "schema_provided": True},
+        )
 
     def _load_data(self, data: Any, sample_size: int) -> Optional[pd.DataFrame]:
         """Load data from input source.
@@ -173,6 +240,15 @@ class DataValidator(BaseValidator):
         Returns:
             ValidationResult containing validation status and messages
         """
+        # Strip header whitespace so validation matches what the ingestor
+        # actually ingests: CSVIngestor.read_data does `chunk.columns.str.strip()`
+        # on every chunk, so a header like " age" becomes "age" and is ingested
+        # against schema key "age". Without the same strip here, the validator
+        # saw " age" (!= "age"), silently skipped the column, and a bad value in
+        # it passed pre-flight validation only to fail later at ingest. rename()
+        # returns a new frame, so the caller's DataFrame is untouched.
+        df = df.rename(columns=lambda c: str(c).strip())
+
         errors = []
         warnings = []
         metadata = {
