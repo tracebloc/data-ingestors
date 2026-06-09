@@ -58,25 +58,36 @@ def _validate_value_against_dtype(value: Any, dtype_upper: str) -> None:
     elif "BOOL" in dtype_upper:
         # ``bool(value)`` is truthy for any non-empty value, so "maybe" / 2
         # / "banana" all "passed" — match DataValidator._validate_boolean's
-        # fixed vocabulary instead.
+        # vocabulary instead. That validator also accepts string forms that
+        # ``pd.to_numeric`` maps to 0 or 1 (e.g. "00", "01", "1.0", "0.0"),
+        # so we try numeric coercion as a fallback before failing — keeps
+        # JSON and CSV in lockstep on the same input (#204 bugbot).
         if isinstance(value, bool):
             return
         if isinstance(value, (int, float)) and value in (0, 1):
             return
-        if isinstance(value, str) and value.strip().lower() in _VALID_BOOL_STRINGS:
-            return
+        if isinstance(value, str):
+            s = value.strip().lower()
+            if s in _VALID_BOOL_STRINGS:
+                return
+            # Numeric-coercible strings ("00", "01", "1.0", "0.0", "1e0", …)
+            # that resolve to 0 or 1 are accepted by DataValidator; mirror that.
+            num = pd.to_numeric(s, errors="coerce")
+            if not pd.isna(num) and num in (0, 1):
+                return
         raise ValueError(
             f"value {value!r} is not a valid BOOLEAN (expected true/false, "
             f"yes/no, 1/0, or a recognised string form)"
         )
     elif "INT" in dtype_upper:
         # ``int(value)`` silently truncated 3.5 -> 3; require integer-valued
-        # input. JSON booleans (a subclass of int) would slip through as
-        # 0/1, so guard against the bool case separately.
-        if isinstance(value, bool):
-            raise ValueError(
-                f"value {value!r} is a boolean, not an integer"
-            )
+        # input. Python booleans are intentionally allowed: ``True``/``False``
+        # are subclasses of int and ``DataValidator._validate_int`` accepts a
+        # bool column via ``pd.to_numeric`` (True -> 1, False -> 0). Rejecting
+        # them here would let a record pass CSV-style preflight and then be
+        # dropped mid-ingest by this check — the silent-drop pathway #204
+        # bugbot flagged. So a bool falls through to the numeric path below
+        # (True.is_integer() is True via float coercion).
         try:
             f = float(value)
         except (TypeError, ValueError):

@@ -210,6 +210,37 @@ def test_validate_record_rejects_non_finite_for_float(v):
         ing._validate_record({"x": v})
 
 
+# ---------------------------------------------------------------------------
+# #204 bugbot (2nd round) — JSON must not be stricter than CSV either,
+# else a record passes CSV-style preflight then drops at per-record check
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("v", [True, False])
+def test_validate_record_accepts_python_bool_for_int(v):
+    # DataValidator._validate_int accepts a bool column via pd.to_numeric
+    # (True -> 1, False -> 0). Rejecting them here would let a record pass
+    # CSV preflight and then be silently dropped mid-ingest.
+    ing = make_json_ingestor(schema={"n": "INT"})
+    ing._validate_record({"n": v})
+
+
+@pytest.mark.parametrize("v", ["00", "01", "1.0", "0.0", "1e0", "0e0"])
+def test_validate_record_accepts_numeric_string_for_bool(v):
+    # DataValidator._validate_boolean accepts any string that pd.to_numeric
+    # resolves to 0 or 1. JSON per-record validation must match.
+    ing = make_json_ingestor(schema={"flag": "BOOL"})
+    ing._validate_record({"flag": v})
+
+
+def test_validate_record_still_rejects_non_bool_numeric_string():
+    # The fallback only accepts values that resolve to exactly 0 or 1; "1.5"
+    # / "2" / "0.4" must still fail (matches DataValidator).
+    ing = make_json_ingestor(schema={"flag": "BOOL"})
+    for v in ("1.5", "2", "0.4"):
+        with pytest.raises(ValueError, match="Data type validation failed"):
+            ing._validate_record({"flag": v})
+
+
 def test_count_records_array(tmp_path):
     p = _write_json(tmp_path, [{"a": 1}, {"a": 2}, {"a": 3}])
     assert make_json_ingestor()._count_records(str(p)) == 3
