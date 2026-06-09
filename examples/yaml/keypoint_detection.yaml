@@ -13,7 +13,9 @@ category: keypoint_detection
 csv: /data/shared/pose/labels.csv
 images: /data/shared/pose/images/
 label: image_label
-target_size: [448, 448]      # height, width — must match your pose model's input
-                             # (the shipped sample under templates/keypoint_detection/data/images/
-                             # is 448×448; substitute your pose model's input here)
+target_size: [448, 448]      # width, height — must match your pose model's input.
+                             # Convention is width-first to match PIL.Image.size +
+                             # ImageResolutionValidator. The shipped sample under
+                             # templates/keypoint_detection/data/images/ is 448×448
+                             # (square, so order doesn't matter for this sample).
 number_of_keypoints: 9        # e.g. 17 for COCO pose, 9 for the upper-body sample

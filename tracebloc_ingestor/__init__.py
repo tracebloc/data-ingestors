@@ -20,7 +20,7 @@ from .validators import (
 # Single source of truth for the package version. setup.py parses this literal
 # (see _read_version in setup.py) so the two can't drift again (#175). Bump here
 # only — setup.py picks it up automatically.
-__version__ = "0.3.7"
+__version__ = "0.3.8"
 
 __all__ = [
     "Config",

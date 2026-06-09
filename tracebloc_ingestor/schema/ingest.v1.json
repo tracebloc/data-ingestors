@@ -143,7 +143,7 @@
       "items": { "type": "integer", "minimum": 1 },
       "minItems": 2,
       "maxItems": 2,
-      "description": "[height, width] to resize images to. Required for keypoint_detection (no default — depends on the customer's pose model). Other image categories use category defaults if unset."
+      "description": "[width, height] to resize images to. Required for keypoint_detection (no default — depends on the customer's pose model). Other image categories use category defaults if unset. The order matches PIL.Image.size and what ImageResolutionValidator expects."
     },
 
     "number_of_keypoints": {
@@ -198,7 +198,7 @@
               "items": { "type": "integer", "minimum": 1 },
               "minItems": 2,
               "maxItems": 2,
-              "description": "[height, width]. Image categories only. Default [512, 512]."
+              "description": "[width, height]. Image categories only. Default [512, 512]. The order matches PIL.Image.size and what ImageResolutionValidator expects."
             },
             "extension": {
               "type": "string",
