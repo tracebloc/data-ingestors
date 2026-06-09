@@ -251,8 +251,25 @@ class BaseIngestor(ABC):
             # regression-class categories ``"bucket"`` replaces the raw target
             # with a stable hash-bucket ID so the value never leaks to the
             # central backend (#44 / parent client#85).
+            #
+            # Coerce numpy / pandas scalar types to native Python before the
+            # policy runs. After the INT-cast switch to nullable ``Int64``,
+            # itertuples yields ``numpy.int64`` (the old ``downcast='integer'``
+            # incidentally produced plain ``int``) — and mysql-connector-python
+            # refuses to bind numpy scalars, failing the passthrough path with
+            # "Python type numpy.int64 cannot be converted" on every row of any
+            # INT label column (tabular_classification on the e2e job). The
+            # other policies (e.g. ``bucket``) stringify their output so they
+            # never hit this; the fix lives here so passthrough also yields a
+            # binder-friendly value.
+            label_val = record.get(self.label_column)
+            if hasattr(label_val, "item") and not isinstance(label_val, str):
+                try:
+                    label_val = label_val.item()
+                except (ValueError, AttributeError):
+                    pass
             cleaned_record["label"] = label_policy_module.apply(
-                record.get(self.label_column), self.label_policy
+                label_val, self.label_policy
             )
 
         if self.intent:
