@@ -177,8 +177,12 @@ def test_bigint_delegates_to_int():
 # FLOAT / DOUBLE / DECIMAL
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("dtype", ["FLOAT", "DOUBLE", "DECIMAL(10,2)"])
+@pytest.mark.parametrize("dtype", ["FLOAT", "DOUBLE", "DECIMAL(10,2)", "NUMERIC(8,3)", "NUMERIC"])
 def test_float_family_valid(dtype):
+    # NUMERIC is a MySQL alias for DECIMAL; #190 bugbot caught that the DDL
+    # and ingestor type-cast layers accepted NUMERIC but the validator's
+    # type_validators dict didn't, so a schema using NUMERIC failed preflight
+    # with "Unknown data type" even though ingest would proceed.
     df = pd.DataFrame({"x": [1.5, 2.25]})
     assert DataValidator(schema={"x": dtype}).validate(df).is_valid
 
