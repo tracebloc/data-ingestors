@@ -373,15 +373,24 @@ class DataValidator(BaseValidator):
         length_match = re.search(r"VARCHAR\((\d+)\)", expected_type.upper())
         max_length = int(length_match.group(1)) if length_match else None
 
-        # Check for non-string values. A NULL is valid for any column, and
-        # ``NaN != NaN`` would otherwise count every missing value as
-        # "non-string" — an error the user can never clear (inserting NaN
-        # doesn't help). Mirror the INT/FLOAT validators: only flag values
-        # that are non-null AND not strings.
-        non_string_count = (series.notna() & series.astype(str).ne(series)).sum()
-        if non_string_count > 0:
+        # Issue #188: do NOT compare ``astype(str)`` to the original typed
+        # value. pd.read_csv infers numeric-looking columns as int64/float64,
+        # so for value 100 the check ``"100" != 100`` is True and the column
+        # was falsely rejected as "non-string" — blocking legitimate zip
+        # codes, numeric IDs kept as text, and 0/1 labels declared VARCHAR.
+        # MySQL binds any scalar as a string against a VARCHAR column, so the
+        # only real constraints to enforce here are presence/null tolerance
+        # (handled by other layers) and length. Flag genuinely non-scalar
+        # values (list/dict/set/tuple) — those have no sensible string form
+        # and indicate a real shape error — but let every scalar pass.
+        non_scalar_mask = series.apply(
+            lambda v: isinstance(v, (list, dict, set, tuple))
+        )
+        non_scalar_count = int(non_scalar_mask.sum())
+        if non_scalar_count > 0:
             errors.append(
-                f"Column '{column_name}' contains {non_string_count} non-string values"
+                f"Column '{column_name}' contains {non_scalar_count} non-scalar value(s) "
+                f"(list/dict/set/tuple) that cannot be stored as a string"
             )
 
         # Check length constraints
@@ -417,15 +426,18 @@ class DataValidator(BaseValidator):
         length_match = re.search(r"CHAR\((\d+)\)", expected_type.upper())
         max_length = int(length_match.group(1)) if length_match else None
 
-        # Check for non-string values. A NULL is valid for any column, and
-        # ``NaN != NaN`` would otherwise count every missing value as
-        # "non-string" — an error the user can never clear (inserting NaN
-        # doesn't help). Mirror the INT/FLOAT validators: only flag values
-        # that are non-null AND not strings.
-        non_string_count = (series.notna() & series.astype(str).ne(series)).sum()
-        if non_string_count > 0:
+        # Issue #188: see _validate_varchar — same astype(str)!=value
+        # over-rejection bug. CHAR columns with numeric values (e.g. a
+        # 2-character state code "10") were blocked. Same fix: flag only
+        # genuinely non-scalar values, let any scalar through.
+        non_scalar_mask = series.apply(
+            lambda v: isinstance(v, (list, dict, set, tuple))
+        )
+        non_scalar_count = int(non_scalar_mask.sum())
+        if non_scalar_count > 0:
             errors.append(
-                f"Column '{column_name}' contains {non_string_count} non-string values"
+                f"Column '{column_name}' contains {non_scalar_count} non-scalar value(s) "
+                f"(list/dict/set/tuple) that cannot be stored as a string"
             )
 
         # Check length constraints (CHAR should be fixed length)
@@ -457,15 +469,18 @@ class DataValidator(BaseValidator):
         errors = []
         warnings = []
 
-        # Check for non-string values. A NULL is valid for any column, and
-        # ``NaN != NaN`` would otherwise count every missing value as
-        # "non-string" — an error the user can never clear (inserting NaN
-        # doesn't help). Mirror the INT/FLOAT validators: only flag values
-        # that are non-null AND not strings.
-        non_string_count = (series.notna() & series.astype(str).ne(series)).sum()
-        if non_string_count > 0:
+        # Issue #188: see _validate_varchar — same astype(str)!=value bug.
+        # TEXT columns with numeric values (notes that happen to be all
+        # digits, integer IDs kept as text) were blocked. Same fix:
+        # flag only genuinely non-scalar values; any scalar passes.
+        non_scalar_mask = series.apply(
+            lambda v: isinstance(v, (list, dict, set, tuple))
+        )
+        non_scalar_count = int(non_scalar_mask.sum())
+        if non_scalar_count > 0:
             errors.append(
-                f"Column '{column_name}' contains {non_string_count} non-string values"
+                f"Column '{column_name}' contains {non_scalar_count} non-scalar value(s) "
+                f"(list/dict/set/tuple) that cannot be stored as a string"
             )
 
         return {"is_valid": len(errors) == 0, "errors": errors, "warnings": warnings}

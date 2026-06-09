@@ -12,26 +12,31 @@ import pytest
 from tracebloc_ingestor.validators.data_validator import DataValidator
 
 
-# ---- data_validator non-string type checks -------------------------------
+# ---- data_validator non-scalar type checks --------------------------------
+# Issue #188: numeric scalars (1, 2.5, True) in a VARCHAR/CHAR/TEXT column are
+# now VALID — MySQL binds any scalar as a string against a string column, and
+# blocking them rejected legitimate zip codes / numeric IDs / 0-1 labels. The
+# only remaining shape error is a non-scalar container (list/dict/set/tuple);
+# pin that as the new contract.
 
-def test_varchar_non_string_values_flagged():
-    df = pd.DataFrame({"s": [1, 2]})  # ints under VARCHAR -> non-string
+def test_varchar_non_scalar_container_flagged():
+    df = pd.DataFrame({"s": [[1, 2], {"k": 1}]})  # lists/dicts: real shape errors
     res = DataValidator(schema={"s": "VARCHAR(10)"}).validate(df)
     assert not res.is_valid
-    assert any("non-string" in e for e in res.errors)
+    assert any("non-scalar" in e for e in res.errors)
 
 
-def test_char_non_string_values_flagged():
-    df = pd.DataFrame({"s": [1, 2]})
+def test_char_non_scalar_container_flagged():
+    df = pd.DataFrame({"s": [["a"], ["b"]]})
     res = DataValidator(schema={"s": "CHAR(1)"}).validate(df)
     assert not res.is_valid
 
 
-def test_text_non_string_values_flagged():
-    df = pd.DataFrame({"s": [1, 2]})
+def test_text_non_scalar_container_flagged():
+    df = pd.DataFrame({"s": [{"k": "v"}, [1, 2, 3]]})
     res = DataValidator(schema={"s": "TEXT"}).validate(df)
     assert not res.is_valid
-    assert any("non-string" in e for e in res.errors)
+    assert any("non-scalar" in e for e in res.errors)
 
 
 def test_data_validator_load_data_exception(make_csv):
