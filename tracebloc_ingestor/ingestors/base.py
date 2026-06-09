@@ -353,6 +353,18 @@ class BaseIngestor(ABC):
             cleaned_record["ingestor_id"] = self.ingestor_id
             cleaned_record["filename"] = record.get("filename")
             cleaned_record["extension"] = record.get("extension")
+            # Preserve mask_id for semantic_segmentation. The cleaned_record
+            # comprehension above filters by ``k in self.schema``, but for a
+            # schema-less example yaml (the documented 8-line shape) that
+            # filter drops every CSV column including mask_id — which
+            # file_transfer.py then needs to locate the per-row mask file
+            # (file_transfer.py:401). Without preservation, every record was
+            # skipped at file-transfer with "No mask_id found in record" and
+            # the shipped semantic_segmentation sample failed end-to-end
+            # despite #207's FilePairingValidator pass. mask_id is benign /
+            # absent for other categories so the assignment is harmless
+            # there (record.get returns None, file_transfer doesn't read it).
+            cleaned_record["mask_id"] = record.get("mask_id")
             return cleaned_record
 
         except Exception as e:

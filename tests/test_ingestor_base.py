@@ -222,6 +222,40 @@ def test_process_record_treats_empty_string_as_null():
     assert rec["b"] is None
 
 
+def test_process_record_preserves_mask_id_for_semantic_segmentation():
+    """Regression: semantic_segmentation onboarding was broken end-to-end.
+
+    With the documented 8-line schema-less example yaml + the shipped CSV
+    (`filename, mask_id, image_label`), the cleaned_record comprehension's
+    `k in self.schema` filter drops every CSV column. The next stage
+    (file_transfer.py:401) does `record.get("mask_id")` and aborts with
+    "No mask_id found in record" — every record skipped, 0 rows ingested
+    even though #207's FilePairingValidator passes.
+
+    mask_id must round-trip from the raw record onto the cleaned dict
+    (same pattern as filename / extension which were already preserved).
+    """
+    ing = make_ingestor(schema={}, category=None, label_column=None)
+    rec = ing.process_record(
+        {"filename": "image_001", "mask_id": "image_001_mask", "image_label": "road"}
+    )
+    assert rec is not None
+    assert rec["mask_id"] == "image_001_mask"
+    assert rec["filename"] == "image_001"
+
+
+def test_process_record_mask_id_absent_is_none_not_error():
+    """Categories other than semantic_segmentation don't carry mask_id;
+    record.get returns None and that's a benign no-op. Don't error on
+    its absence — only semantic_segmentation's file_transfer reads it,
+    and missing-mask is already handled there with a clear error."""
+    ing = make_ingestor(schema={}, category=None, label_column=None)
+    rec = ing.process_record({"filename": "image_001"})
+    assert rec is not None
+    assert rec["mask_id"] is None
+    assert rec["filename"] == "image_001"
+
+
 # ---------------------------------------------------------------------------
 # _process_batch
 # ---------------------------------------------------------------------------
