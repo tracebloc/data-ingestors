@@ -353,6 +353,24 @@ class BaseIngestor(ABC):
             cleaned_record["ingestor_id"] = self.ingestor_id
             cleaned_record["filename"] = record.get("filename")
             cleaned_record["extension"] = record.get("extension")
+            # Preserve mask_id for semantic_segmentation ONLY. The
+            # cleaned_record comprehension above filters by ``k in
+            # self.schema``, but for the documented 8-line schema-less
+            # example yaml that filter drops every CSV column including
+            # mask_id — which file_transfer.py:401 needs to locate the
+            # per-row mask file. Without this, every record was skipped at
+            # file-transfer with "No mask_id found in record" despite
+            # #207's FilePairingValidator pass.
+            #
+            # Scoped to SEMANTIC_SEGMENTATION because mask_id is a runtime
+            # indirection only — there's no `mask_id` column on the
+            # standard tracebloc table (see database.py:standard_columns),
+            # so putting it on every category's cleaned_record would break
+            # SQL inserts on tables that don't have it (#212 bugbot).
+            # _process_batch additionally pops it before insert so even
+            # the semseg path doesn't try to bind it as a column.
+            if self.category == TaskCategory.SEMANTIC_SEGMENTATION:
+                cleaned_record["mask_id"] = record.get("mask_id")
             return cleaned_record
 
         except Exception as e:
@@ -688,6 +706,18 @@ class BaseIngestor(ABC):
             Exception: If batch processing fails
         """
         try:
+            # Strip framework-internal runtime indirections that don't
+            # correspond to a DB column before binding. ``mask_id`` is
+            # carried on semantic_segmentation records purely so
+            # ``file_transfer.map_file_transfer`` can locate the per-row
+            # mask file; the standard tracebloc table has no ``mask_id``
+            # column (see database.py:standard_columns), so leaving it on
+            # the record would cause SQLAlchemy to treat it as an
+            # unconsumed column on insert (#212 bugbot). By the time we
+            # reach this point, file_transfer has already used the value
+            # — it's safe to drop.
+            for r in batch:
+                r.pop("mask_id", None)
             # Insert batch and get IDs
             ids, db_failures = self.database.insert_batch(self.table_name, batch)
             api_success = False
