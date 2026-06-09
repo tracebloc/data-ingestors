@@ -606,35 +606,56 @@ class BaseIngestor(ABC):
                 session.commit()
                 pbar.close()
 
-                # Send edge label metadata
-                if self.api_client.send_generate_edge_label_meta(
+                # Register the dataset with the backend. Every step here is
+                # REQUIRED: the rows are already committed to MySQL above, so if
+                # any step fails the dataset is half-created — rows present but
+                # not registered. The previous code nested these as
+                # `if A: if B: if C: create()`, so a False return at ANY step
+                # silently skipped the rest (including create_dataset AND the
+                # summary) and the run STILL exited 0 — leaving committed rows
+                # with no registered dataset and no error the user could see.
+                # Fail loudly instead: raise so the process exits non-zero and
+                # the failure surfaces (the CLI streams these logs live and marks
+                # the Job failed). The api_client has already logged the
+                # underlying HTTP detail before returning False.
+                if not self.api_client.send_generate_edge_label_meta(
                     self.table_name, self.ingestor_id, self.intent
                 ):
+                    raise RuntimeError(
+                        "Backend rejected edge-label metadata; the dataset was "
+                        "NOT registered (its rows are already in the database). "
+                        "See the logged API error above."
+                    )
 
-                    # schema dict
-                    schema_dict = self.database.get_table_schema(self.table_name)
-                    add_info = self.file_options
-                    # Send global metadata
-                    if self.api_client.send_global_meta_meta(
-                        self.table_name, schema_dict, add_info
-                    ):
+                schema_dict = self.database.get_table_schema(self.table_name)
+                if not self.api_client.send_global_meta_meta(
+                    self.table_name, schema_dict, self.file_options
+                ):
+                    raise RuntimeError(
+                        "Backend rejected the dataset schema/metadata; the "
+                        "dataset was NOT registered (its rows are already in the "
+                        "database). See the logged API error above."
+                    )
 
-                        # Prepare dataset
-                        if self.api_client.prepare_dataset(
-                            self.category,
-                            self.ingestor_id,
-                            self.data_format,
-                            self.intent,
-                        ):
+                if not self.api_client.prepare_dataset(
+                    self.category,
+                    self.ingestor_id,
+                    self.data_format,
+                    self.intent,
+                ):
+                    raise RuntimeError(
+                        "Backend failed to prepare the dataset; it was NOT "
+                        "registered (its rows are already in the database). See "
+                        "the logged API error above."
+                    )
 
-                            self.api_client.create_dataset(
-                                category=self.category, ingestor_id=self.ingestor_id
-                            )
+                self.api_client.create_dataset(
+                    category=self.category, ingestor_id=self.ingestor_id
+                )
 
-                            # Create and log summary
-                            summary = IngestionSummary(**stats)
-
-                            self._log_summary(summary)
+                # Create and log summary — only after successful registration.
+                summary = IngestionSummary(**stats)
+                self._log_summary(summary)
 
             except Exception as e:
                 session.rollback()

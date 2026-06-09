@@ -145,7 +145,16 @@ def main(argv: List[str] | None = None) -> int:  # pragma: no cover - thin shell
     ingestor = _build_ingestor(database, api_client, resolved)
 
     with ingestor:
-        failed = ingestor.ingest(resolved.source_path, batch_size=config.BATCH_SIZE)
+        try:
+            failed = ingestor.ingest(resolved.source_path, batch_size=config.BATCH_SIZE)
+        except Exception as exc:
+            # A hard failure during ingestion — validation, DB write, or backend
+            # dataset registration. base.py has already logged the detail; turn
+            # the exception into a clean, single-line non-zero exit rather than a
+            # raw traceback, so the CLI's live log stream shows an actionable
+            # reason and marks the Job failed.
+            print(f"\nIngestion failed: {exc}", file=sys.stderr)
+            return 1
         if failed:
             logger.warning(
                 "%d record(s) failed during ingestion; see logs for details.",
