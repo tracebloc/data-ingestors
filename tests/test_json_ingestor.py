@@ -120,6 +120,127 @@ def test_validate_record_still_rejects_real_type_errors():
         ing._validate_record({"n": "not-an-int"})
 
 
+# ---------------------------------------------------------------------------
+# Issue #189: JSON validation must match CSV — bool()/int() were too lenient
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("garbage", ["maybe", "banana", 2, "yesno"])
+def test_validate_record_rejects_garbage_boolean(garbage):
+    # Regression: bool("maybe") is True, bool(2) is True, so the previous
+    # implementation silently accepted these. Match DataValidator's fixed
+    # valid-set so JSON and CSV give the same verdict.
+    ing = make_json_ingestor(schema={"flag": "BOOL"})
+    with pytest.raises(ValueError, match="Data type validation failed"):
+        ing._validate_record({"flag": garbage})
+
+
+@pytest.mark.parametrize("v", [True, False, "true", "FALSE", "yes", "n", 0, 1])
+def test_validate_record_accepts_real_booleans(v):
+    # The valid set: Python bools, the canonical strings DataValidator
+    # accepts, and 0/1.
+    ing = make_json_ingestor(schema={"flag": "BOOL"})
+    ing._validate_record({"flag": v})
+
+
+def test_validate_record_rejects_non_integer_float_for_int():
+    # Regression: int(3.5) silently truncated to 3 with no error — INT label
+    # could end up as 0/1 from a 0.4/1.6 source value, corrupting training.
+    # Reject anything that isn't integer-valued.
+    ing = make_json_ingestor(schema={"n": "INT"})
+    with pytest.raises(ValueError, match="not an integer"):
+        ing._validate_record({"n": 3.5})
+
+
+def test_validate_record_accepts_integer_valued_float_for_int():
+    # 3.0 is integer-valued and is fine (matches the CSV validator's
+    # tolerance for whole-number floats stored as INT).
+    ing = make_json_ingestor(schema={"n": "INT"})
+    ing._validate_record({"n": 3.0})
+
+
+def test_validate_record_rejects_overlong_varchar():
+    # Regression: VARCHAR length was never enforced on JSON. The CSV path
+    # rejects a too-long string; JSON must too.
+    ing = make_json_ingestor(schema={"code": "VARCHAR(3)"})
+    with pytest.raises(ValueError, match="exceeds the declared length 3"):
+        ing._validate_record({"code": "ABCDE"})
+
+
+def test_validate_record_accepts_numeric_in_varchar():
+    # Issue #188 parity: VARCHAR accepts numeric scalars (zip codes,
+    # numeric IDs declared VARCHAR). MySQL binds them as strings.
+    ing = make_json_ingestor(schema={"code": "VARCHAR(10)"})
+    ing._validate_record({"code": 12345})
+
+
+def test_validate_record_rejects_unparseable_date():
+    # Regression: DATE wasn't validated on JSON at all — a 'not-a-date'
+    # string flowed through to the DB.
+    ing = make_json_ingestor(schema={"d": "DATE"})
+    with pytest.raises(ValueError, match="not a valid DATE"):
+        ing._validate_record({"d": "not-a-date"})
+
+
+def test_validate_record_accepts_iso_date():
+    ing = make_json_ingestor(schema={"d": "DATE"})
+    ing._validate_record({"d": "2024-01-15"})
+
+
+# ---------------------------------------------------------------------------
+# #204 bugbot — non-finite (inf / NaN) must be rejected for INT and FLOAT
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("v", [float("inf"), float("-inf"), float("nan"), "Infinity"])
+def test_validate_record_rejects_non_finite_for_int(v):
+    # float("Infinity") returns +inf without raising, and float.is_integer()
+    # is False on inf/NaN — but the contract shouldn't depend on that detail.
+    # Mirror DataValidator's _non_finite_error on the CSV path and reject
+    # explicitly with an informative message.
+    ing = make_json_ingestor(schema={"n": "INT"})
+    with pytest.raises(ValueError, match="non-finite|not an integer"):
+        ing._validate_record({"n": v})
+
+
+@pytest.mark.parametrize("v", [float("inf"), float("-inf"), float("nan"), "Infinity"])
+def test_validate_record_rejects_non_finite_for_float(v):
+    # Bare float() lets inf through silently — DataValidator already rejects
+    # this for CSV (_non_finite_error). Match here so JSON and CSV agree.
+    ing = make_json_ingestor(schema={"x": "FLOAT"})
+    with pytest.raises(ValueError, match="non-finite"):
+        ing._validate_record({"x": v})
+
+
+# ---------------------------------------------------------------------------
+# #204 bugbot (2nd round) — JSON must not be stricter than CSV either,
+# else a record passes CSV-style preflight then drops at per-record check
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("v", [True, False])
+def test_validate_record_accepts_python_bool_for_int(v):
+    # DataValidator._validate_int accepts a bool column via pd.to_numeric
+    # (True -> 1, False -> 0). Rejecting them here would let a record pass
+    # CSV preflight and then be silently dropped mid-ingest.
+    ing = make_json_ingestor(schema={"n": "INT"})
+    ing._validate_record({"n": v})
+
+
+@pytest.mark.parametrize("v", ["00", "01", "1.0", "0.0", "1e0", "0e0"])
+def test_validate_record_accepts_numeric_string_for_bool(v):
+    # DataValidator._validate_boolean accepts any string that pd.to_numeric
+    # resolves to 0 or 1. JSON per-record validation must match.
+    ing = make_json_ingestor(schema={"flag": "BOOL"})
+    ing._validate_record({"flag": v})
+
+
+def test_validate_record_still_rejects_non_bool_numeric_string():
+    # The fallback only accepts values that resolve to exactly 0 or 1; "1.5"
+    # / "2" / "0.4" must still fail (matches DataValidator).
+    ing = make_json_ingestor(schema={"flag": "BOOL"})
+    for v in ("1.5", "2", "0.4"):
+        with pytest.raises(ValueError, match="Data type validation failed"):
+            ing._validate_record({"flag": v})
+
+
 def test_count_records_array(tmp_path):
     p = _write_json(tmp_path, [{"a": 1}, {"a": 2}, {"a": 3}])
     assert make_json_ingestor()._count_records(str(p)) == 3
