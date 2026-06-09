@@ -312,13 +312,71 @@ def test_text_with_nulls_is_valid():
     assert DataValidator(schema={"s": "TEXT"}).validate(df).is_valid
 
 
-def test_varchar_still_flags_real_non_strings():
-    # NULL tolerance must NOT mask a genuine type error: a real numeric value
-    # in a VARCHAR column is still non-string and must be reported.
-    df = pd.DataFrame({"s": ["abc", 5, "de"]})
+def test_varchar_accepts_numeric_scalars(make_csv):
+    # Issue #188: pd.read_csv infers numeric-looking columns as int64/float64,
+    # so an all-numeric VARCHAR column (zip / category code, 0/1 label
+    # declared VARCHAR) was rejected with "Column 'code' contains N
+    # non-string values" — an error the user could never clear because
+    # MySQL would happily bind the int as a string. Any scalar (int, float,
+    # bool) must pass the validator; MySQL handles the conversion at bind.
+    df = pd.DataFrame({"code": [100, 200, 300], "label": [0, 1, 0]})
+    result = DataValidator(
+        schema={"code": "VARCHAR(10)", "label": "VARCHAR(8)"}
+    ).validate(df)
+    assert result.is_valid, f"expected valid; errors={result.errors}"
+
+
+def test_varchar_rejects_non_scalar_containers():
+    # The only real shape error left at this layer: a list/dict/set/tuple
+    # has no sensible single-string form, so flag it as non-scalar. This is
+    # what replaces the (over-broad) astype(str)!=value check the fix drops.
+    df = pd.DataFrame({"s": ["abc", [1, 2, 3], "de"]})
     result = DataValidator(schema={"s": "VARCHAR(255)"}).validate(df)
     assert not result.is_valid
-    assert "non-string" in result.errors[0]
+    assert "non-scalar" in result.errors[0]
+
+
+def test_varchar_length_still_enforced_on_numeric():
+    # Length check applies to the stringified form, so a numeric value whose
+    # decimal representation exceeds max_length is still rejected.
+    df = pd.DataFrame({"s": [12345]})
+    result = DataValidator(schema={"s": "VARCHAR(3)"}).validate(df)
+    assert not result.is_valid
+    assert "exceeding max length" in result.errors[0]
+
+
+def test_issue_188_full_repro_csv(make_csv):
+    # End-to-end repro from issue #188:
+    #   schema {id: INT, feat: FLOAT, code: VARCHAR(10), label: VARCHAR(8)}
+    #   id,feat,code,label
+    #   1,1.2,100,A
+    #   2,3.4,200,B
+    # Before the fix: is_valid=False, two "Column 'code' contains 2
+    # non-string values" + "Column 'label' …" errors. After the fix:
+    # passes (pandas reads `code` as int64, but VARCHAR accepts any scalar).
+    path = make_csv(
+        {"id": [1, 2], "feat": [1.2, 3.4], "code": [100, 200], "label": ["A", "B"]}
+    )
+    result = DataValidator(
+        schema={
+            "id": "INT", "feat": "FLOAT",
+            "code": "VARCHAR(10)", "label": "VARCHAR(8)",
+        }
+    ).validate(str(path))
+    assert result.is_valid, f"expected valid; errors={result.errors}"
+
+
+@pytest.mark.parametrize("dtype", ["VARCHAR(10)", "CHAR(3)", "TEXT"])
+def test_issue_188_numeric_scalars_pass_string_family(dtype):
+    # All three string-family validators share the same astype(str)!=value
+    # over-rejection; the fix is applied uniformly.
+    df = pd.DataFrame({"s": ["abc", 100, 200]})  # ints mixed in (CHAR case
+                                                 # is special — see below)
+    if "CHAR(" in dtype:
+        # CHAR enforces fixed length, so use values that all stringify to 3.
+        df = pd.DataFrame({"s": ["abc", 100, 200]})
+    result = DataValidator(schema={"s": dtype}).validate(df)
+    assert result.is_valid, f"{dtype}: errors={result.errors}"
 
 
 def test_char_wrong_length_fails():
