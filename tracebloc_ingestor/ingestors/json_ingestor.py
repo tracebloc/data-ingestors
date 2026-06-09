@@ -8,7 +8,10 @@ conversion capabilities.
 from typing import Dict, Any, Generator, Optional, List
 import json
 import logging
+import re
 from pathlib import Path
+
+import pandas as pd
 
 from .base import BaseIngestor
 from ..database import Database
@@ -19,6 +22,89 @@ from ..utils import label_policy as label_policy_module
 logger = logging.getLogger(__name__)
 
 __all__ = ["JSONIngestor"]
+
+
+# Boolean string forms DataValidator._validate_boolean accepts. Keep this list
+# in lockstep with that validator so the JSON per-record check and the CSV
+# preflight agree.
+_VALID_BOOL_STRINGS = {
+    "true", "false", "yes", "no", "y", "n", "t", "f", "1", "0", "1.0", "0.0"
+}
+
+
+def _validate_value_against_dtype(value: Any, dtype_upper: str) -> None:
+    """Raise ValueError if ``value`` doesn't fit the declared MySQL dtype.
+
+    Mirrors ``DataValidator``'s per-type rules so JSON and CSV give the same
+    verdict on the same record (issue #189). Caller guarantees ``value`` is
+    not None / "" (handled separately as NULL).
+    """
+    # Order matters: DATETIME / TIMESTAMP must match before DATE / TIME because
+    # "DATE" and "TIME" are substrings of "DATETIME" / "TIMESTAMP".
+    if "DATETIME" in dtype_upper or "TIMESTAMP" in dtype_upper:
+        ts = pd.to_datetime(str(value), errors="coerce")
+        if pd.isna(ts):
+            raise ValueError(
+                f"value {value!r} is not a valid {dtype_upper} (expected an "
+                f"ISO 8601 date-time)"
+            )
+    elif "DATE" in dtype_upper or "TIME" in dtype_upper:
+        ts = pd.to_datetime(str(value), errors="coerce")
+        if pd.isna(ts):
+            raise ValueError(
+                f"value {value!r} is not a valid {dtype_upper}"
+            )
+    elif "BOOL" in dtype_upper:
+        # ``bool(value)`` is truthy for any non-empty value, so "maybe" / 2
+        # / "banana" all "passed" — match DataValidator._validate_boolean's
+        # fixed vocabulary instead.
+        if isinstance(value, bool):
+            return
+        if isinstance(value, (int, float)) and value in (0, 1):
+            return
+        if isinstance(value, str) and value.strip().lower() in _VALID_BOOL_STRINGS:
+            return
+        raise ValueError(
+            f"value {value!r} is not a valid BOOLEAN (expected true/false, "
+            f"yes/no, 1/0, or a recognised string form)"
+        )
+    elif "INT" in dtype_upper:
+        # ``int(value)`` silently truncated 3.5 -> 3; require integer-valued
+        # input. JSON booleans (a subclass of int) would slip through as
+        # 0/1, so guard against the bool case separately.
+        if isinstance(value, bool):
+            raise ValueError(
+                f"value {value!r} is a boolean, not an integer"
+            )
+        try:
+            f = float(value)
+        except (TypeError, ValueError):
+            raise ValueError(f"value {value!r} is not numeric")
+        if not f.is_integer():
+            raise ValueError(
+                f"value {value!r} is not an integer (would silently truncate)"
+            )
+    elif any(t in dtype_upper for t in ("FLOAT", "DOUBLE", "DECIMAL", "NUMERIC")):
+        try:
+            float(value)
+        except (TypeError, ValueError):
+            raise ValueError(f"value {value!r} is not numeric")
+    elif any(t in dtype_upper for t in ("VARCHAR", "CHAR", "TEXT")):
+        # MySQL binds any scalar as a string against a string column (see
+        # issue #188), so accept ints/floats/bools too. The only constraint
+        # is the declared length (when present) — and the only shape error
+        # is a non-scalar container.
+        if isinstance(value, (list, dict, set, tuple)):
+            raise ValueError(
+                f"value {value!r} is a non-scalar container; cannot be "
+                f"stored as a {dtype_upper.split('(')[0]}"
+            )
+        m = re.search(r"\((\d+)\)", dtype_upper)
+        if m and len(str(value)) > int(m.group(1)):
+            raise ValueError(
+                f"value {value!r} exceeds the declared length "
+                f"{m.group(1)} (got {len(str(value))} characters)"
+            )
 
 
 class JSONIngestor(BaseIngestor):
@@ -123,31 +209,28 @@ class JSONIngestor(BaseIngestor):
                 f"{RED}Specified unique_id_column '{self.unique_id_column}' not found in record{RESET}"
             )
 
-        # Basic data type validation - only for fields that exist in the record
+        # Per-record type validation. The previous implementation used
+        # ``int(value)`` / ``float(value)`` / ``bool(value)`` to "check"
+        # types — but Python's casts are far too permissive:
+        #   bool("maybe")  -> True   (any non-empty string is truthy)
+        #   bool(2)        -> True   (any non-zero int is truthy)
+        #   int(3.5)       -> 3      (silent truncation, no error)
+        # …so JSON ingestion silently accepted data the CSV path correctly
+        # rejected (issue #189). Match the vocabulary DataValidator already
+        # enforces at file load (the same one CSV uses), so the two formats
+        # give the same verdict on the same record. NULL / "" are still
+        # tolerated as missing (mirrors #170).
         common_fields = schema_fields & record_fields
         for field in common_fields:
             value = record[field]
-            dtype = self.schema[field]
-            # NULL tolerance. A JSON ``null`` (Python ``None``) and an empty
-            # string are both legitimate missing values for any type; calling
-            # ``int(None)`` / ``float(None)`` raises TypeError, which the
-            # validator would otherwise surface as "Data type validation
-            # failed" — an error the user can never clear (JSON null IS the
-            # representation of missing). Mirrors the same NULL-tolerance the
-            # CSV-side validators got in #167 / #168.
+            dtype_upper = self.schema[field].upper()
             if value is None or value == "":
                 continue
             try:
-                if "INT" in dtype.upper():
-                    int(value)
-                elif "FLOAT" in dtype.upper():
-                    float(value)
-                elif "BOOL" in dtype.upper():
-                    bool(value)
-                # Add more type validations as needed
-            except Exception as e:
+                _validate_value_against_dtype(value, dtype_upper)
+            except ValueError as e:
                 raise ValueError(
-                    f"{RED}Data type validation failed for field {field}: {str(e)}{RESET}"
+                    f"{RED}Data type validation failed for field {field}: {e}{RESET}"
                 )
 
     def read_data(self, file_path: str) -> Generator[Dict[str, Any], None, None]:
