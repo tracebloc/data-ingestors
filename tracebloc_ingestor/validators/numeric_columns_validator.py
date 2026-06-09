@@ -77,19 +77,23 @@ class NumericColumnsValidator(BaseValidator):
                     metadata={**metadata, "message": "No schema columns to validate (only timestamp or non-existent columns)"},
                 )
 
-            # Step 1: Check for null values in all columns (except timestamp)
+            # NOTE on null handling (issue #195): the previous step rejected
+            # ANY null in a non-timestamp column as an error. That contract is
+            # wrong for time-series forecasting — the shipped template README
+            # explicitly documents lag/window feature columns as "blank for
+            # the first row" / "blank until enough history accumulates", and
+            # the shipped sample CSV ships with exactly those nulls. So the
+            # validator was rejecting its own shipped sample, and any real
+            # lag_1 / moving_avg_N / rolling_* feature in customer data.
+            #
+            # Treat nulls as legitimate (stored as SQL NULL), mirroring the
+            # null tolerance the rest of DataValidator gained in #167/#168.
+            # The downstream model preprocessor handles leading-NaN in
+            # lag/window features by design. We still surface the count via
+            # metadata for observability, but it isn't an error.
             for column in columns_to_validate:
-                null_count = df[column].isna().sum()
-                
+                null_count = int(df[column].isna().sum())
                 if null_count > 0:
-                    null_rows = [i+1 for i in df.index[df[column].isna()][:10]]
-                    error_msg = (
-                        f"Column '{column}' contains {null_count} null/missing value(s). "
-                        f"Null values found at rows: {null_rows}"
-                    )
-                    if null_count > 10:
-                        error_msg += f" (and {null_count - 10} more)"
-                    errors.append(error_msg)
                     metadata[f"{column}_null_count"] = null_count
 
             # Step 2: Check if all columns are numeric
