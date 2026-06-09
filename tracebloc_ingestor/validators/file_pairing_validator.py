@@ -3,7 +3,7 @@
 For datasets that pair every image with a sidecar file — object detection
 (image → annotation XML) and semantic segmentation (image → mask PNG) — this
 validator checks at ingestion time that each image has its sidecar and each
-sidecar has its image, matched by filename stem.
+sidecar has its image.
 
 Without this, a missing counterpart only surfaces mid-training as a
 ``FileNotFoundError`` on the offending row, after the job has run for a while.
@@ -28,8 +28,19 @@ class FilePairingValidator(BaseValidator):
     """Ensure images and their sidecar files (annotations / masks) pair up 1:1.
 
     Directories live under ``config.SRC_PATH`` (e.g. ``<src>/images`` and
-    ``<src>/annotations``). Matching is by filename stem, so ``cat.jpg`` pairs
-    with ``cat.xml`` / ``cat.png``.
+    ``<src>/annotations``). Pairing is by filename stem with an optional
+    ``sidecar_suffix`` appended on the sidecar side:
+
+    - **object_detection**: ``sidecar_suffix=""`` (default) — plain stem
+      match, so ``cat.jpg`` pairs with ``cat.xml``.
+    - **semantic_segmentation**: ``sidecar_suffix="_mask"`` — the shipped
+      template + documented convention is ``<filename>_mask.png``, so
+      ``image_001.jpg`` pairs with ``image_001_mask.png`` (issue #196).
+
+    Without the suffix support, the semantic_segmentation shipped sample
+    failed pairing — every image was reported "no matching mask" and every
+    mask "no matching image", because plain-stem comparison treated
+    ``image_001`` and ``image_001_mask`` as unrelated.
     """
 
     def __init__(
@@ -37,12 +48,14 @@ class FilePairingValidator(BaseValidator):
         image_path: str = "images",
         sidecar_path: str = "annotations",
         sidecar_label: str = "annotation",
+        sidecar_suffix: str = "",
         name: str = "File Pairing Validator",
     ):
         super().__init__(name)
         self.image_path = image_path
         self.sidecar_path = sidecar_path
         self.sidecar_label = sidecar_label
+        self.sidecar_suffix = sidecar_suffix
 
     @staticmethod
     def _stems(directory: Path) -> Set[str]:
@@ -66,10 +79,34 @@ class FilePairingValidator(BaseValidator):
                     metadata={"skipped": "image or sidecar directory not found"},
                 )
 
-            images = self._stems(image_dir)
-            sidecars = self._stems(sidecar_dir)
-            missing = sorted(images - sidecars)   # images with no sidecar
-            orphans = sorted(sidecars - images)   # sidecars with no image
+            image_stems = self._stems(image_dir)
+            sidecar_stems = self._stems(sidecar_dir)
+
+            # When a suffix is configured (e.g. semantic_segmentation's
+            # ``_mask``), strip it from sidecar stems before comparison so
+            # ``image_001_mask`` matches the image ``image_001``. Sidecars
+            # that don't carry the suffix are kept as-is so they still show
+            # up as orphans (a useful signal, not a silent miss).
+            if self.sidecar_suffix:
+                # Build: paired set after suffix-strip, plus the orphans
+                # (sidecars not following the convention).
+                stripped = set()
+                non_conforming = set()
+                for s in sidecar_stems:
+                    if s.endswith(self.sidecar_suffix):
+                        stripped.add(s[: -len(self.sidecar_suffix)])
+                    else:
+                        non_conforming.add(s)
+                sidecars_for_compare = stripped
+                # Non-conforming sidecars are orphans (named neither to match
+                # an image nor to follow the convention).
+                extra_orphans = sorted(non_conforming)
+            else:
+                sidecars_for_compare = sidecar_stems
+                extra_orphans = []
+
+            missing = sorted(image_stems - sidecars_for_compare)
+            orphans = sorted((sidecars_for_compare - image_stems)) + extra_orphans
 
             errors = []
             if missing:
@@ -89,8 +126,9 @@ class FilePairingValidator(BaseValidator):
                 is_valid=len(errors) == 0,
                 errors=errors,
                 metadata={
-                    "images": len(images),
-                    "sidecars": len(sidecars),
+                    "images": len(image_stems),
+                    "sidecars": len(sidecar_stems),
+                    "sidecar_suffix": self.sidecar_suffix,
                     "images_without_sidecar": len(missing),
                     "orphan_sidecars": len(orphans),
                 },

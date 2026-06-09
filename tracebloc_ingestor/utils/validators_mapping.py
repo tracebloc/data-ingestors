@@ -130,7 +130,15 @@ def map_validators(
             FileTypeValidator(allowed_extension=options["extension"], path="images"),
             FileTypeValidator(allowed_extension=FileExtension.PNG, path="masks"),
             FilePairingValidator(
-                image_path="images", sidecar_path="masks", sidecar_label="mask"
+                image_path="images",
+                sidecar_path="masks",
+                sidecar_label="mask",
+                # Documented + shipped convention for semantic_segmentation
+                # masks is `<filename>_mask.png` (#196). Strip the suffix
+                # before matching so image_001.jpg pairs with
+                # image_001_mask.png. object_detection's pairing above is
+                # plain stem (no suffix) — the default.
+                sidecar_suffix="_mask",
             ),
             ImageResolutionValidator(expected_resolution=options["target_size"]),
             TableNameValidator(),
