@@ -6,6 +6,7 @@ pandas-based reading and validation capabilities.
 
 from typing import Dict, Any, Generator, Optional, List
 import csv as _csv
+import numpy as np
 import pandas as pd
 import logging
 from pathlib import Path
@@ -18,6 +19,39 @@ from ..utils import label_policy as label_policy_module
 from ..config import Config
 
 config = Config()
+
+
+def _raise_on_overflow(
+    column: str, original: pd.Series, converted: pd.Series, dtype: str
+) -> None:
+    """Reject overflow ±inf in a numeric column at cast time.
+
+    ``pd.to_numeric("1e400")`` returns ``+inf`` silently (IEEE float
+    overflow). Without this guard the overflowed value lands in MySQL as
+    a legitimately-looking number. ``DataValidator`` already runs an inf
+    guard at the gate via ``_non_finite_error``; this is defense-in-depth
+    on the cast path so a bad token that slips through validation can't
+    corrupt the row silently.
+
+    Distinguishes overflow from legitimate missing: a genuinely empty
+    cell was ``NaN``/``NA`` in ``original`` *before* coercion, so we
+    only flag values that are non-finite in ``converted`` AND were
+    present (non-NA) in ``original``.
+    """
+    # Use np.isinf rather than ~np.isfinite to keep NaN tolerance:
+    # legitimate missing cells were NaN in `original` and stay NaN in
+    # `converted`; pd.to_numeric never produces NaN from an inf path.
+    overflowed = np.isinf(converted) | (np.isnan(converted) & original.notna())
+    if overflowed.any():
+        offenders = original[overflowed].head(5).tolist()
+        raise ValueError(
+            f"Column '{column}' (dtype {dtype}) contains "
+            f"{int(overflowed.sum())} value(s) that overflow IEEE float "
+            f"(±inf / NaN). Sample: {offenders}. ``pd.to_numeric`` "
+            f"silently converted overflow (e.g. ``1e400``) into ±inf; "
+            f"this guard surfaces it at cast time instead of letting it "
+            f"reach MySQL."
+        )
 logger = logging.getLogger(__name__)
 logger.setLevel(config.LOG_LEVEL)
 
@@ -140,7 +174,9 @@ class CSVIngestor(BaseIngestor):
                     # Int64 keeps integers integral and stores missing as pd.NA
                     # (-> SQL NULL); default errors="raise" still surfaces a
                     # genuinely non-numeric value as a clear per-column error.
-                    df[column] = pd.to_numeric(df[column]).astype("Int64")
+                    converted = pd.to_numeric(df[column])
+                    _raise_on_overflow(column, df[column], converted, dtype)
+                    df[column] = converted.astype("Int64")
                 elif any(t in dtype.upper() for t in ("FLOAT", "DOUBLE", "DECIMAL", "NUMERIC")):
                     # float64 — NOT downcast='float' (float32), which corrupted
                     # precision: 3.14 -> '3.140000104904175'. Also covers DOUBLE/
@@ -149,7 +185,9 @@ class CSVIngestor(BaseIngestor):
                     # (the default) now rejects junk with a clear per-column
                     # error. MySQL still applies the column's own precision/scale
                     # on write.
-                    df[column] = pd.to_numeric(df[column])
+                    converted = pd.to_numeric(df[column])
+                    _raise_on_overflow(column, df[column], converted, dtype)
+                    df[column] = converted
                 elif "BOOL" in dtype.upper():
                     # Map the textual/numeric boolean forms DataValidator accepts
                     # (true/false, yes/no, t/f, y/n, 1/0) to a nullable boolean
