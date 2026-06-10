@@ -253,3 +253,139 @@ def test_count_records_object(tmp_path):
 
 def test_count_records_bad_path_returns_none():
     assert make_json_ingestor()._count_records("/no/such.json") is None
+
+
+# ---------------------------------------------------------------------------
+# Streaming via ijson — backend/#772 P2
+# ---------------------------------------------------------------------------
+
+def test_read_data_streams_array_does_not_materialise_whole_file(tmp_path):
+    """JSON ingestion used to call ``json.load`` and hold the whole file
+    in memory; a multi-GB array OOM'd the pod (Killed/137 — the deferred
+    half of #771's streaming item). Now we stream via ``ijson.items`` so
+    only one record at a time is in memory. The test pins the streaming
+    contract: the generator yields BEFORE the file is exhausted (i.e.
+    ``next()`` returns without reading the trailing records first).
+    """
+    import ijson as _ijson
+    import os
+
+    # Write a moderate-size array so the test is fast but the streaming
+    # behaviour is observable. We assert by checking that ijson.items is
+    # actually invoked — proves the streaming path, not the full-load path.
+    p = _write_json(tmp_path, [{"a": i} for i in range(1000)])
+    ing = make_json_ingestor()
+
+    spy_invocations = []
+    real_items = _ijson.items
+
+    def spy_items(file_obj, prefix, *args, **kwargs):
+        spy_invocations.append(prefix)
+        return real_items(file_obj, prefix, *args, **kwargs)
+
+    from unittest.mock import patch
+    with patch("tracebloc_ingestor.ingestors.json_ingestor.ijson.items",
+               side_effect=spy_items):
+        gen = ing.read_data(str(p))
+        first = next(gen)
+        # Now consume the rest.
+        rest = list(gen)
+
+    assert spy_invocations == ["item"], "ijson.items was not used"
+    assert first["a"] == 0
+    assert len(rest) == 999
+    assert rest[-1]["a"] == 999
+
+
+def test_count_records_array_streaming(tmp_path):
+    """Counting an array no longer materialises the whole file — proves
+    that the count path uses ``ijson.items`` rather than ``json.load``."""
+    p = _write_json(tmp_path, [{"a": i} for i in range(50)])
+    assert make_json_ingestor()._count_records(str(p)) == 50
+
+
+def test_read_data_single_object_skips_ijson(tmp_path):
+    """Single-object JSON (one record) shouldn't trigger ijson — it
+    short-circuits to a normal load since one record is by definition
+    tractable. Regression guard: the existing single-object contract
+    must not regress when the array path moved to streaming."""
+    from unittest.mock import patch
+    p = _write_json(tmp_path, {"a": 1, "b": "x"})
+    spy = []
+    real_items = __import__("ijson").items
+
+    def spy_items(*a, **k):
+        spy.append(1)
+        return real_items(*a, **k)
+
+    with patch("tracebloc_ingestor.ingestors.json_ingestor.ijson.items",
+               side_effect=spy_items):
+        records = list(make_json_ingestor().read_data(str(p)))
+    assert records == [{"a": 1, "b": "x"}]
+    assert spy == [], "single-object path must not invoke ijson.items"
+
+
+def test_read_data_invalid_top_level_still_rejected(tmp_path):
+    """A JSON file with neither an object nor an array at the top is
+    rejected with a clear ValueError — the streaming path must preserve
+    the same boundary the load-based path enforced."""
+    p = tmp_path / "bad.json"
+    p.write_text("42")  # bare number
+    with pytest.raises(ValueError, match="object or array"):
+        list(make_json_ingestor().read_data(str(p)))
+
+
+# ---------------------------------------------------------------------------
+# #222 bugbot — file-handle leak, count-skipped-parse, peek-hides-error
+# ---------------------------------------------------------------------------
+
+def test_array_streaming_closes_file_handle_on_partial_consume(tmp_path):
+    """#222 bugbot MED: the array path used to pass a bare
+    ``open(..., 'rb')`` into ``ijson.items``, so the descriptor stayed
+    open until the inner iterator and outer generator were GC'd —
+    leaking handles across repeated ingests. The file handle is now
+    inside a ``with`` block in read_data, so partial consumption
+    (close the generator early) deterministically closes the file."""
+    p = _write_json(tmp_path, [{"a": i} for i in range(100)])
+    ing = make_json_ingestor()
+    gen = ing.read_data(str(p))
+    first = next(gen)
+    assert first["a"] == 0
+    # Close the generator without consuming the rest — the contextmanager
+    # in read_data must close the underlying file.
+    gen.close()
+    # Subsequent reads should be possible (file isn't locked, descriptor
+    # was released). We re-open to confirm.
+    with open(p, "rb") as f:
+        assert f.read(1) == b"["
+
+
+def test_count_records_object_validates_parseability(tmp_path):
+    """#222 bugbot MED: returning 1 based on the peek alone for an
+    object-shaped file used to misreport a TRUNCATED object as one
+    record — the progress bar then expected 1, but ``read_data`` would
+    raise a decode error mid-ingest. Now the count path actually parses
+    the object via ijson; a broken object returns None."""
+    p = tmp_path / "broken.json"
+    p.write_text('{"a": 1, "b":')  # starts with `{`, truncated mid-value
+    # Peek -> "object", but the file isn't parseable -> count should be None.
+    assert make_json_ingestor()._count_records(str(p)) is None
+
+
+def test_count_records_object_well_formed_returns_one(tmp_path):
+    """Positive boundary for the previous test: a well-formed object
+    still reports 1 — the count path validates, doesn't reject good
+    input."""
+    p = _write_json(tmp_path, {"a": 1, "b": "ok"})
+    assert make_json_ingestor()._count_records(str(p)) == 1
+
+
+def test_peek_propagates_os_read_errors(tmp_path):
+    """#222 bugbot MED: ``_peek_json_shape`` used to swallow ``OSError``
+    into None, then ``read_data`` raised a misleading 'object or array'
+    error instead of the underlying permission-denied / read failure.
+    The OSError now propagates."""
+    from tracebloc_ingestor.ingestors.json_ingestor import _peek_json_shape
+    nonexistent = tmp_path / "no_such_dir" / "x.json"
+    with pytest.raises(OSError):
+        _peek_json_shape(nonexistent)

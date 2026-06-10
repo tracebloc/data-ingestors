@@ -12,7 +12,48 @@ import math
 import re
 from pathlib import Path
 
+import ijson
 import pandas as pd
+
+
+def _peek_json_shape(path: Path) -> Optional[str]:
+    """Detect whether a JSON file is a single object or an array of
+    objects by peeking at the first non-whitespace character.
+
+    Returns ``"array"`` for ``[...]``, ``"object"`` for ``{...}``, or
+    None if the file is empty / starts with anything else (the caller
+    will raise the right error). The peek reads at most a few hundred
+    bytes — bounded by the leading whitespace.
+
+    OSError is intentionally NOT caught here (#222 bugbot): a permission-
+    denied / unreadable file used to be swallowed into None, then
+    ``read_data`` raised a misleading ``ValueError("object or array")``
+    instead of the underlying I/O error. Let the caller see the real
+    cause — ``read_data`` already had a ``FileNotFoundError`` guard
+    before this function runs, and any other OSError is a real problem
+    the user needs to know about.
+    """
+    with open(path, "rb") as f:
+        # Read in small chunks until we see a non-whitespace byte.
+        buf = b""
+        while True:
+            chunk = f.read(1024)
+            if not chunk:
+                break
+            buf += chunk
+            stripped = buf.lstrip()
+            if stripped:
+                first = stripped[:1]
+                if first == b"[":
+                    return "array"
+                if first == b"{":
+                    return "object"
+                return None  # neither — let downstream raise
+            if len(buf) > 65536:
+                # Defensive: 64 KB of leading whitespace is pathological;
+                # bail rather than read the whole file.
+                return None
+    return None
 
 from .base import BaseIngestor
 from ..database import Database
@@ -267,11 +308,13 @@ class JSONIngestor(BaseIngestor):
                 )
 
     def read_data(self, file_path: str) -> Generator[Dict[str, Any], None, None]:
-        """Read and validate JSON file.
+        """Read and validate JSON file, streaming records one at a time.
 
-        This method reads the JSON file and handles both single-object and
-        array-of-objects formats. It performs validation according to the schema
-        and yields records one at a time.
+        Handles both single-object and array-of-objects formats. For the
+        array case the file is parsed *incrementally* via ``ijson`` so a
+        multi-GB JSON ingest doesn't OOM the pod — the old implementation
+        called ``json.load`` and materialised the whole array in memory
+        (backend/#772 P2, deferred half of the streaming item in #771).
 
         Args:
             file_path: Path to the JSON file
@@ -282,67 +325,94 @@ class JSONIngestor(BaseIngestor):
         Raises:
             FileNotFoundError: If the JSON file doesn't exist
             ValueError: If the JSON data is not in the expected format
-            json.JSONDecodeError: If there's an error parsing the JSON
+            ijson.JSONError: If there's an error parsing the JSON
         """
         file_path = Path(file_path)
         if not file_path.exists():
             raise FileNotFoundError(f"{RED}JSON file not found: {file_path}{RESET}")
 
         try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                # Load JSON data
-                data = json.load(f)
+            shape = _peek_json_shape(file_path)
+            if shape == "object":
+                # Single-object form: one record. Not OOM-risky (a single
+                # record is by definition tractable). Parse non-incrementally.
+                with open(file_path, "r", encoding="utf-8") as f:
+                    record = json.load(f)
+                yield from self._iter_validated_records([record])
+                return
+            if shape != "array":
+                raise ValueError(
+                    "JSON data must be an object or array of objects"
+                )
+            # Array form: stream item-by-item. Memory cost is bounded
+            # by the largest *record* (not the full file). The file
+            # handle is opened in a `with` so a partial-consume / early
+            # exit / parse error closes it deterministically (#222
+            # bugbot — previously a bare ``open(...)`` was passed to
+            # ``ijson.items``, leaking the descriptor until GC).
+            with open(file_path, "rb") as f:
+                yield from self._iter_validated_records(ijson.items(f, "item"))
 
-                # Handle both array and object formats
-                if isinstance(data, dict):
-                    data = [data]
-                elif not isinstance(data, list):
-                    raise ValueError("JSON data must be an object or array of objects")
-
-                # Process each record
-                for record in data:
-                    if not isinstance(record, dict):
-                        logger.warning(
-                            f"{YELLOW}Skipping invalid record: {record}{RESET}"
-                        )
-                        continue
-
-                    try:
-                        self._validate_record(record)
-                        yield record  # Let base class handle the cleaning and unique ID mapping
-                    except ValueError as e:
-                        logger.warning(
-                            f"{YELLOW}Skipping invalid record: {str(e)}{RESET}"
-                        )
-                        continue
-
-        except json.JSONDecodeError as e:
+        except (json.JSONDecodeError, ijson.JSONError) as e:
             logger.error(f"{RED}Error parsing JSON file: {str(e)}{RESET}")
+            raise
+
+        except FileNotFoundError:
             raise
 
         except Exception as e:
             logger.error(f"{RED}Unexpected error reading JSON: {str(e)}{RESET}")
             raise
 
+    def _iter_validated_records(
+        self, records: Any
+    ) -> Generator[Dict[str, Any], None, None]:
+        """Shared per-record validation + yield loop used by both the
+        single-object and array-streaming paths in ``read_data``. Factored
+        out so the array path can ``yield from`` it inside the ``with
+        open(...)`` block — the file handle stays open exactly as long as
+        the generator is being consumed."""
+        for record in records:
+            if not isinstance(record, dict):
+                logger.warning(
+                    f"{YELLOW}Skipping invalid record: {record}{RESET}"
+                )
+                continue
+            try:
+                self._validate_record(record)
+                yield record  # Let base class handle the cleaning and unique ID mapping
+            except ValueError as e:
+                logger.warning(
+                    f"{YELLOW}Skipping invalid record: {str(e)}{RESET}"
+                )
+                continue
+
     def _count_records(self, file_path: str) -> Optional[int]:
-        """Count total records in JSON file efficiently.
+        """Count total records in JSON file without materialising it.
 
-        This method provides an optimized way to count records in a JSON file
-        by loading the file once and checking its structure.
-
-        Args:
-            file_path: Path to the JSON file
-
-        Returns:
-            Total number of records if countable, None otherwise
+        Single-object form -> 1. Array form -> count by streaming via
+        ``ijson`` so even a multi-GB array reports its size without an
+        OOM. Returns None on any read error (the caller treats it as
+        'unknown total', which only affects the progress bar).
         """
         try:
-            with open(file_path, "r") as f:
-                data = json.load(f)
-                if isinstance(data, dict):
-                    return 1
-                elif isinstance(data, list):
-                    return len(data)
+            shape = _peek_json_shape(Path(file_path))
+            if shape == "object":
+                # #222 bugbot: don't return 1 based on the peek alone — a
+                # truncated / invalid JSON object would advertise 1 record
+                # to the progress bar and then make ``read_data`` raise a
+                # decode error mid-ingest. Validate parseability via
+                # ``json.load`` (single-object form ingests one record by
+                # definition — same as ``read_data`` does for this shape,
+                # so the parse cost is paid either way). A bad object
+                # returns None so the progress bar shows "unknown" rather
+                # than a misleading "1 record" that fails mid-ingest.
+                with open(file_path, "r", encoding="utf-8") as f:
+                    json.load(f)
+                return 1
+            if shape == "array":
+                with open(file_path, "rb") as f:
+                    return sum(1 for _ in ijson.items(f, "item"))
             return None
         except Exception as e:
             logger.debug(f"{YELLOW}Unable to count JSON records: {str(e)}{RESET}")

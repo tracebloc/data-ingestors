@@ -15,6 +15,10 @@ Pillow>=10.0.0
 # CSV/JSON handling
 pandas>=2.0.0
 
+# Streaming JSON parser (used by JSONIngestor.read_data so multi-GB JSON
+# datasets ingest without materialising the whole file — backend/#772 P2).
+ijson>=3.2.0
+
 # YAML config + JSON Schema validation (for the declarative ingest.yaml flow)
 PyYAML>=6.0
 jsonschema>=4.0.0
