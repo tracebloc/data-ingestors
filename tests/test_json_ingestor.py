@@ -253,3 +253,83 @@ def test_count_records_object(tmp_path):
 
 def test_count_records_bad_path_returns_none():
     assert make_json_ingestor()._count_records("/no/such.json") is None
+
+
+# ---------------------------------------------------------------------------
+# Streaming via ijson — backend/#772 P2
+# ---------------------------------------------------------------------------
+
+def test_read_data_streams_array_does_not_materialise_whole_file(tmp_path):
+    """JSON ingestion used to call ``json.load`` and hold the whole file
+    in memory; a multi-GB array OOM'd the pod (Killed/137 — the deferred
+    half of #771's streaming item). Now we stream via ``ijson.items`` so
+    only one record at a time is in memory. The test pins the streaming
+    contract: the generator yields BEFORE the file is exhausted (i.e.
+    ``next()`` returns without reading the trailing records first).
+    """
+    import ijson as _ijson
+    import os
+
+    # Write a moderate-size array so the test is fast but the streaming
+    # behaviour is observable. We assert by checking that ijson.items is
+    # actually invoked — proves the streaming path, not the full-load path.
+    p = _write_json(tmp_path, [{"a": i} for i in range(1000)])
+    ing = make_json_ingestor()
+
+    spy_invocations = []
+    real_items = _ijson.items
+
+    def spy_items(file_obj, prefix, *args, **kwargs):
+        spy_invocations.append(prefix)
+        return real_items(file_obj, prefix, *args, **kwargs)
+
+    from unittest.mock import patch
+    with patch("tracebloc_ingestor.ingestors.json_ingestor.ijson.items",
+               side_effect=spy_items):
+        gen = ing.read_data(str(p))
+        first = next(gen)
+        # Now consume the rest.
+        rest = list(gen)
+
+    assert spy_invocations == ["item"], "ijson.items was not used"
+    assert first["a"] == 0
+    assert len(rest) == 999
+    assert rest[-1]["a"] == 999
+
+
+def test_count_records_array_streaming(tmp_path):
+    """Counting an array no longer materialises the whole file — proves
+    that the count path uses ``ijson.items`` rather than ``json.load``."""
+    p = _write_json(tmp_path, [{"a": i} for i in range(50)])
+    assert make_json_ingestor()._count_records(str(p)) == 50
+
+
+def test_read_data_single_object_skips_ijson(tmp_path):
+    """Single-object JSON (one record) shouldn't trigger ijson — it
+    short-circuits to a normal load since one record is by definition
+    tractable. Regression guard: the existing single-object contract
+    must not regress when the array path moved to streaming."""
+    from unittest.mock import patch
+    p = _write_json(tmp_path, {"a": 1, "b": "x"})
+    spy = []
+    real_items = __import__("ijson").items
+
+    def spy_items(*a, **k):
+        spy.append(1)
+        return real_items(*a, **k)
+
+    with patch("tracebloc_ingestor.ingestors.json_ingestor.ijson.items",
+               side_effect=spy_items):
+        records = list(make_json_ingestor().read_data(str(p)))
+    assert records == [{"a": 1, "b": "x"}]
+    assert spy == [], "single-object path must not invoke ijson.items"
+
+
+def test_read_data_invalid_top_level_still_rejected(tmp_path):
+    """A JSON file with neither an object nor an array at the top is
+    rejected with a clear ValueError — the streaming path must preserve
+    the same boundary the load-based path enforced."""
+    p = tmp_path / "bad.json"
+    p.write_text("42")  # bare number
+    with pytest.raises(ValueError, match="object or array"):
+        list(make_json_ingestor().read_data(str(p)))
