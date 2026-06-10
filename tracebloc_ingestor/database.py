@@ -70,8 +70,32 @@ def _execute_with_retry(connection, stmt):
     DB errors (network blip, MySQL restart, stale pool connection). A
     permanent error (IntegrityError, DataError, …) is NOT retried and
     propagates immediately to the existing per-row fallback path.
+
+    Rollback between attempts (#219 bugbot): SQLAlchemy leaves the
+    connection in a pending-rollback state after a failed statement, so
+    the next ``connection.execute`` on the SAME connection would raise
+    ``PendingRollbackError`` — a NON-transient class tenacity doesn't
+    retry, which would cut the retries short and skip the intended
+    backoff. Rolling back here resets the connection's transactional
+    state so the next attempt sees a clean slate. The rollback runs on
+    EVERY transient failure (including the final one that propagates),
+    which is also fine — the per-row fallback path runs another
+    rollback at the top, so the double-rollback is a harmless no-op.
     """
-    return connection.execute(stmt)
+    try:
+        return connection.execute(stmt)
+    except _DB_RETRY_EXCEPTIONS:
+        try:
+            connection.rollback()
+        except Exception as rb_exc:
+            # The rollback itself might fail on a truly dead connection.
+            # Swallow it so the original transient error propagates to
+            # tenacity for the retry (or, on the last attempt, to the
+            # caller's existing error path).
+            logger.debug(
+                f"connection.rollback() failed between retries: {rb_exc}"
+            )
+        raise
 
 
 class Database:
