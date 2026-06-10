@@ -486,7 +486,180 @@ def test_check_csv_encoding_skips_non_csv_sources(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# SRC_PATH pre-flight (validate_data) — #772 P2
+# Concurrent-ingest table lock — backend/#772 P2
+# ---------------------------------------------------------------------------
+
+def test_acquire_table_lock_creates_lock_file(tmp_path):
+    """Lock file is created at STORAGE_PATH/.tracebloc-ingest-<table>.lock
+    with metadata (ingestor_id, pid, hostname, started_at) so a holder
+    can be identified on conflict."""
+    import json
+    from tracebloc_ingestor.config import Config as CfgCls
+    with patch.object(CfgCls, "STORAGE_PATH", str(tmp_path)):
+        ing = make_ingestor(table_name="dataset_a", category=None)
+        lock_path = ing._acquire_table_lock()
+        assert lock_path is not None
+        assert lock_path.endswith(".tracebloc-ingest-dataset_a.lock")
+        meta = json.loads(open(lock_path).read())
+        assert meta["table_name"] == "dataset_a"
+        assert meta["ingestor_id"] == ing.ingestor_id
+        ing._release_table_lock(lock_path)
+        assert not __import__("os").path.exists(lock_path)
+
+
+def test_acquire_table_lock_rejects_concurrent_ingest(tmp_path):
+    """A second ingest targeting the same table while a lock is held
+    fails fast with a message naming the holder. Without this guard,
+    two ingests would race create_table / interleave upserts (#772 P2)."""
+    from tracebloc_ingestor.config import Config as CfgCls
+    with patch.object(CfgCls, "STORAGE_PATH", str(tmp_path)):
+        ing_a = make_ingestor(table_name="dataset_a", category=None)
+        path_a = ing_a._acquire_table_lock()
+        try:
+            ing_b = make_ingestor(table_name="dataset_a", category=None)
+            with pytest.raises(RuntimeError, match="already running"):
+                ing_b._acquire_table_lock()
+        finally:
+            ing_a._release_table_lock(path_a)
+
+
+def test_acquire_table_lock_different_tables_dont_conflict(tmp_path):
+    """The lock is keyed by table_name — two different datasets can
+    ingest concurrently without blocking each other."""
+    from tracebloc_ingestor.config import Config as CfgCls
+    with patch.object(CfgCls, "STORAGE_PATH", str(tmp_path)):
+        ing_a = make_ingestor(table_name="dataset_a", category=None)
+        ing_b = make_ingestor(table_name="dataset_b", category=None)
+        path_a = ing_a._acquire_table_lock()
+        path_b = ing_b._acquire_table_lock()
+        assert path_a != path_b
+        ing_a._release_table_lock(path_a)
+        ing_b._release_table_lock(path_b)
+
+
+def test_acquire_table_lock_reclaims_stale_lock(tmp_path):
+    """A crashed ingest's lock auto-expires after the stale-cutoff so a
+    customer isn't blocked indefinitely. We simulate by writing a lock
+    file with an old timestamp."""
+    import json
+    from datetime import datetime, timedelta
+    from tracebloc_ingestor.config import Config as CfgCls
+    with patch.object(CfgCls, "STORAGE_PATH", str(tmp_path)):
+        ing = make_ingestor(table_name="dataset_stale", category=None)
+        lock_path = ing._table_lock_path()
+        old = (datetime.utcnow() - timedelta(days=2)).isoformat() + "Z"
+        with open(lock_path, "w") as f:
+            json.dump(
+                {"ingestor_id": "crashed-ingest", "started_at": old}, f
+            )
+        # Stale lock detected -> removed -> reacquired with the new holder.
+        path = ing._acquire_table_lock()
+        assert path == lock_path
+        meta = json.loads(open(lock_path).read())
+        assert meta["ingestor_id"] == ing.ingestor_id
+        ing._release_table_lock(lock_path)
+
+
+def test_acquire_table_lock_noop_when_storage_path_missing(tmp_path):
+    """No STORAGE_PATH (e.g. unit tests, local dev) -> the lock is
+    skipped. Returns None, _release_table_lock(None) is a no-op."""
+    from tracebloc_ingestor.config import Config as CfgCls
+    missing = str(tmp_path / "never_exists")
+    with patch.object(CfgCls, "STORAGE_PATH", missing):
+        ing = make_ingestor(table_name="dataset_a", category=None)
+        assert ing._acquire_table_lock() is None
+        ing._release_table_lock(None)  # must not raise
+
+
+def test_release_table_lock_idempotent(tmp_path):
+    """Double-release (e.g. exception path + finally path both call it)
+    must not raise."""
+    from tracebloc_ingestor.config import Config as CfgCls
+    with patch.object(CfgCls, "STORAGE_PATH", str(tmp_path)):
+        ing = make_ingestor(table_name="dataset_a", category=None)
+        path = ing._acquire_table_lock()
+        ing._release_table_lock(path)
+        ing._release_table_lock(path)  # idempotent, no raise
+
+
+# ---------------------------------------------------------------------------
+# #221 bugbot — lock release on every exit + mtime fallback
+# ---------------------------------------------------------------------------
+
+def test_lock_released_when_validate_data_raises(tmp_path):
+    """#221 bugbot HIGH: the original code only released the lock on
+    validation errors / inner Session except. An exception escaping the
+    pre-Session region (e.g. an unexpected error during validate_data
+    that wasn't caught by the surrounding except) used to leak the lock
+    until the stale-cutoff. try/finally now releases on every exit."""
+    from tracebloc_ingestor.config import Config as CfgCls
+    with patch.object(CfgCls, "STORAGE_PATH", str(tmp_path)):
+        ing = make_ingestor(records=[], category=None)
+        with patch.object(ing, "validate_data", side_effect=RuntimeError("boom")):
+            with pytest.raises(RuntimeError):
+                ing.ingest("src")
+        lock_path = ing._table_lock_path()
+        assert lock_path is not None
+        import os as _os
+        assert not _os.path.exists(lock_path), (
+            f"lock leaked at {lock_path} after validate_data raised"
+        )
+
+
+def test_lock_released_when_count_records_raises(tmp_path):
+    """#221 bugbot HIGH-severity scenario: a failure in
+    ``self._count_records`` (between validation and the Session block)
+    used to escape without releasing the lock — neither the validation
+    except nor the Session except covered it. try/finally fixes it."""
+    from tracebloc_ingestor.config import Config as CfgCls
+    with patch.object(CfgCls, "STORAGE_PATH", str(tmp_path)):
+        ing = make_ingestor(records=[], category=None)
+        with patch.object(ing, "validate_data", return_value=True), \
+             patch.object(ing, "_count_records", side_effect=RuntimeError("ouch")):
+            with pytest.raises(RuntimeError):
+                ing.ingest("src")
+        import os as _os
+        assert not _os.path.exists(ing._table_lock_path()), "lock leaked"
+
+
+def test_acquire_table_lock_recovers_from_corrupt_lock_via_mtime(tmp_path):
+    """#221 bugbot MED: when the lock metadata is unparseable (empty
+    file, invalid JSON, missing started_at), staleness used to skip the
+    cleanup — age stayed None and the lock blocked indefinitely. The
+    file's mtime now serves as a fallback age signal."""
+    import os as _os
+    import json
+    from tracebloc_ingestor.config import Config as CfgCls
+    with patch.object(CfgCls, "STORAGE_PATH", str(tmp_path)):
+        ing = make_ingestor(table_name="dataset_corrupt", category=None)
+        lock_path = ing._table_lock_path()
+        with open(lock_path, "w"):
+            pass  # empty file -> JSON parse fails
+        old = _os.path.getmtime(lock_path) - (13 * 3600)  # 13h ago
+        _os.utime(lock_path, (old, old))
+        path = ing._acquire_table_lock()
+        assert path == lock_path
+        meta = json.loads(open(lock_path).read())
+        assert meta["ingestor_id"] == ing.ingestor_id
+        ing._release_table_lock(lock_path)
+
+
+def test_acquire_table_lock_corrupt_but_fresh_blocks(tmp_path):
+    """A corrupt lock that's RECENT (not stale by mtime) still blocks
+    the second ingest — we don't auto-clear; the user has to remove it
+    manually. Boundary test against the mtime fallback."""
+    from tracebloc_ingestor.config import Config as CfgCls
+    with patch.object(CfgCls, "STORAGE_PATH", str(tmp_path)):
+        ing = make_ingestor(table_name="dataset_corrupt", category=None)
+        lock_path = ing._table_lock_path()
+        with open(lock_path, "w"):
+            pass  # empty, JSON parse fails, mtime is now (fresh)
+        with pytest.raises(RuntimeError, match="already running"):
+            ing._acquire_table_lock()
+
+
+# ---------------------------------------------------------------------------
+# SRC_PATH pre-flight (validate_data) — #772 P2 / PR #218 (already on develop)
 # ---------------------------------------------------------------------------
 
 def test_check_src_path_empty_raises(clean_env):
