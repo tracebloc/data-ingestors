@@ -1,4 +1,5 @@
-from typing import List, Tuple, Dict, Any
+from typing import List, Tuple, Dict, Any, Optional
+import os
 import requests, json
 import logging
 from requests.adapters import HTTPAdapter
@@ -129,6 +130,90 @@ class APIClient:
             else:
                 raise ValueError(f"{RED}Error response: {e}{RESET}")
 
+    def _refresh_token(self) -> bool:
+        """Re-mint or re-read the auth token (#772 P2 — token captured
+        once, expires on multi-hour runs).
+
+        Three resolution paths matching ``__init__``:
+          - local mode: keep the mock token (no real auth in the loop)
+          - BACKEND_TOKEN: re-read ``os.environ`` in case jobs-manager /
+            secret-rotator wrote a fresh value into the env. (Re-reading
+            ``self.config.BACKEND_TOKEN`` first picks up Config layer
+            overrides; the env fallback covers rotation.)
+          - CLIENT_ID/PASSWORD (deprecated): re-call ``authenticate()``
+            to mint a new short-lived token.
+
+        Returns True iff the token actually changed; False signals
+        "tried to refresh but got the same value, nothing more we can
+        do" — caller should treat the next 401 as terminal.
+        """
+        if self.config.EDGE_ENV == "local":
+            return False
+        old = self.token
+        if self.config.BACKEND_TOKEN:
+            # Re-resolve via Config (which reads the env each time) so a
+            # rotated BACKEND_TOKEN is picked up between attempts.
+            new = self.config.BACKEND_TOKEN or os.environ.get("BACKEND_TOKEN")
+            if new and new != old:
+                self.token = new
+                logger.info(
+                    f"{GREEN}Re-read rotated BACKEND_TOKEN after 401.{RESET}"
+                )
+                return True
+            return False
+        # CLIENT_ID/PASSWORD path: mint a new token.
+        try:
+            self.token = self.authenticate()
+            return self.token != old
+        except Exception as exc:
+            logger.error(
+                f"{RED}Failed to re-authenticate after 401: {exc}{RESET}"
+            )
+            return False
+
+    def _authed_request(
+        self,
+        method: str,
+        url: str,
+        *,
+        extra_headers: Optional[Dict[str, str]] = None,
+        **kwargs: Any,
+    ) -> requests.Response:
+        """Issue an authenticated HTTP request with a single 401-refresh
+        retry (#772 P2).
+
+        Auth tokens captured at ``__init__`` used to expire silently on
+        multi-hour runs — the terminal ``create_dataset`` then failed
+        4xx, the ingest exited non-zero, and the rows were left
+        committed-but-unregistered. Now: on a 401, attempt one token
+        refresh and retry the request once. If the second attempt still
+        401s, the caller's existing error path runs as before.
+
+        Caller passes whatever ``session.request`` kwargs are needed
+        (json, data, params, timeout, …). The Authorization header is
+        injected here and overrides anything in ``extra_headers``.
+        """
+        headers = dict(extra_headers or {})
+        headers["Authorization"] = f"TOKEN {self.token}"
+        # Dispatch by method name (not session.request) so existing tests
+        # that monkeypatch ``session.post`` / ``session.get`` directly
+        # continue to work without rewrites.
+        send = getattr(self.session, method.lower())
+        response = send(url, headers=headers, **kwargs)
+        if response.status_code != 401:
+            return response
+        logger.warning(
+            f"{YELLOW}Backend returned 401 for {method} {url} — attempting "
+            f"token refresh and one retry.{RESET}"
+        )
+        if not self._refresh_token():
+            # Refresh did nothing; the second attempt would 401 again.
+            # Surface the original 401 so the caller's existing error
+            # path runs (it already logs the response body).
+            return response
+        headers["Authorization"] = f"TOKEN {self.token}"
+        return send(url, headers=headers, **kwargs)
+
     def send_batch(
         self,
         records: List[Tuple[int, Dict[str, Any]]],
@@ -166,15 +251,11 @@ class APIClient:
 
             logger.info(f"Data to send: {payload}")
 
-            headers = {
-                "Authorization": f"TOKEN {self.token}",
-                "Content-Type": "application/json",
-            }
-
-            response = self.session.post(
+            response = self._authed_request(
+                "POST",
                 f"{self.config.API_ENDPOINT}/global_meta/{table_name}/",
                 data=payload,
-                headers=headers,
+                extra_headers={"Content-Type": "application/json"},
                 timeout=API_TIMEOUT,
             )
 
@@ -221,15 +302,11 @@ class APIClient:
 
             logger.info(f"Global metadata to send: {(payload)}")
 
-            headers = {
-                "Authorization": f"TOKEN {self.token}",
-                "Content-Type": "application/json",
-            }
-
-            response = self.session.post(
+            response = self._authed_request(
+                "POST",
                 f"{self.config.API_ENDPOINT}/global_meta/global_metadata/",
                 data=payload,
-                headers=headers,
+                extra_headers={"Content-Type": "application/json"},
                 timeout=API_TIMEOUT,
             )
 
@@ -271,12 +348,11 @@ class APIClient:
 
         try:
             url = f"{self.config.API_ENDPOINT}/global_meta/generate-edge-labels-meta/?table_name={table_name}&injestor_id={ingestor_id}&data_intent={intent}"
-            headers = {"Authorization": f"TOKEN {self.token}"}
 
             logger.info(
                 f"Sending request to generate edge label metadata for dataset type: {table_name}"
             )
-            response = self.session.get(url, headers=headers, timeout=API_TIMEOUT)
+            response = self._authed_request("GET", url, timeout=API_TIMEOUT)
 
             # Check status after retries are exhausted
             if response.status_code >= 400:
@@ -324,12 +400,11 @@ class APIClient:
 
         try:
             url = f"{self.config.API_ENDPOINT}/global_meta/prepare/?category={category}&injestor_id={ingestor_id}&data_format={data_format}&data_intent={intent}"
-            headers = {"Authorization": f"TOKEN {self.token}"}
 
             logger.info(
                 f"Sending prepare request for category: {category}, injester_id: {ingestor_id}, data_format: {data_format} , data_intent: {intent}"
             )
-            response = self.session.get(url, headers=headers, timeout=API_TIMEOUT)
+            response = self._authed_request("GET", url, timeout=API_TIMEOUT)
 
             # Check status after retries are exhausted
             if response.status_code >= 400:
@@ -394,15 +469,11 @@ class APIClient:
 
             logger.info(f"{GREEN}Creating dataset with payload: {payload}{RESET}")
 
-            headers = {
-                "Authorization": f"TOKEN {self.token}",
-                "Content-Type": "application/json",
-            }
-
-            response = self.session.post(
+            response = self._authed_request(
+                "POST",
                 f"{self.config.API_ENDPOINT}/dataset/",
                 data=payload,
-                headers=headers,
+                extra_headers={"Content-Type": "application/json"},
                 timeout=API_TIMEOUT,
             )
 
