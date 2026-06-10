@@ -64,6 +64,20 @@ _SRC_PATH_REQUIRED_CATEGORIES = frozenset({
 })
 
 
+# Self-supervised categories have no `label` column — the CSV manifest just
+# points at sidecar files and the model creates its own targets at training
+# time (e.g. masked_language_modeling masks tokens on-the-fly). The backend
+# correspondingly stores no edge-label metadata for these datasets, so the
+# `send_generate_edge_label_meta` call is a no-op at best and a misleading
+# HTTP 400 ("No data found for table X") at worst — see issue #213.
+# The schema (schema/ingest.v1.json) now rejects `label:` on these categories
+# at submission time; this set + the gate below are the defensive in-ingestor
+# half (script-driven runs that bypass the schema still skip the wasted call).
+_SELF_SUPERVISED_CATEGORIES = frozenset({
+    TaskCategory.MASKED_LANGUAGE_MODELING,
+})
+
+
 class IngestionSummary(NamedTuple):
     """Data class to hold ingestion summary statistics.
 
@@ -707,14 +721,26 @@ class BaseIngestor(ABC):
                 # the failure surfaces (the CLI streams these logs live and marks
                 # the Job failed). The api_client has already logged the
                 # underlying HTTP detail before returning False.
-                if not self.api_client.send_generate_edge_label_meta(
-                    self.table_name, self.ingestor_id, self.intent
-                ):
-                    raise RuntimeError(
-                        "Backend rejected edge-label metadata; the dataset was "
-                        "NOT registered (its rows are already in the database). "
-                        "See the logged API error above."
-                    )
+                # Skip the edge-label backend call for self-supervised
+                # categories (#213). They have no `label` column on the rows;
+                # the backend's edge-label endpoint then returns a misleading
+                # HTTP 400 ("No data found for table X" — wrong, the table HAS
+                # rows, it just has no edge labels). Combined with PR #187's
+                # fail-loud behaviour, the user saw a registration crash that
+                # had nothing to do with the actual misconfiguration. The
+                # schema now rejects `label:` on these categories at
+                # submission, but this gate is the defensive in-ingestor half
+                # so script-driven / older-schema runs don't trip the same
+                # trap.
+                if self.category not in _SELF_SUPERVISED_CATEGORIES:
+                    if not self.api_client.send_generate_edge_label_meta(
+                        self.table_name, self.ingestor_id, self.intent
+                    ):
+                        raise RuntimeError(
+                            "Backend rejected edge-label metadata; the dataset was "
+                            "NOT registered (its rows are already in the database). "
+                            "See the logged API error above."
+                        )
 
                 schema_dict = self.database.get_table_schema(self.table_name)
                 if not self.api_client.send_global_meta_meta(
