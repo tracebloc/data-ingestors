@@ -20,10 +20,18 @@ from sqlalchemy import (
 )
 from sqlalchemy.engine import Engine
 from sqlalchemy.dialects.mysql import insert, LONGBLOB, BLOB
+from sqlalchemy.exc import OperationalError, InterfaceError, DBAPIError
 import logging
 from urllib.parse import quote
 from typing import List, Dict, Any, Optional
 from datetime import datetime
+from tenacity import (
+    retry,
+    stop_after_attempt,
+    wait_exponential,
+    retry_if_exception_type,
+    before_sleep_log,
+)
 from .config import Config
 from .utils.logging import setup_logging
 
@@ -31,6 +39,39 @@ from .utils.logging import setup_logging
 config = Config()
 setup_logging(config)
 logger = logging.getLogger(__name__)
+
+
+# Transient MySQL/SQLAlchemy errors that warrant a retry. Roughly: anything
+# from the network / connection layer or a server-side temporary state. We
+# deliberately DO NOT retry IntegrityError / DataError / ProgrammingError —
+# those reflect bad data or schema and won't fix themselves on a retry.
+#   - OperationalError: "MySQL server has gone away", "Lost connection during
+#     query", "Deadlock found", connection-pool eviction, network blip.
+#   - InterfaceError: stale connection / lower-level driver fault.
+# Issue: backend #772 P2 — `insert_batch` had no DB-retry; a 5-second
+# MySQL restart in the middle of an 8-hour proteomics ingest failed every
+# in-flight batch permanently. file_transfer already uses tenacity for
+# file-copy retries; the DB path was just inconsistent.
+_DB_RETRY_EXCEPTIONS = (OperationalError, InterfaceError)
+
+
+_retry_on_transient_db_error = retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=1, max=8),
+    retry=retry_if_exception_type(_DB_RETRY_EXCEPTIONS),
+    before_sleep=before_sleep_log(logger, logging.WARNING),
+    reraise=True,
+)
+
+
+@_retry_on_transient_db_error
+def _execute_with_retry(connection, stmt):
+    """Run ``connection.execute(stmt)`` with bounded retries on transient
+    DB errors (network blip, MySQL restart, stale pool connection). A
+    permanent error (IntegrityError, DataError, …) is NOT retried and
+    propagates immediately to the existing per-row fallback path.
+    """
+    return connection.execute(stmt)
 
 
 class Database:
@@ -345,18 +386,26 @@ class Database:
                 }
 
                 try:
-                    # Execute upsert
-                    connection.execute(
+                    # Execute upsert. Wrapped in _execute_with_retry so a
+                    # transient MySQL hiccup (server-gone-away, lost
+                    # connection mid-query, brief deadlock, network blip)
+                    # is retried (3 attempts, exponential backoff) before
+                    # the per-record fallback below takes over. Permanent
+                    # errors (IntegrityError, DataError) bypass the retry
+                    # and fall straight through to the per-record path
+                    # which can identify the offending row.
+                    _execute_with_retry(
+                        connection,
                         insert_stmt.values(processed_records).on_duplicate_key_update(
                             **update_dict
-                        )
+                        ),
                     )
                     connection.commit()
 
                     # Get IDs for successfully processed records
                     data_ids = [record["data_id"] for record in records]
                     select_stmt = table.select().where(table.c.data_id.in_(data_ids))
-                    rows = connection.execute(select_stmt).fetchall()
+                    rows = _execute_with_retry(connection, select_stmt).fetchall()
                     result["success_ids"] = [row.id for row in rows]
 
                 except Exception as e:
@@ -371,14 +420,16 @@ class Database:
                             stmt = insert_stmt.values([record]).on_duplicate_key_update(
                                 **update_dict
                             )
-                            connection.execute(stmt)
+                            _execute_with_retry(connection, stmt)
                             connection.commit()
 
                             # Get ID for the successful record
                             select_stmt = table.select().where(
                                 table.c.data_id == record["data_id"]
                             )
-                            row = connection.execute(select_stmt).fetchone()
+                            row = _execute_with_retry(
+                                connection, select_stmt
+                            ).fetchone()
                             if row:
                                 result["success_ids"].append(row.id)
 

@@ -270,8 +270,99 @@ def test_insert_batch_connection_error(db, mock_engine_factory):
     engine.connect.side_effect = RuntimeError("no connection")
     ids, failures = db.insert_batch("tbl", [{"data_id": "a", "feat": 1}])
     assert ids == []
+
+
+# ---------------------------------------------------------------------------
+# Transient DB retry via tenacity — backend/#772 P2
+# ---------------------------------------------------------------------------
+
+def test_insert_batch_retries_on_transient_operational_error(db, mock_engine_factory):
+    """A transient MySQL hiccup (server-gone-away, lost connection,
+    deadlock) used to fail every in-flight batch permanently. tenacity
+    now retries up to 3 attempts with exponential backoff; the second
+    attempt succeeds in this test."""
+    from sqlalchemy.exc import OperationalError
+    ce, engine, conn = mock_engine_factory
+    _seed_table(db)
+
+    calls = {"n": 0}
+
+    def execute_side_effect(stmt, *a, **k):
+        calls["n"] += 1
+        # First execute (the bulk insert) raises a transient error once,
+        # then succeeds on attempt #2. Subsequent execute calls (the
+        # SELECT for ids) succeed.
+        if calls["n"] == 1:
+            raise OperationalError(
+                "INSERT …", {}, Exception("MySQL server has gone away")
+            )
+        result = MagicMock()
+        result.fetchall.return_value = [MagicMock(id=42)]
+        return result
+
+    conn.execute.side_effect = execute_side_effect
+    ids, failures = db.insert_batch("tbl", [{"data_id": "a", "feat": 1}])
+    # Retry kicked in: the bulk insert was attempted twice (fail, succeed),
+    # then the id SELECT ran once.
+    assert calls["n"] >= 2
+    assert ids == [42]
+    assert failures == []
+
+
+def test_insert_batch_does_not_retry_permanent_error_falls_to_per_row(
+    db, mock_engine_factory
+):
+    """Permanent errors (IntegrityError, DataError, …) must NOT be
+    retried — they reflect bad data, not a transient blip. They fall
+    straight through to the existing per-row fallback path so the
+    offending record can be identified."""
+    from sqlalchemy.exc import IntegrityError
+    ce, engine, conn = mock_engine_factory
+    _seed_table(db)
+
+    calls = {"bulk": 0, "row": 0}
+
+    def execute_side_effect(stmt, *a, **k):
+        # The very first execute is the bulk insert: raise a permanent
+        # error. Subsequent executes (per-row inserts + SELECTs) succeed.
+        compiled = str(stmt)
+        if "INSERT" in compiled.upper() and calls["bulk"] == 0:
+            calls["bulk"] += 1
+            raise IntegrityError("INSERT …", {}, Exception("dup key"))
+        calls["row"] += 1
+        result = MagicMock()
+        result.fetchone.return_value = MagicMock(id=7)
+        return result
+
+    conn.execute.side_effect = execute_side_effect
+    ids, failures = db.insert_batch("tbl", [{"data_id": "a", "feat": 1}])
+    # Bulk insert tried once (no retry on permanent error), then the
+    # per-record path took over and succeeded for this single row.
+    assert calls["bulk"] == 1, "permanent error must not be retried"
+    assert ids == [7]
+
+
+def test_insert_batch_gives_up_after_max_retries(db, mock_engine_factory):
+    """If a transient error persists, retry caps at 3 attempts and falls
+    to the per-row path (which will see the same error and record the
+    failure)."""
+    from sqlalchemy.exc import OperationalError
+    ce, engine, conn = mock_engine_factory
+    _seed_table(db)
+
+    err = OperationalError(
+        "INSERT …", {}, Exception("MySQL server has gone away")
+    )
+
+    def execute_side_effect(stmt, *a, **k):
+        raise err
+
+    conn.execute.side_effect = execute_side_effect
+    ids, failures = db.insert_batch("tbl", [{"data_id": "a", "feat": 1}])
+    # All paths fail; the record lands in failures with the underlying error.
+    assert ids == []
     assert len(failures) == 1
-    assert "Database connection error" in failures[0]["error"]
+    assert "gone away" in failures[0]["error"]
 
 
 # ---------------------------------------------------------------------------
