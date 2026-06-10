@@ -208,3 +208,79 @@ def test_create_dataset_local_mode():
         result = client.create_dataset(ingestor_id="ing", category="x")
     assert result["id"] == "mock_dataset_id"
     post.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# 401 auto-refresh (backend/#772 P2)
+# ---------------------------------------------------------------------------
+
+def test_authed_request_refreshes_token_on_401():
+    """A 401 on an authenticated call triggers ONE refresh + retry. The
+    refresh path rotates the token to a fresh value; the second call
+    succeeds with the new token. The terminal create_dataset / metadata
+    callback used to fail outright on multi-hour runs when the token
+    aged out — now it transparently re-mints."""
+    client = _client(BACKEND_TOKEN="old_token")
+    assert client.token == "old_token"
+    calls = []
+
+    def fake_post(url, headers=None, **kwargs):
+        calls.append(headers["Authorization"])
+        if len(calls) == 1:
+            return _resp(401, text='{"detail":"Invalid token."}')
+        return _resp(200, {"id": 7})
+
+    # Stub _refresh_token to simulate a successful rotation.
+    def fake_refresh():
+        client.token = "new_token"
+        return True
+
+    with patch.object(client.session, "post", side_effect=fake_post), \
+         patch.object(client, "_refresh_token", side_effect=fake_refresh):
+        client.create_dataset(ingestor_id="ing", category=TaskCategory.IMAGE_CLASSIFICATION)
+
+    assert len(calls) == 2, "expected one 401 + one retry"
+    assert calls[0] == "TOKEN old_token"
+    assert calls[1] == "TOKEN new_token"
+
+
+def test_authed_request_gives_up_after_one_retry(monkeypatch):
+    """If refresh doesn't change anything (no rotation, or re-auth itself
+    fails), the second attempt is NOT made — the original 401 is surfaced
+    so the caller's existing error path runs unchanged."""
+    monkeypatch.setenv("BACKEND_TOKEN", "stuck_token")
+    client = _client()
+    # No env update -> refresh returns False.
+    calls = []
+
+    def fake_post(url, headers=None, **kwargs):
+        calls.append(1)
+        return _resp(401, text='{"detail":"Invalid token."}')
+
+    with patch.object(client.session, "post", side_effect=fake_post):
+        with pytest.raises(requests.exceptions.RequestException):
+            client.create_dataset(
+                ingestor_id="ing", category=TaskCategory.IMAGE_CLASSIFICATION
+            )
+
+    # One attempt only — refresh saw no change so no retry.
+    assert len(calls) == 1
+
+
+def test_authed_request_passes_through_non_401_unchanged():
+    """Non-401 statuses (200, 4xx other than 401, 5xx) take the no-retry
+    path. Refresh logic must NOT engage on success or on a non-auth
+    failure — the per-call error handling already covers those."""
+    client = _client()
+    with patch.object(client.session, "post", return_value=_resp(200, {"id": 1})) as post:
+        client.create_dataset(ingestor_id="ing", category=TaskCategory.IMAGE_CLASSIFICATION)
+    # Exactly one call — no refresh, no retry on the happy path.
+    assert post.call_count == 1
+
+
+def test_refresh_token_noop_in_local_mode():
+    """Local mode uses a mock token and no auth network calls — refresh
+    is a no-op so test runs / dev loops don't hit the env-read path."""
+    client = _client(EDGE_ENV="local")
+    assert client._refresh_token() is False
+    assert client.token == "mock_token"
