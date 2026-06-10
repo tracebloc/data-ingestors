@@ -471,7 +471,21 @@ class BaseIngestor(ABC):
                 )
                 age = (_datetime.utcnow() - started).total_seconds()
             except Exception:
-                pass
+                # Lock metadata is corrupt (truncated file, malformed
+                # JSON, missing/un-parseable started_at). Fall back to
+                # the file's mtime as the age signal (#221 bugbot: a
+                # corrupt lock used to never auto-expire because age
+                # stayed None). Use time.time() rather than
+                # _datetime.utcnow().timestamp() — the latter is
+                # timezone-broken (naive datetime treated as local) so
+                # the cutoff would shift by the local UTC offset on
+                # non-UTC systems.
+                import time as _time
+                try:
+                    mtime = os.path.getmtime(lock_path)
+                    age = _time.time() - mtime
+                except OSError:
+                    pass
             if age is not None and age > self._TABLE_LOCK_STALE_SECONDS:
                 logger.warning(
                     f"{YELLOW}Stale lock at {lock_path} (age={age:.0f}s, "
@@ -623,20 +637,31 @@ class BaseIngestor(ABC):
         # partially-populated table and fail mid-run, with the original
         # ingestor unaware. Acquire an exclusive file-lock keyed by the
         # table name; on conflict, fail fast naming the holder. The lock
-        # is released by ``_release_table_lock`` in the finally further
-        # down (wrapping the validation + main ingest body).
+        # is released in the finally below — that wraps the ENTIRE
+        # post-acquire body so every exit path (#221 bugbot) releases,
+        # including ones the inner ``except Exception`` doesn't catch
+        # (Session() construction failure, _count_records exceptions,
+        # KeyboardInterrupt, etc.).
         _lock_path = self._acquire_table_lock()
+        try:
+            return self._ingest_with_lock(source, batch_size)
+        finally:
+            self._release_table_lock(_lock_path)
 
+    def _ingest_with_lock(
+        self, source: Any, batch_size: int = 50
+    ) -> List[Dict[str, Any]]:
+        """Inner ingest body invoked once the table lock is held. Split
+        out from ``ingest`` so the lock-release lives in a finally that
+        covers every exit path (#221 bugbot — HIGH)."""
         # Validate data before ingestion
         logger.info(f"{CYAN}Starting data validation before ingestion...{RESET}")
         try:
             self.validate_data(f"{source}")
             logger.info(f"{GREEN}Data validation completed successfully{RESET}")
         except ValueError as e:
-            self._release_table_lock(_lock_path)
             raise e
         except Exception as e:
-            self._release_table_lock(_lock_path)
             raise e
 
         batch = []
@@ -817,14 +842,8 @@ class BaseIngestor(ABC):
             except Exception as e:
                 session.rollback()
                 logger.error(f"Error during ingestion: {str(e)}")
-                # Release the table lock on the failure path too, otherwise
-                # a crashed ingest leaves a stale lock blocking re-runs
-                # until the stale-lock timeout kicks in.
-                self._release_table_lock(_lock_path)
                 raise e
 
-        # Release the table lock on clean exit (#772 P2).
-        self._release_table_lock(_lock_path)
         return failed_records
 
     def __enter__(self):

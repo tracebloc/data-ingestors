@@ -536,3 +536,79 @@ def test_release_table_lock_idempotent(tmp_path):
         path = ing._acquire_table_lock()
         ing._release_table_lock(path)
         ing._release_table_lock(path)  # idempotent, no raise
+
+
+# ---------------------------------------------------------------------------
+# #221 bugbot — lock release on every exit + mtime fallback
+# ---------------------------------------------------------------------------
+
+def test_lock_released_when_validate_data_raises(tmp_path):
+    """#221 bugbot HIGH: the original code only released the lock on
+    validation errors / inner Session except. An exception escaping the
+    pre-Session region (e.g. an unexpected error during validate_data
+    that wasn't caught by the surrounding except) used to leak the lock
+    until the stale-cutoff. try/finally now releases on every exit."""
+    from tracebloc_ingestor.config import Config as CfgCls
+    with patch.object(CfgCls, "STORAGE_PATH", str(tmp_path)):
+        ing = make_ingestor(records=[], category=None)
+        with patch.object(ing, "validate_data", side_effect=RuntimeError("boom")):
+            with pytest.raises(RuntimeError):
+                ing.ingest("src")
+        lock_path = ing._table_lock_path()
+        assert lock_path is not None
+        import os as _os
+        assert not _os.path.exists(lock_path), (
+            f"lock leaked at {lock_path} after validate_data raised"
+        )
+
+
+def test_lock_released_when_count_records_raises(tmp_path):
+    """#221 bugbot HIGH-severity scenario: a failure in
+    ``self._count_records`` (between validation and the Session block)
+    used to escape without releasing the lock — neither the validation
+    except nor the Session except covered it. try/finally fixes it."""
+    from tracebloc_ingestor.config import Config as CfgCls
+    with patch.object(CfgCls, "STORAGE_PATH", str(tmp_path)):
+        ing = make_ingestor(records=[], category=None)
+        with patch.object(ing, "validate_data", return_value=True), \
+             patch.object(ing, "_count_records", side_effect=RuntimeError("ouch")):
+            with pytest.raises(RuntimeError):
+                ing.ingest("src")
+        import os as _os
+        assert not _os.path.exists(ing._table_lock_path()), "lock leaked"
+
+
+def test_acquire_table_lock_recovers_from_corrupt_lock_via_mtime(tmp_path):
+    """#221 bugbot MED: when the lock metadata is unparseable (empty
+    file, invalid JSON, missing started_at), staleness used to skip the
+    cleanup — age stayed None and the lock blocked indefinitely. The
+    file's mtime now serves as a fallback age signal."""
+    import os as _os
+    import json
+    from tracebloc_ingestor.config import Config as CfgCls
+    with patch.object(CfgCls, "STORAGE_PATH", str(tmp_path)):
+        ing = make_ingestor(table_name="dataset_corrupt", category=None)
+        lock_path = ing._table_lock_path()
+        with open(lock_path, "w"):
+            pass  # empty file -> JSON parse fails
+        old = _os.path.getmtime(lock_path) - (13 * 3600)  # 13h ago
+        _os.utime(lock_path, (old, old))
+        path = ing._acquire_table_lock()
+        assert path == lock_path
+        meta = json.loads(open(lock_path).read())
+        assert meta["ingestor_id"] == ing.ingestor_id
+        ing._release_table_lock(lock_path)
+
+
+def test_acquire_table_lock_corrupt_but_fresh_blocks(tmp_path):
+    """A corrupt lock that's RECENT (not stale by mtime) still blocks
+    the second ingest — we don't auto-clear; the user has to remove it
+    manually. Boundary test against the mtime fallback."""
+    from tracebloc_ingestor.config import Config as CfgCls
+    with patch.object(CfgCls, "STORAGE_PATH", str(tmp_path)):
+        ing = make_ingestor(table_name="dataset_corrupt", category=None)
+        lock_path = ing._table_lock_path()
+        with open(lock_path, "w"):
+            pass  # empty, JSON parse fails, mtime is now (fresh)
+        with pytest.raises(RuntimeError, match="already running"):
+            ing._acquire_table_lock()
