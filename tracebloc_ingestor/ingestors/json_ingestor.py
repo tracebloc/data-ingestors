@@ -21,36 +21,39 @@ def _peek_json_shape(path: Path) -> Optional[str]:
     objects by peeking at the first non-whitespace character.
 
     Returns ``"array"`` for ``[...]``, ``"object"`` for ``{...}``, or
-    None if the file is empty / unreadable / starts with anything else
-    (the caller will raise the right error). The peek reads at most a
-    few hundred bytes — bounded by the leading whitespace, which is
-    trivial — so it's safe to call before deciding the streaming vs
-    full-load path in ``read_data`` and ``_count_records``.
+    None if the file is empty / starts with anything else (the caller
+    will raise the right error). The peek reads at most a few hundred
+    bytes — bounded by the leading whitespace.
+
+    OSError is intentionally NOT caught here (#222 bugbot): a permission-
+    denied / unreadable file used to be swallowed into None, then
+    ``read_data`` raised a misleading ``ValueError("object or array")``
+    instead of the underlying I/O error. Let the caller see the real
+    cause — ``read_data`` already had a ``FileNotFoundError`` guard
+    before this function runs, and any other OSError is a real problem
+    the user needs to know about.
     """
-    try:
-        with open(path, "rb") as f:
-            # Read in small chunks until we see a non-whitespace byte.
-            buf = b""
-            while True:
-                chunk = f.read(1024)
-                if not chunk:
-                    break
-                buf += chunk
-                stripped = buf.lstrip()
-                if stripped:
-                    first = stripped[:1]
-                    if first == b"[":
-                        return "array"
-                    if first == b"{":
-                        return "object"
-                    return None  # neither — let downstream raise
-                if len(buf) > 65536:
-                    # Defensive: 64 KB of leading whitespace is pathological;
-                    # bail rather than read the whole file.
-                    return None
-        return None
-    except OSError:
-        return None
+    with open(path, "rb") as f:
+        # Read in small chunks until we see a non-whitespace byte.
+        buf = b""
+        while True:
+            chunk = f.read(1024)
+            if not chunk:
+                break
+            buf += chunk
+            stripped = buf.lstrip()
+            if stripped:
+                first = stripped[:1]
+                if first == b"[":
+                    return "array"
+                if first == b"{":
+                    return "object"
+                return None  # neither — let downstream raise
+            if len(buf) > 65536:
+                # Defensive: 64 KB of leading whitespace is pathological;
+                # bail rather than read the whole file.
+                return None
+    return None
 
 from .base import BaseIngestor
 from ..database import Database
@@ -335,30 +338,20 @@ class JSONIngestor(BaseIngestor):
                 # record is by definition tractable). Parse non-incrementally.
                 with open(file_path, "r", encoding="utf-8") as f:
                     record = json.load(f)
-                records: Generator[Any, None, None] = iter([record])
-            elif shape == "array":
-                # Array form: stream item-by-item. Memory cost is bounded
-                # by the largest *record* (not the full file).
-                records = ijson.items(open(file_path, "rb"), "item")
-            else:
+                yield from self._iter_validated_records([record])
+                return
+            if shape != "array":
                 raise ValueError(
                     "JSON data must be an object or array of objects"
                 )
-
-            for record in records:
-                if not isinstance(record, dict):
-                    logger.warning(
-                        f"{YELLOW}Skipping invalid record: {record}{RESET}"
-                    )
-                    continue
-                try:
-                    self._validate_record(record)
-                    yield record  # Let base class handle the cleaning and unique ID mapping
-                except ValueError as e:
-                    logger.warning(
-                        f"{YELLOW}Skipping invalid record: {str(e)}{RESET}"
-                    )
-                    continue
+            # Array form: stream item-by-item. Memory cost is bounded
+            # by the largest *record* (not the full file). The file
+            # handle is opened in a `with` so a partial-consume / early
+            # exit / parse error closes it deterministically (#222
+            # bugbot — previously a bare ``open(...)`` was passed to
+            # ``ijson.items``, leaking the descriptor until GC).
+            with open(file_path, "rb") as f:
+                yield from self._iter_validated_records(ijson.items(f, "item"))
 
         except (json.JSONDecodeError, ijson.JSONError) as e:
             logger.error(f"{RED}Error parsing JSON file: {str(e)}{RESET}")
@@ -371,6 +364,29 @@ class JSONIngestor(BaseIngestor):
             logger.error(f"{RED}Unexpected error reading JSON: {str(e)}{RESET}")
             raise
 
+    def _iter_validated_records(
+        self, records: Any
+    ) -> Generator[Dict[str, Any], None, None]:
+        """Shared per-record validation + yield loop used by both the
+        single-object and array-streaming paths in ``read_data``. Factored
+        out so the array path can ``yield from`` it inside the ``with
+        open(...)`` block — the file handle stays open exactly as long as
+        the generator is being consumed."""
+        for record in records:
+            if not isinstance(record, dict):
+                logger.warning(
+                    f"{YELLOW}Skipping invalid record: {record}{RESET}"
+                )
+                continue
+            try:
+                self._validate_record(record)
+                yield record  # Let base class handle the cleaning and unique ID mapping
+            except ValueError as e:
+                logger.warning(
+                    f"{YELLOW}Skipping invalid record: {str(e)}{RESET}"
+                )
+                continue
+
     def _count_records(self, file_path: str) -> Optional[int]:
         """Count total records in JSON file without materialising it.
 
@@ -382,6 +398,17 @@ class JSONIngestor(BaseIngestor):
         try:
             shape = _peek_json_shape(Path(file_path))
             if shape == "object":
+                # #222 bugbot: don't return 1 based on the peek alone — a
+                # truncated / invalid JSON object would advertise 1 record
+                # to the progress bar and then make ``read_data`` raise a
+                # decode error mid-ingest. Validate parseability via
+                # ``json.load`` (single-object form ingests one record by
+                # definition — same as ``read_data`` does for this shape,
+                # so the parse cost is paid either way). A bad object
+                # returns None so the progress bar shows "unknown" rather
+                # than a misleading "1 record" that fails mid-ingest.
+                with open(file_path, "r", encoding="utf-8") as f:
+                    json.load(f)
                 return 1
             if shape == "array":
                 with open(file_path, "rb") as f:

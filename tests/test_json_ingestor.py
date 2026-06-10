@@ -333,3 +333,59 @@ def test_read_data_invalid_top_level_still_rejected(tmp_path):
     p.write_text("42")  # bare number
     with pytest.raises(ValueError, match="object or array"):
         list(make_json_ingestor().read_data(str(p)))
+
+
+# ---------------------------------------------------------------------------
+# #222 bugbot — file-handle leak, count-skipped-parse, peek-hides-error
+# ---------------------------------------------------------------------------
+
+def test_array_streaming_closes_file_handle_on_partial_consume(tmp_path):
+    """#222 bugbot MED: the array path used to pass a bare
+    ``open(..., 'rb')`` into ``ijson.items``, so the descriptor stayed
+    open until the inner iterator and outer generator were GC'd —
+    leaking handles across repeated ingests. The file handle is now
+    inside a ``with`` block in read_data, so partial consumption
+    (close the generator early) deterministically closes the file."""
+    p = _write_json(tmp_path, [{"a": i} for i in range(100)])
+    ing = make_json_ingestor()
+    gen = ing.read_data(str(p))
+    first = next(gen)
+    assert first["a"] == 0
+    # Close the generator without consuming the rest — the contextmanager
+    # in read_data must close the underlying file.
+    gen.close()
+    # Subsequent reads should be possible (file isn't locked, descriptor
+    # was released). We re-open to confirm.
+    with open(p, "rb") as f:
+        assert f.read(1) == b"["
+
+
+def test_count_records_object_validates_parseability(tmp_path):
+    """#222 bugbot MED: returning 1 based on the peek alone for an
+    object-shaped file used to misreport a TRUNCATED object as one
+    record — the progress bar then expected 1, but ``read_data`` would
+    raise a decode error mid-ingest. Now the count path actually parses
+    the object via ijson; a broken object returns None."""
+    p = tmp_path / "broken.json"
+    p.write_text('{"a": 1, "b":')  # starts with `{`, truncated mid-value
+    # Peek -> "object", but the file isn't parseable -> count should be None.
+    assert make_json_ingestor()._count_records(str(p)) is None
+
+
+def test_count_records_object_well_formed_returns_one(tmp_path):
+    """Positive boundary for the previous test: a well-formed object
+    still reports 1 — the count path validates, doesn't reject good
+    input."""
+    p = _write_json(tmp_path, {"a": 1, "b": "ok"})
+    assert make_json_ingestor()._count_records(str(p)) == 1
+
+
+def test_peek_propagates_os_read_errors(tmp_path):
+    """#222 bugbot MED: ``_peek_json_shape`` used to swallow ``OSError``
+    into None, then ``read_data`` raised a misleading 'object or array'
+    error instead of the underlying permission-denied / read failure.
+    The OSError now propagates."""
+    from tracebloc_ingestor.ingestors.json_ingestor import _peek_json_shape
+    nonexistent = tmp_path / "no_such_dir" / "x.json"
+    with pytest.raises(OSError):
+        _peek_json_shape(nonexistent)
