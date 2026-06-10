@@ -384,6 +384,50 @@ def test_ingest_fails_loud_when_backend_registration_step_fails(failing_step):
     ing.api_client.create_dataset.assert_not_called()
 
 
+def test_ingest_skips_edge_label_call_for_self_supervised_categories():
+    """Issue #213: self-supervised categories (MLM, …) have no `label` column,
+    so the backend's edge-label endpoint returns a misleading HTTP 400
+    ('No data found') even though the table has rows. Gate the call so it
+    only runs for label-carrying categories. The remaining registration
+    steps (send_global_meta_meta, prepare_dataset, create_dataset) still run."""
+    from tracebloc_ingestor.utils.constants import TaskCategory
+    records = [{"a": "1", "filename": "f1"}]
+    ing = make_ingestor(
+        records=records,
+        category=TaskCategory.MASKED_LANGUAGE_MODELING,
+        label_column=None,
+    )
+    # Patch validate_data + map_file_transfer to skip real-filesystem checks;
+    # the gate we're testing lives at the registration block AFTER ingest.
+    with patch.object(base_mod, "Session") as Sess, \
+         patch.object(ing, "validate_data", return_value=True), \
+         patch.object(base_mod, "map_file_transfer", side_effect=lambda c, r, o: r):
+        Sess.return_value.__enter__.return_value = MagicMock()
+        ing.ingest("src", batch_size=10)
+    ing.api_client.send_generate_edge_label_meta.assert_not_called()
+    ing.api_client.send_global_meta_meta.assert_called_once()
+    ing.api_client.prepare_dataset.assert_called_once()
+    ing.api_client.create_dataset.assert_called_once()
+
+
+def test_ingest_still_calls_edge_label_for_label_carrying_categories():
+    """Regression guard for the gate above: a non-self-supervised category
+    still calls the edge-label endpoint."""
+    from tracebloc_ingestor.utils.constants import TaskCategory
+    records = [{"a": "1", "filename": "f1"}]
+    ing = make_ingestor(
+        records=records,
+        category=TaskCategory.IMAGE_CLASSIFICATION,
+        label_column="a",
+    )
+    with patch.object(base_mod, "Session") as Sess, \
+         patch.object(ing, "validate_data", return_value=True), \
+         patch.object(base_mod, "map_file_transfer", side_effect=lambda c, r, o: r):
+        Sess.return_value.__enter__.return_value = MagicMock()
+        ing.ingest("src", batch_size=10)
+    ing.api_client.send_generate_edge_label_meta.assert_called_once()
+
+
 def test_ingest_skips_records_that_fail_processing():
     # invalid intent -> process_record returns None -> counted as skipped
     records = [{"a": "1", "filename": "f1"}]
@@ -612,3 +656,69 @@ def test_acquire_table_lock_corrupt_but_fresh_blocks(tmp_path):
             pass  # empty, JSON parse fails, mtime is now (fresh)
         with pytest.raises(RuntimeError, match="already running"):
             ing._acquire_table_lock()
+
+
+# ---------------------------------------------------------------------------
+# SRC_PATH pre-flight (validate_data) — #772 P2 / PR #218 (already on develop)
+# ---------------------------------------------------------------------------
+
+def test_check_src_path_empty_raises(clean_env):
+    # SRC_PATH unset / blank -> N copies of "Source image not found" with no
+    # actionable cause. Fail fast with the real reason.
+    clean_env.setenv("SRC_PATH", "")
+    with pytest.raises(RuntimeError, match="SRC_PATH is empty"):
+        BaseIngestor._check_src_path()
+
+
+def test_check_src_path_unset_raises(clean_env):
+    # SRC_PATH not in env at all -> same outcome.
+    clean_env.delenv("SRC_PATH", raising=False)
+    with pytest.raises(RuntimeError, match="SRC_PATH is empty"):
+        BaseIngestor._check_src_path()
+
+
+def test_check_src_path_relative_raises(clean_env):
+    # A relative SRC_PATH silently joins to a relative path at file-lookup
+    # time; the validator surfaces the misconfiguration before that point.
+    clean_env.setenv("SRC_PATH", "data/shared")  # not absolute
+    with pytest.raises(RuntimeError, match="not an absolute path"):
+        BaseIngestor._check_src_path()
+
+
+def test_check_src_path_nonexistent_raises(clean_env, tmp_path):
+    missing = tmp_path / "never_staged"
+    clean_env.setenv("SRC_PATH", str(missing))
+    with pytest.raises(RuntimeError, match="does not exist"):
+        BaseIngestor._check_src_path()
+
+
+def test_check_src_path_accepts_real_directory(clean_env, tmp_path):
+    # A properly-staged absolute directory passes — no raise.
+    clean_env.setenv("SRC_PATH", str(tmp_path))
+    BaseIngestor._check_src_path()  # must not raise
+
+
+def test_check_src_path_only_runs_for_file_bearing_categories():
+    """The guard is gated on category — tabular / time-series have no
+    sidecar dirs under SRC_PATH, so the preflight isn't applied (their
+    CSV path is checked separately). This keeps tabular-only ingests
+    working even when SRC_PATH isn't set."""
+    from tracebloc_ingestor.utils.constants import TaskCategory
+    from tracebloc_ingestor.ingestors.base import _SRC_PATH_REQUIRED_CATEGORIES
+    for cat in (
+        TaskCategory.TABULAR_CLASSIFICATION,
+        TaskCategory.TABULAR_REGRESSION,
+        TaskCategory.TIME_SERIES_FORECASTING,
+        TaskCategory.TIME_TO_EVENT_PREDICTION,
+    ):
+        assert cat not in _SRC_PATH_REQUIRED_CATEGORIES
+    # Image / text / segmentation / MLM all need a staged SRC_PATH.
+    for cat in (
+        TaskCategory.IMAGE_CLASSIFICATION,
+        TaskCategory.OBJECT_DETECTION,
+        TaskCategory.KEYPOINT_DETECTION,
+        TaskCategory.SEMANTIC_SEGMENTATION,
+        TaskCategory.TEXT_CLASSIFICATION,
+        TaskCategory.MASKED_LANGUAGE_MODELING,
+    ):
+        assert cat in _SRC_PATH_REQUIRED_CATEGORIES

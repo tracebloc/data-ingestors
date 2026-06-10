@@ -265,13 +265,159 @@ def test_insert_batch_individual_failure_recorded(db, mock_engine_factory):
 
 
 def test_insert_batch_connection_error(db, mock_engine_factory):
+    """A failure of ``engine.connect()`` itself (different from a per-
+    statement error inside the connection) is caught at the outer ``try``
+    and reported as a 'Database connection error' failure. Tenacity's
+    retry covers transient per-statement errors; the connect-itself
+    path is separate (the engine has its own pool / pre-ping retry).
+    """
     ce, engine, conn = mock_engine_factory
     _seed_table(db)
     engine.connect.side_effect = RuntimeError("no connection")
     ids, failures = db.insert_batch("tbl", [{"data_id": "a", "feat": 1}])
     assert ids == []
+    # #219 bugbot: restore the assertions that pin the outer-connect
+    # error path (one failure entry, message mentions the connection).
     assert len(failures) == 1
     assert "Database connection error" in failures[0]["error"]
+
+
+# ---------------------------------------------------------------------------
+# Transient DB retry via tenacity — backend/#772 P2
+# ---------------------------------------------------------------------------
+
+def test_insert_batch_retries_on_transient_operational_error(db, mock_engine_factory):
+    """A transient MySQL hiccup (server-gone-away, lost connection,
+    deadlock) used to fail every in-flight batch permanently. tenacity
+    now retries up to 3 attempts with exponential backoff; the second
+    attempt succeeds in this test."""
+    from sqlalchemy.exc import OperationalError
+    ce, engine, conn = mock_engine_factory
+    _seed_table(db)
+
+    calls = {"n": 0}
+
+    def execute_side_effect(stmt, *a, **k):
+        calls["n"] += 1
+        # First execute (the bulk insert) raises a transient error once,
+        # then succeeds on attempt #2. Subsequent execute calls (the
+        # SELECT for ids) succeed.
+        if calls["n"] == 1:
+            raise OperationalError(
+                "INSERT …", {}, Exception("MySQL server has gone away")
+            )
+        result = MagicMock()
+        result.fetchall.return_value = [MagicMock(id=42)]
+        return result
+
+    conn.execute.side_effect = execute_side_effect
+    ids, failures = db.insert_batch("tbl", [{"data_id": "a", "feat": 1}])
+    # Retry kicked in: the bulk insert was attempted twice (fail, succeed),
+    # then the id SELECT ran once.
+    assert calls["n"] >= 2
+    assert ids == [42]
+    assert failures == []
+
+
+def test_insert_batch_does_not_retry_permanent_error_falls_to_per_row(
+    db, mock_engine_factory
+):
+    """Permanent errors (IntegrityError, DataError, …) must NOT be
+    retried — they reflect bad data, not a transient blip. They fall
+    straight through to the existing per-row fallback path so the
+    offending record can be identified."""
+    from sqlalchemy.exc import IntegrityError
+    ce, engine, conn = mock_engine_factory
+    _seed_table(db)
+
+    calls = {"bulk": 0, "row": 0}
+
+    def execute_side_effect(stmt, *a, **k):
+        # The very first execute is the bulk insert: raise a permanent
+        # error. Subsequent executes (per-row inserts + SELECTs) succeed.
+        compiled = str(stmt)
+        if "INSERT" in compiled.upper() and calls["bulk"] == 0:
+            calls["bulk"] += 1
+            raise IntegrityError("INSERT …", {}, Exception("dup key"))
+        calls["row"] += 1
+        result = MagicMock()
+        result.fetchone.return_value = MagicMock(id=7)
+        return result
+
+    conn.execute.side_effect = execute_side_effect
+    ids, failures = db.insert_batch("tbl", [{"data_id": "a", "feat": 1}])
+    # Bulk insert tried once (no retry on permanent error), then the
+    # per-record path took over and succeeded for this single row.
+    assert calls["bulk"] == 1, "permanent error must not be retried"
+    assert ids == [7]
+
+
+def test_insert_batch_gives_up_after_max_retries(db, mock_engine_factory):
+    """If a transient error persists, retry caps at 3 attempts and falls
+    to the per-row path (which will see the same error and record the
+    failure)."""
+    from sqlalchemy.exc import OperationalError
+    ce, engine, conn = mock_engine_factory
+    _seed_table(db)
+
+    err = OperationalError(
+        "INSERT …", {}, Exception("MySQL server has gone away")
+    )
+
+    def execute_side_effect(stmt, *a, **k):
+        raise err
+
+    conn.execute.side_effect = execute_side_effect
+    ids, failures = db.insert_batch("tbl", [{"data_id": "a", "feat": 1}])
+    # All paths fail; the record lands in failures with the underlying error.
+    assert ids == []
+    assert len(failures) == 1
+    assert "gone away" in failures[0]["error"]
+
+
+def test_insert_batch_rolls_back_between_transient_retries(db, mock_engine_factory):
+    """#219 bugbot: SQLAlchemy puts the connection into pending-rollback
+    state after a failed statement. Without an intervening rollback(),
+    the next attempt raises PendingRollbackError — a non-transient class
+    tenacity wouldn't retry — cutting the retries short. The helper must
+    rollback BETWEEN attempts so the connection's transactional state
+    is reset before the retry runs.
+    """
+    from sqlalchemy.exc import OperationalError
+    ce, engine, conn = mock_engine_factory
+    _seed_table(db)
+
+    events = []
+    rollback_orig = conn.rollback
+
+    def track_rollback(*a, **k):
+        events.append("rollback")
+        return rollback_orig(*a, **k)
+
+    conn.rollback.side_effect = track_rollback
+
+    def execute_side_effect(stmt, *a, **k):
+        events.append("execute")
+        # Fail the bulk insert twice; the third attempt succeeds.
+        n = sum(1 for e in events if e == "execute")
+        if n <= 2:
+            raise OperationalError(
+                "INSERT …", {}, Exception("MySQL server has gone away")
+            )
+        result = MagicMock()
+        result.fetchall.return_value = [MagicMock(id=99)]
+        return result
+
+    conn.execute.side_effect = execute_side_effect
+    ids, failures = db.insert_batch("tbl", [{"data_id": "a", "feat": 1}])
+    assert ids == [99]
+    # Each transient failure inside _execute_with_retry triggers a rollback
+    # before re-raising for the next retry. Two failures -> at least two
+    # rollback calls (plus the outer commit-or-rollback path's own).
+    rollback_count = sum(1 for e in events if e == "rollback")
+    assert rollback_count >= 2, (
+        f"expected at least 2 rollbacks between retries; events={events}"
+    )
 
 
 # ---------------------------------------------------------------------------

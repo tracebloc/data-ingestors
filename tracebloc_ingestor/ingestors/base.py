@@ -45,6 +45,38 @@ _TABULAR_FAMILY_CATEGORIES = frozenset({
     TaskCategory.TIME_TO_EVENT_PREDICTION,
 })
 
+# File-bearing categories resolve every per-row sidecar against
+# ``config.SRC_PATH``. If that path is empty/unset/missing, every file
+# lookup silently falls through to a relative path (``"" + "images/x.jpg"``
+# -> ``"images/x.jpg"``), file_transfer skips every record, and the user
+# sees N copies of "Source image not found: images/x.jpg" — blaming the
+# data when the real cause is "SRC_PATH was never staged on the PVC".
+# Tabular / time-series have no sidecar dirs under SRC_PATH, so they're
+# excluded from the guard (the CSV path itself is checked elsewhere).
+_SRC_PATH_REQUIRED_CATEGORIES = frozenset({
+    TaskCategory.IMAGE_CLASSIFICATION,
+    TaskCategory.OBJECT_DETECTION,
+    TaskCategory.KEYPOINT_DETECTION,
+    TaskCategory.SEMANTIC_SEGMENTATION,
+    TaskCategory.INSTANCE_SEGMENTATION,
+    TaskCategory.TEXT_CLASSIFICATION,
+    TaskCategory.MASKED_LANGUAGE_MODELING,
+})
+
+
+# Self-supervised categories have no `label` column — the CSV manifest just
+# points at sidecar files and the model creates its own targets at training
+# time (e.g. masked_language_modeling masks tokens on-the-fly). The backend
+# correspondingly stores no edge-label metadata for these datasets, so the
+# `send_generate_edge_label_meta` call is a no-op at best and a misleading
+# HTTP 400 ("No data found for table X") at worst — see issue #213.
+# The schema (schema/ingest.v1.json) now rejects `label:` on these categories
+# at submission time; this set + the gate below are the defensive in-ingestor
+# half (script-driven runs that bypass the schema still skip the wasted call).
+_SELF_SUPERVISED_CATEGORIES = frozenset({
+    TaskCategory.MASKED_LANGUAGE_MODELING,
+})
+
 
 class IngestionSummary(NamedTuple):
     """Data class to hold ingestion summary statistics.
@@ -379,6 +411,50 @@ class BaseIngestor(ABC):
             return None
 
     @staticmethod
+    def _check_src_path() -> None:
+        """Fail fast with a clear message when ``config.SRC_PATH`` isn't set
+        or doesn't exist (#772 P2).
+
+        Every file-bearing category resolves its per-row sidecars against
+        ``config.SRC_PATH`` (file_transfer.py:105 etc.). If the env var
+        / ConfigMap key is empty, ``os.path.join("", "images", "x.jpg")``
+        returns the relative path ``"images/x.jpg"`` — every file lookup
+        fails and the user sees N copies of
+        ``Source image not found: images/x.jpg`` blaming the data, when
+        the real cause is "SRC_PATH was never set / the PVC wasn't
+        staged before the Job ran". One clear error at preflight beats
+        one cryptic error per row.
+        """
+        # Late import: keep this module free of a Config singleton at
+        # import time so unit tests can monkeypatch the env per test.
+        from ..config import Config
+        src = Config().SRC_PATH
+        if not src or not str(src).strip():
+            raise RuntimeError(
+                f"{RED}SRC_PATH is empty. Set it to the cluster-PVC path where "
+                f"your data is staged (e.g. /data/shared/<dataset>/). The "
+                f"chart's data-staging recipe (kubectl cp or init-container "
+                f"sync) must run before the ingest Job — see "
+                f"tracebloc/client/ingestor/README.md.{RESET}"
+            )
+        if not os.path.isabs(src):
+            raise RuntimeError(
+                f"{RED}SRC_PATH={src!r} is not an absolute path. The ingestor "
+                f"resolves every sidecar file against it via os.path.join, "
+                f"and a relative SRC_PATH silently falls through to the "
+                f"working directory — every file lookup then fails with a "
+                f"misleading 'Source image not found'. Use an absolute path "
+                f"(e.g. /data/shared/<dataset>/).{RESET}"
+            )
+        if not os.path.isdir(src):
+            raise RuntimeError(
+                f"{RED}SRC_PATH={src!r} does not exist or is not a directory. "
+                f"Did the data-staging step (kubectl cp / init-container sync) "
+                f"run before the ingest Job? Verify with "
+                f"`kubectl exec <pod> -- ls {src}`.{RESET}"
+            )
+
+    @staticmethod
     def _check_csv_encoding(source: Any) -> None:
         """Fail fast with a clear message if a CSV source is not valid UTF-8.
 
@@ -554,6 +630,14 @@ class BaseIngestor(ABC):
         Raises:
             ValueError: If validation fails
         """
+        # Pre-flight: SRC_PATH must be a real absolute directory or every
+        # file_transfer falls through and surfaces as N copies of
+        # "Source image not found: images/x.jpg" — blames the data when
+        # the real cause is "SRC_PATH was never staged / set" (#772 P2).
+        # File-bearing categories only (tabular has nothing under SRC_PATH).
+        if self.category in _SRC_PATH_REQUIRED_CATEGORIES:
+            self._check_src_path()
+
         # Pre-flight: a non-UTF-8 CSV otherwise surfaces as a misleading
         # "No data found" (validators read UTF-8 and swallow decode errors).
         # Catch it once here with a clear, actionable message.
@@ -800,14 +884,26 @@ class BaseIngestor(ABC):
                 # the failure surfaces (the CLI streams these logs live and marks
                 # the Job failed). The api_client has already logged the
                 # underlying HTTP detail before returning False.
-                if not self.api_client.send_generate_edge_label_meta(
-                    self.table_name, self.ingestor_id, self.intent
-                ):
-                    raise RuntimeError(
-                        "Backend rejected edge-label metadata; the dataset was "
-                        "NOT registered (its rows are already in the database). "
-                        "See the logged API error above."
-                    )
+                # Skip the edge-label backend call for self-supervised
+                # categories (#213). They have no `label` column on the rows;
+                # the backend's edge-label endpoint then returns a misleading
+                # HTTP 400 ("No data found for table X" — wrong, the table HAS
+                # rows, it just has no edge labels). Combined with PR #187's
+                # fail-loud behaviour, the user saw a registration crash that
+                # had nothing to do with the actual misconfiguration. The
+                # schema now rejects `label:` on these categories at
+                # submission, but this gate is the defensive in-ingestor half
+                # so script-driven / older-schema runs don't trip the same
+                # trap.
+                if self.category not in _SELF_SUPERVISED_CATEGORIES:
+                    if not self.api_client.send_generate_edge_label_meta(
+                        self.table_name, self.ingestor_id, self.intent
+                    ):
+                        raise RuntimeError(
+                            "Backend rejected edge-label metadata; the dataset was "
+                            "NOT registered (its rows are already in the database). "
+                            "See the logged API error above."
+                        )
 
                 schema_dict = self.database.get_table_schema(self.table_name)
                 if not self.api_client.send_global_meta_meta(
