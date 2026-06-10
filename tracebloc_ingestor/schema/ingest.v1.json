@@ -397,6 +397,20 @@
         "required": ["category"]
       },
       "then": { "required": ["label"] }
+    },
+    {
+      "description": "Self-supervised categories MUST NOT set `label`. The shipped CSV has no label column, and the framework registers no edge-label metadata for them. Setting `label` anyway used to ingest rows successfully, then crash at backend registration with a misleading HTTP 400 'No data found' (issue #213). Reject at submission instead.",
+      "if": {
+        "properties": {
+          "category": {
+            "enum": [
+              "masked_language_modeling"
+            ]
+          }
+        },
+        "required": ["category"]
+      },
+      "then": { "not": { "required": ["label"] } }
     }
   ]
 }

@@ -384,6 +384,50 @@ def test_ingest_fails_loud_when_backend_registration_step_fails(failing_step):
     ing.api_client.create_dataset.assert_not_called()
 
 
+def test_ingest_skips_edge_label_call_for_self_supervised_categories():
+    """Issue #213: self-supervised categories (MLM, …) have no `label` column,
+    so the backend's edge-label endpoint returns a misleading HTTP 400
+    ('No data found') even though the table has rows. Gate the call so it
+    only runs for label-carrying categories. The remaining registration
+    steps (send_global_meta_meta, prepare_dataset, create_dataset) still run."""
+    from tracebloc_ingestor.utils.constants import TaskCategory
+    records = [{"a": "1", "filename": "f1"}]
+    ing = make_ingestor(
+        records=records,
+        category=TaskCategory.MASKED_LANGUAGE_MODELING,
+        label_column=None,
+    )
+    # Patch validate_data + map_file_transfer to skip real-filesystem checks;
+    # the gate we're testing lives at the registration block AFTER ingest.
+    with patch.object(base_mod, "Session") as Sess, \
+         patch.object(ing, "validate_data", return_value=True), \
+         patch.object(base_mod, "map_file_transfer", side_effect=lambda c, r, o: r):
+        Sess.return_value.__enter__.return_value = MagicMock()
+        ing.ingest("src", batch_size=10)
+    ing.api_client.send_generate_edge_label_meta.assert_not_called()
+    ing.api_client.send_global_meta_meta.assert_called_once()
+    ing.api_client.prepare_dataset.assert_called_once()
+    ing.api_client.create_dataset.assert_called_once()
+
+
+def test_ingest_still_calls_edge_label_for_label_carrying_categories():
+    """Regression guard for the gate above: a non-self-supervised category
+    still calls the edge-label endpoint."""
+    from tracebloc_ingestor.utils.constants import TaskCategory
+    records = [{"a": "1", "filename": "f1"}]
+    ing = make_ingestor(
+        records=records,
+        category=TaskCategory.IMAGE_CLASSIFICATION,
+        label_column="a",
+    )
+    with patch.object(base_mod, "Session") as Sess, \
+         patch.object(ing, "validate_data", return_value=True), \
+         patch.object(base_mod, "map_file_transfer", side_effect=lambda c, r, o: r):
+        Sess.return_value.__enter__.return_value = MagicMock()
+        ing.ingest("src", batch_size=10)
+    ing.api_client.send_generate_edge_label_meta.assert_called_once()
+
+
 def test_ingest_skips_records_that_fail_processing():
     # invalid intent -> process_record returns None -> counted as skipped
     records = [{"a": "1", "filename": "f1"}]
