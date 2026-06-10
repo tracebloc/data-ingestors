@@ -180,6 +180,10 @@ def test_char_empty_cells_yield_python_none(tmp_path):
     assert records[1]["code"] is None
 
 
+# ---------------------------------------------------------------------------
+# #771 — IEEE float overflow defense at cast (PR #215 — already on develop)
+# ---------------------------------------------------------------------------
+
 def test_float_overflow_raises_at_cast(tmp_path):
     """`pd.to_numeric("1e400")` returns +inf silently — without a guard
     the overflowed value lands in MySQL as a legitimate-looking number.
@@ -229,3 +233,52 @@ def test_float_missing_cells_still_pass_through_as_null(tmp_path):
     assert records[0]["x"] == 1.5
     assert pd.isna(records[1]["x"]), f"expected NaN, got {records[1]['x']!r}"
     assert records[2]["x"] == 3.0
+
+
+# ---------------------------------------------------------------------------
+# #765 item 3 — date cast policy aligned with numeric (errors="raise")
+# ---------------------------------------------------------------------------
+
+def test_date_unparseable_raises_at_cast_not_silent_null(tmp_path):
+    """Backend #765 item 3: the date branches were errors="coerce" (silent
+    NULL) while the numeric branches were errors="raise" — opposite
+    policies for the same bad-input class. Aligning on `raise`: DataValidator
+    is the gate (catches bad dates at preflight); the cast trusts what
+    passes. A token that reaches the cast un-parseable means a validator
+    gap or schema mismatch — surface it loudly instead of silently NULLing.
+    """
+    p = tmp_path / "d.csv"
+    p.write_text("d\n2024-01-01\nnot-a-date\n")
+    ing = make_csv_ingestor(schema={"d": "DATE"})
+    with pytest.raises(ValueError, match="un-parseable date"):
+        list(ing.read_data(str(p)))
+
+
+def test_datetime_unparseable_raises_at_cast(tmp_path):
+    p = tmp_path / "d.csv"
+    p.write_text("ts\n2024-01-01 10:00:00\nbroken\n")
+    ing = make_csv_ingestor(schema={"ts": "DATETIME"})
+    with pytest.raises(ValueError, match="un-parseable date"):
+        list(ing.read_data(str(p)))
+
+
+def test_time_unparseable_raises_at_cast(tmp_path):
+    p = tmp_path / "d.csv"
+    p.write_text("t\n10:00:00\nnoon\n")
+    ing = make_csv_ingestor(schema={"t": "TIME"})
+    with pytest.raises(ValueError, match="un-parseable date"):
+        list(ing.read_data(str(p)))
+
+
+def test_date_missing_cells_still_pass_through_as_null(tmp_path):
+    """The strict cast must NOT flag legitimate missing values: an empty
+    date cell stays as NaT/None. Only PRESENT, un-parseable values raise."""
+    p = tmp_path / "d.csv"
+    p.write_text("d,n\n2024-01-01,1\n,2\n2024-02-02,3\n")
+    ing = make_csv_ingestor(
+        schema={"d": "DATETIME", "n": "INT"},
+        category=TaskCategory.TABULAR_CLASSIFICATION,
+    )
+    records = list(ing.read_data(str(p)))
+    assert len(records) == 3
+    assert records[1]["d"] is None or pd.isna(records[1]["d"])
