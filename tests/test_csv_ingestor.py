@@ -181,6 +181,61 @@ def test_char_empty_cells_yield_python_none(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# #771 — IEEE float overflow defense at cast (PR #215 — already on develop)
+# ---------------------------------------------------------------------------
+
+def test_float_overflow_raises_at_cast(tmp_path):
+    """`pd.to_numeric("1e400")` returns +inf silently — without a guard
+    the overflowed value lands in MySQL as a legitimate-looking number.
+    DataValidator already rejects inf at preflight; this is the cast-path
+    defense-in-depth (backend #771 / harness #186). Surfaces the overflow
+    with a clear per-column error instead of silent corruption."""
+    p = tmp_path / "d.csv"
+    p.write_text("x\n1e400\n")
+    ing = make_csv_ingestor(schema={"x": "FLOAT"})
+    with pytest.raises(ValueError, match="overflow"):
+        list(ing.read_data(str(p)))
+
+
+def test_float_overflow_negative_also_caught(tmp_path):
+    p = tmp_path / "d.csv"
+    p.write_text("x\n-1e400\n")
+    ing = make_csv_ingestor(schema={"x": "FLOAT"})
+    with pytest.raises(ValueError, match="overflow"):
+        list(ing.read_data(str(p)))
+
+
+def test_int_overflow_via_float_path_caught(tmp_path):
+    """An INT column receiving an overflowing token (e.g. a Python-int
+    literal beyond float64 range) is caught at the same guard before
+    the Int64 cast can mask it."""
+    p = tmp_path / "d.csv"
+    p.write_text("n\n1e400\n")
+    ing = make_csv_ingestor(schema={"n": "INT"})
+    with pytest.raises(ValueError, match="overflow"):
+        list(ing.read_data(str(p)))
+
+
+def test_float_missing_cells_still_pass_through_as_null(tmp_path):
+    """The overflow guard must NOT flag legitimate missing values:
+    an empty cell becomes NaN in `original` and stays NaN in `converted`
+    — the helper only flags non-finite values whose source was non-NA.
+    A naive `~np.isfinite(converted)` check would crash on this CSV."""
+    p = tmp_path / "d.csv"
+    # Two-column form so the second row's empty `x` is unambiguously a
+    # missing cell (rather than a blank line that pandas would skip).
+    p.write_text("x,n\n1.5,1\n,2\n3.0,3\n")
+    ing = make_csv_ingestor(
+        schema={"x": "FLOAT", "n": "INT"},
+        category=TaskCategory.TABULAR_CLASSIFICATION,
+    )
+    records = list(ing.read_data(str(p)))
+    assert records[0]["x"] == 1.5
+    assert pd.isna(records[1]["x"]), f"expected NaN, got {records[1]['x']!r}"
+    assert records[2]["x"] == 3.0
+
+
+# ---------------------------------------------------------------------------
 # #765 item 3 — date cast policy aligned with numeric (errors="raise")
 # ---------------------------------------------------------------------------
 
