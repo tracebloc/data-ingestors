@@ -31,6 +31,48 @@ __all__ = ["Ingestor"]
 # explicitly via csv_options; the YAML path can't express it because
 # schema/ingest.v1.json restricts spec.csv_options to a small whitelist.
 _TABULAR_NA_VALUES = ["", "NA", "NULL", "None"]
+
+
+def _cast_datetime_strict(series: pd.Series, column: str, dtype: str) -> pd.Series:
+    """Cast a CSV column to datetime with the SAME error policy as numeric
+    columns: an un-parseable token raises (instead of silently coercing
+    to NaT).
+
+    Backend #765 item 3: date cast was ``errors="coerce"`` (silent NULL)
+    while numeric cast was ``errors="raise"`` — opposite policies for
+    the same bad-input class, adjacent lines. Pick one: both ``raise``,
+    because ``DataValidator`` is the gate (catches bad dates with a
+    clear per-column error at preflight), and the cast layer trusts
+    what passed it. A token that reaches the cast and fails to parse
+    means either a validator gap or a schema-mismatch — both surface
+    here as a clear ``ValueError`` instead of becoming a silent NULL.
+
+    Genuine missing cells (already ``NaN`` / ``NA`` in the input) stay
+    that way: ``pd.to_datetime`` with ``errors="raise"`` treats pre-
+    existing NaN as missing (returns ``NaT``), it only raises on a
+    *present* value that fails to parse.
+    """
+    try:
+        return pd.to_datetime(series, errors="raise", format="mixed")
+    except Exception as exc:
+        # Surface the offender per the project convention: name the
+        # column, dtype, and a sample of the bad tokens.
+        offenders = (
+            series[
+                pd.to_datetime(series, errors="coerce", format="mixed").isna()
+                & series.notna()
+            ]
+            .astype(str)
+            .head(5)
+            .tolist()
+        )
+        raise ValueError(
+            f"Column '{column}' (dtype {dtype}) has un-parseable date "
+            f"value(s). Sample: {offenders}. The cast layer raises on "
+            f"un-parseable dates (matching the numeric branch); fix the "
+            f"value(s) or declare the column as VARCHAR if the content "
+            f"isn't actually a date. (Underlying parser error: {exc})"
+        ) from exc
 _TABULAR_FAMILY_CATEGORIES = frozenset({
     TaskCategory.TABULAR_CLASSIFICATION,
     TaskCategory.TABULAR_REGRESSION,
@@ -169,16 +211,16 @@ class CSVIngestor(BaseIngestor):
                     # Full date+time. Checked before DATE/TIME because the
                     # substrings "DATE" and "TIME" both appear in "DATETIME"
                     # (and "TIME" in "TIMESTAMP").
-                    df[column] = pd.to_datetime(df[column], errors="coerce", format="mixed")
+                    df[column] = _cast_datetime_strict(df[column], column, dtype)
                 elif "DATE" in dtype.upper():
                     # DATE only — emit a plain date so the value doesn't gain a
                     # spurious time ('2026-01-02' was becoming '2026-01-02 00:00:00').
-                    df[column] = pd.to_datetime(df[column], errors="coerce", format="mixed").dt.date
+                    df[column] = _cast_datetime_strict(df[column], column, dtype).dt.date
                 elif "TIME" in dtype.upper():
                     # TIME only — emit a plain time so the value doesn't gain a
                     # spurious (today's) date ('14:30:00' was becoming
                     # '2026-06-08 14:30:00', which MySQL TIME then truncates).
-                    df[column] = pd.to_datetime(df[column], errors="coerce", format="mixed").dt.time
+                    df[column] = _cast_datetime_strict(df[column], column, dtype).dt.time
                 elif any(t in dtype.upper() for t in ("STRING", "TEXT", "VARCHAR", "CHAR")):
                     # Coerce to pandas StringDtype so missing cells become pd.NA
                     # (not float NaN), then map pd.NA -> Python None so the DB
