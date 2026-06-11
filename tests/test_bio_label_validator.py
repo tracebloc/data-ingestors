@@ -114,6 +114,25 @@ def test_filename_with_extension_not_double_appended(validator, texts_dir):
     assert result.is_valid, result.errors
 
 
+def test_resolution_matches_text_transfer_when_both_paths_exist(validator, texts_dir):
+    # texts/s1 (bare) and texts/s1.txt both exist with different word
+    # counts. text_transfer appends the extension for a bare CSV filename
+    # and copies s1.txt, so validation must align tags against s1.txt —
+    # never the bare file a filesystem probe would have found first.
+    (texts_dir / "s1").write_text("one two three four five", encoding="utf-8")
+    _write(texts_dir, "s1", "Paris is nice")  # writes s1.txt, 3 words
+
+    df = pd.DataFrame({"filename": ["s1"], "label": ["B-LOC O O"]})  # 3 tags
+    result = validator.validate(df)
+    assert result.is_valid, result.errors
+
+    # Tags sized to the bare file must fail — that file is never ingested.
+    df_bad = pd.DataFrame({"filename": ["s1"], "label": ["O O O O O"]})  # 5 tags
+    result_bad = validator.validate(df_bad)
+    assert not result_bad.is_valid
+    assert "count mismatch" in result_bad.errors[0]
+
+
 def test_error_reporting_is_capped(validator, texts_dir):
     # 60 mismatched rows -> errors are capped with a suppression notice
     n = 60

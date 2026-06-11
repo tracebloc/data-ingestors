@@ -129,26 +129,21 @@ class BIOLabelValidator(BaseValidator):
                 f"each tag must be 'O' or 'B-<TYPE>' / 'I-<TYPE>'."
             )
 
-        # Resolve the .txt the same way text_transfer does: the CSV filename
-        # may or may not already include the extension. Try as-is first, then
-        # with the extension appended, so a filename like "sample1.txt" is not
-        # looked up as "sample1.txt.txt".
-        candidates = [filename]
-        if not filename.endswith(self.extension):
-            candidates.append(f"{filename}{self.extension}")
-        text_path = next(
-            (
-                os.path.join(texts_dir, c)
-                for c in candidates
-                if os.path.isfile(os.path.join(texts_dir, c))
-            ),
-            None,
+        # Resolve the .txt with text_transfer's exact rule (shared
+        # _has_extension): append the extension only when the CSV filename
+        # has none. Deterministic on purpose — probing the filesystem for
+        # alternatives here could validate one file while text_transfer
+        # copies a different one with the same BIO labels.
+        from ..file_transfer import _has_extension
+
+        resolved = (
+            filename if _has_extension(filename) else f"{filename}{self.extension}"
         )
-        if text_path is None:
+        text_path = os.path.join(texts_dir, resolved)
+        if not os.path.isfile(text_path):
             errors.append(
                 f"{row_label}: text file not found at "
-                f"'{self.texts_path}/{filename}' (with or without "
-                f"'{self.extension}')."
+                f"'{self.texts_path}/{resolved}'."
             )
             return errors
 
