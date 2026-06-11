@@ -211,11 +211,46 @@ def test_text_classification_without_texts_rejected(validator):
         validator.validate(config)
 
 
+def test_token_classification_without_texts_rejected(validator):
+    config = _load_example("token_classification.yaml")
+    del config["texts"]
+    with pytest.raises(ValidationError):
+        validator.validate(config)
+
+
+def test_token_classification_without_label_rejected(validator):
+    config = _load_example("token_classification.yaml")
+    del config["label"]
+    with pytest.raises(ValidationError):
+        validator.validate(config)
+
+
 def test_tabular_without_schema_rejected(validator):
     config = _load_example("tabular_classification.yaml")
     del config["schema"]
     with pytest.raises(ValidationError):
         validator.validate(config)
+
+
+def test_masked_language_modeling_with_label_rejected(validator):
+    """Issue #213: self-supervised categories (MLM, …) MUST NOT carry a
+    `label:` field. The CSV has no label column, and the framework registers
+    no edge-label metadata for them — setting `label:` anyway used to ingest
+    rows successfully then crash at backend registration with a misleading
+    HTTP 400 ('No data found'). Reject at submission so the user sees the
+    real cause."""
+    config = _load_example("masked_language_modeling.yaml")
+    config["label"] = "some_column"
+    with pytest.raises(ValidationError):
+        validator.validate(config)
+
+
+def test_masked_language_modeling_without_label_accepted(validator):
+    """The shipped MLM example yaml omits `label:` by design. Confirm it
+    still validates cleanly (the new constraint is strictly additive)."""
+    config = _load_example("masked_language_modeling.yaml")
+    assert "label" not in config, "test premise: the example yaml has no label"
+    validator.validate(config)  # must not raise
 
 
 # Regression-class tasks must specify label.policy explicitly; the shorthand

@@ -103,9 +103,12 @@ def test_ingest_image_category_batches_in_loop():
     records = [{"a": "1", "filename": "f1"}, {"a": "2", "filename": "f2"}]
     ing = make_ingestor(records=records, category=TaskCategory.IMAGE_CLASSIFICATION)
     ing.database.insert_batch.return_value = ([1], [])
+    # Bypass the file-bearing-category SRC_PATH preflight (#772 P2) — this
+    # test is about batching, not the env-var guard which has its own tests.
     with patch.object(base_mod, "Session") as Sess, \
          patch.object(base_mod, "map_file_transfer", side_effect=lambda c, r, o: r), \
-         patch.object(base_mod, "map_validators", return_value=[]):
+         patch.object(base_mod, "map_validators", return_value=[]), \
+         patch.object(base_mod.BaseIngestor, "_check_src_path", return_value=None):
         Sess.return_value.__enter__.return_value = MagicMock()
         failed = ing.ingest("src", batch_size=1)
     assert failed == []

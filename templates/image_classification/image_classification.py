@@ -6,6 +6,7 @@ supporting both binary data and file-based processing.
 """
 
 import logging
+import sys
 
 from tracebloc_ingestor import Config, Database, APIClient, CSVIngestor
 from tracebloc_ingestor.utils.logging import setup_logging
@@ -23,8 +24,10 @@ logger = logging.getLogger(__name__)
 
 # Image specific options including CSV options
 image_options = {
-    "target_size": (512, 512),  # image size. Height = Width
-    "extension": FileExtension.JPG,  # allowed extension for images: jpeg, jpg, png
+    # Matches the bundled onboarding sample under data/images/ (#198).
+    # Override per dataset when running against your own data.
+    "target_size": (256, 256),  # image size. Height = Width
+    "extension": FileExtension.JPEG,
 }
 
 # CSV specific options
@@ -73,6 +76,11 @@ def main():
                     logger.warning(
                         f"Error details: {record.get('error', 'Unknown error')}"
                     )
+                # Failed records (DB insert, API send, or processing) must
+                # fail the run — exit non-zero so the K8s Job is marked
+                # failed instead of reporting silent success (SystemExit
+                # bypasses the except Exception handler below).
+                sys.exit(1)
             else:
                 logger.info("All records processed successfully")
 

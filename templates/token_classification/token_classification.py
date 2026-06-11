@@ -1,13 +1,14 @@
-"""Masked Language Modeling Data Ingestion Example.
+"""Token Classification (NER/POS) Data Ingestion Example.
 
-This example demonstrates how to ingest pre-tokenized text sequences for
-masked language modeling (MLM) into a database and optionally send metadata
-to the tracebloc API.
+This example demonstrates how to ingest token classification data — one
+``.txt`` file of whitespace-tokenized words per sample, plus a CSV whose
+``label`` column holds the space-separated BIO/IOB2 tags (exactly one tag per
+word). The on-disk layout is identical to text classification; only the label
+semantics differ (a sequence of per-token tags instead of a single class).
 
-MLM is self-supervised — no label column is needed.  Each row in the CSV
-maps to a .txt file containing a space-separated token sequence (e.g. a
-random walk over a knowledge graph).  The MLM client applies masking
-on-the-fly during training.
+Example row:
+    filename = "sentence_001",  label = "B-PER I-PER O O B-LOC"
+    sentence_001.txt           -> "John Smith works in Paris"
 """
 
 import logging
@@ -29,12 +30,12 @@ config = Config()
 setup_logging(config)
 logger = logging.getLogger(__name__)
 
-# Text file options
-text_options = {"extension": FileExtension.TXT}
+# Text specific options including CSV options
+text_options = {"extension": FileExtension.TXT}  # Allowed text file extensions
 
 # CSV specific options
 csv_options = {
-    "chunk_size": 100,
+    "chunk_size": 100,  # Smaller chunk size due to text processing
     "delimiter": ",",
     "quotechar": '"',
     "escapechar": "\\",
@@ -44,27 +45,27 @@ csv_options = {
 
 
 def main():
-    """Run the masked language modeling ingestion example."""
+    """Run the token classification ingestion example."""
     try:
         # Initialize components
         database = Database(config)
         api_client = APIClient(config)
 
-        # Create ingestor for MLM data
-        # No label_column — MLM is self-supervised
+        # Create ingestor for token classification data with validators
         ingestor = CSVIngestor(
             database=database,
             api_client=api_client,
             table_name=config.TABLE_NAME,
             data_format=DataFormat.TEXT,
-            category=TaskCategory.MASKED_LANGUAGE_MODELING,
+            category=TaskCategory.TOKEN_CLASSIFICATION,
             csv_options=csv_options,
             file_options=text_options,
-            intent=Intent.TRAIN,
+            label_column="label",
+            intent=Intent.TRAIN,  # Is the data for training or testing
         )
 
         # Ingest data with validation
-        logger.info("Starting masked language modeling ingestion with data validation...")
+        logger.info("Starting token classification ingestion with data validation...")
         with ingestor:
             failed_records = ingestor.ingest(
                 config.LABEL_FILE, batch_size=config.BATCH_SIZE

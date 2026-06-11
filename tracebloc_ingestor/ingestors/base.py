@@ -3,6 +3,7 @@ from typing import Dict, Any, Generator, List, Optional, NamedTuple
 from sqlalchemy.orm import Session
 from sqlalchemy.engine import Engine
 import logging
+import os
 import pandas as pd
 from tqdm import tqdm
 import uuid
@@ -42,6 +43,39 @@ _TABULAR_FAMILY_CATEGORIES = frozenset({
     TaskCategory.TABULAR_REGRESSION,
     TaskCategory.TIME_SERIES_FORECASTING,
     TaskCategory.TIME_TO_EVENT_PREDICTION,
+})
+
+# File-bearing categories resolve every per-row sidecar against
+# ``config.SRC_PATH``. If that path is empty/unset/missing, every file
+# lookup silently falls through to a relative path (``"" + "images/x.jpg"``
+# -> ``"images/x.jpg"``), file_transfer skips every record, and the user
+# sees N copies of "Source image not found: images/x.jpg" — blaming the
+# data when the real cause is "SRC_PATH was never staged on the PVC".
+# Tabular / time-series have no sidecar dirs under SRC_PATH, so they're
+# excluded from the guard (the CSV path itself is checked elsewhere).
+_SRC_PATH_REQUIRED_CATEGORIES = frozenset({
+    TaskCategory.IMAGE_CLASSIFICATION,
+    TaskCategory.OBJECT_DETECTION,
+    TaskCategory.KEYPOINT_DETECTION,
+    TaskCategory.SEMANTIC_SEGMENTATION,
+    TaskCategory.INSTANCE_SEGMENTATION,
+    TaskCategory.TEXT_CLASSIFICATION,
+    TaskCategory.TOKEN_CLASSIFICATION,
+    TaskCategory.MASKED_LANGUAGE_MODELING,
+})
+
+
+# Self-supervised categories have no `label` column — the CSV manifest just
+# points at sidecar files and the model creates its own targets at training
+# time (e.g. masked_language_modeling masks tokens on-the-fly). The backend
+# correspondingly stores no edge-label metadata for these datasets, so the
+# `send_generate_edge_label_meta` call is a no-op at best and a misleading
+# HTTP 400 ("No data found for table X") at worst — see issue #213.
+# The schema (schema/ingest.v1.json) now rejects `label:` on these categories
+# at submission time; this set + the gate below are the defensive in-ingestor
+# half (script-driven runs that bypass the schema still skip the wasted call).
+_SELF_SUPERVISED_CATEGORIES = frozenset({
+    TaskCategory.MASKED_LANGUAGE_MODELING,
 })
 
 
@@ -353,11 +387,73 @@ class BaseIngestor(ABC):
             cleaned_record["ingestor_id"] = self.ingestor_id
             cleaned_record["filename"] = record.get("filename")
             cleaned_record["extension"] = record.get("extension")
+            # Preserve mask_id for semantic_segmentation ONLY. The
+            # cleaned_record comprehension above filters by ``k in
+            # self.schema``, but for the documented 8-line schema-less
+            # example yaml that filter drops every CSV column including
+            # mask_id — which file_transfer.py:401 needs to locate the
+            # per-row mask file. Without this, every record was skipped at
+            # file-transfer with "No mask_id found in record" despite
+            # #207's FilePairingValidator pass.
+            #
+            # Scoped to SEMANTIC_SEGMENTATION because mask_id is a runtime
+            # indirection only — there's no `mask_id` column on the
+            # standard tracebloc table (see database.py:standard_columns),
+            # so putting it on every category's cleaned_record would break
+            # SQL inserts on tables that don't have it (#212 bugbot).
+            # _process_batch additionally pops it before insert so even
+            # the semseg path doesn't try to bind it as a column.
+            if self.category == TaskCategory.SEMANTIC_SEGMENTATION:
+                cleaned_record["mask_id"] = record.get("mask_id")
             return cleaned_record
 
         except Exception as e:
             logger.error(f"Error processing record: {str(e)}")
             return None
+
+    @staticmethod
+    def _check_src_path() -> None:
+        """Fail fast with a clear message when ``config.SRC_PATH`` isn't set
+        or doesn't exist (#772 P2).
+
+        Every file-bearing category resolves its per-row sidecars against
+        ``config.SRC_PATH`` (file_transfer.py:105 etc.). If the env var
+        / ConfigMap key is empty, ``os.path.join("", "images", "x.jpg")``
+        returns the relative path ``"images/x.jpg"`` — every file lookup
+        fails and the user sees N copies of
+        ``Source image not found: images/x.jpg`` blaming the data, when
+        the real cause is "SRC_PATH was never set / the PVC wasn't
+        staged before the Job ran". One clear error at preflight beats
+        one cryptic error per row.
+        """
+        # Late import: keep this module free of a Config singleton at
+        # import time so unit tests can monkeypatch the env per test.
+        from ..config import Config
+        src = Config().SRC_PATH
+        if not src or not str(src).strip():
+            raise RuntimeError(
+                f"{RED}SRC_PATH is empty. Set it to the cluster-PVC path where "
+                f"your data is staged (e.g. /data/shared/<dataset>/). The "
+                f"chart's data-staging recipe (kubectl cp or init-container "
+                f"sync) must run before the ingest Job — see "
+                f"tracebloc/client/ingestor/README.md.{RESET}"
+            )
+        if not os.path.isabs(src):
+            raise RuntimeError(
+                f"{RED}SRC_PATH={src!r} is not an absolute path. The ingestor "
+                f"resolves every sidecar file against it via os.path.join, "
+                f"and a relative SRC_PATH silently falls through to the "
+                f"working directory — every file lookup then fails with a "
+                f"misleading 'Source image not found'. Use an absolute path "
+                f"(e.g. /data/shared/<dataset>/).{RESET}"
+            )
+        if not os.path.isdir(src):
+            raise RuntimeError(
+                f"{RED}SRC_PATH={src!r} does not exist or is not a directory. "
+                f"Did the data-staging step (kubectl cp / init-container sync) "
+                f"run before the ingest Job? Verify with "
+                f"`kubectl exec <pod> -- ls {src}`.{RESET}"
+            )
 
     @staticmethod
     def _check_csv_encoding(source: Any) -> None:
@@ -383,6 +479,146 @@ class BaseIngestor(ABC):
                 f"'CSV UTF-8 (Comma delimited)'), then re-ingest.{RESET}"
             ) from exc
 
+    # Stale-lock cutoff (seconds). A crashed ingest leaves the lock file
+    # behind; if the lock is older than this we log + remove + reacquire
+    # so a customer isn't blocked indefinitely waiting for the writer
+    # whose pod has long since been garbage-collected. 12h covers any
+    # reasonable ingest (including multi-GB proteomics).
+    _TABLE_LOCK_STALE_SECONDS = 12 * 3600
+
+    def _table_lock_path(self) -> Optional[str]:
+        """Where the lock file lives — at the top of STORAGE_PATH (the
+        parent of every per-table DEST_PATH), so it's durable across pod
+        restarts on the cluster PVC. Returns None when STORAGE_PATH is
+        unset or not a directory (test configs / local runs without a
+        staging dir) — caller treats that as "no lock available, skip".
+        """
+        # Late import: keep this module free of a Config singleton at
+        # import time so unit tests can monkeypatch the env per test.
+        from ..config import Config
+        storage = Config().STORAGE_PATH
+        if not storage or not os.path.isdir(storage):
+            return None
+        return os.path.join(storage, f".tracebloc-ingest-{self.table_name}.lock")
+
+    def _acquire_table_lock(self) -> Optional[str]:
+        """Acquire an exclusive lock for ``self.table_name`` (#772 P2).
+
+        Two ingests targeting the same table used to race
+        ``create_table`` / interleave upserts. Atomic ``O_EXCL`` create
+        either succeeds (lock acquired) or fails with ``FileExistsError``
+        (another ingest is in flight). On conflict, read the existing
+        lock's metadata and surface it in the error so ops can find the
+        other run; if the lock is older than the stale-cutoff, remove
+        and reacquire.
+
+        Returns the lock path (or None if no STORAGE_PATH is configured)
+        so ``_release_table_lock`` can remove the right file.
+        """
+        import json as _json
+        import socket as _socket
+        from datetime import datetime as _datetime
+
+        lock_path = self._table_lock_path()
+        if lock_path is None:
+            return None
+
+        lock_info = {
+            "ingestor_id": self.ingestor_id,
+            "table_name": self.table_name,
+            "pid": os.getpid(),
+            "hostname": _socket.gethostname(),
+            "started_at": _datetime.utcnow().isoformat() + "Z",
+        }
+        try:
+            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        except FileExistsError:
+            # Read the existing lock so the error names the holder. Also
+            # check staleness and self-recover if so.
+            existing_info: Dict[str, Any] = {}
+            try:
+                with open(lock_path, "r") as f:
+                    existing_info = _json.load(f)
+            except Exception:
+                pass
+            age = None
+            try:
+                started = _datetime.fromisoformat(
+                    existing_info.get("started_at", "").rstrip("Z")
+                )
+                age = (_datetime.utcnow() - started).total_seconds()
+            except Exception:
+                # Lock metadata is corrupt (truncated file, malformed
+                # JSON, missing/un-parseable started_at). Fall back to
+                # the file's mtime as the age signal (#221 bugbot: a
+                # corrupt lock used to never auto-expire because age
+                # stayed None). Use time.time() rather than
+                # _datetime.utcnow().timestamp() — the latter is
+                # timezone-broken (naive datetime treated as local) so
+                # the cutoff would shift by the local UTC offset on
+                # non-UTC systems.
+                import time as _time
+                try:
+                    mtime = os.path.getmtime(lock_path)
+                    age = _time.time() - mtime
+                except OSError:
+                    pass
+            if age is not None and age > self._TABLE_LOCK_STALE_SECONDS:
+                logger.warning(
+                    f"{YELLOW}Stale lock at {lock_path} (age={age:.0f}s, "
+                    f"holder={existing_info!r}) — removing and reacquiring. "
+                    f"The holder's pod likely crashed before its finally "
+                    f"could run.{RESET}"
+                )
+                try:
+                    os.remove(lock_path)
+                except FileNotFoundError:
+                    pass
+                return self._acquire_table_lock()
+            raise RuntimeError(
+                f"{RED}Another ingest is already running for table "
+                f"'{self.table_name}' (lock at {lock_path}). "
+                f"Holder: {existing_info!r}. Wait for it to finish, or — "
+                f"if its pod crashed — remove the lock file manually. "
+                f"(The lock auto-clears after "
+                f"{self._TABLE_LOCK_STALE_SECONDS}s.){RESET}"
+            )
+        try:
+            with os.fdopen(fd, "w") as f:
+                _json.dump(lock_info, f)
+        except Exception:
+            # Couldn't write the metadata — drop the lock so we don't
+            # block ourselves on a malformed file.
+            try:
+                os.remove(lock_path)
+            except FileNotFoundError:
+                pass
+            raise
+        logger.info(
+            f"Acquired table lock for '{self.table_name}' at {lock_path}"
+        )
+        return lock_path
+
+    def _release_table_lock(self, lock_path: Optional[str]) -> None:
+        """Remove the lock file. No-op when ``_acquire_table_lock``
+        returned None (no STORAGE_PATH configured). Idempotent — a
+        double-release (e.g. exception path + finally path both call
+        it) silently swallows ``FileNotFoundError``.
+        """
+        if not lock_path:
+            return
+        try:
+            os.remove(lock_path)
+            logger.info(f"Released table lock for '{self.table_name}'")
+        except FileNotFoundError:
+            pass
+        except Exception as exc:
+            logger.warning(
+                f"Failed to remove table lock {lock_path}: {exc}. "
+                f"It will auto-clear after "
+                f"{self._TABLE_LOCK_STALE_SECONDS}s."
+            )
+
     def validate_data(self, source: Any) -> bool:
         """Validate data before ingestion using configured validators.
 
@@ -395,12 +631,25 @@ class BaseIngestor(ABC):
         Raises:
             ValueError: If validation fails
         """
+        # Pre-flight: SRC_PATH must be a real absolute directory or every
+        # file_transfer falls through and surfaces as N copies of
+        # "Source image not found: images/x.jpg" — blames the data when
+        # the real cause is "SRC_PATH was never staged / set" (#772 P2).
+        # File-bearing categories only (tabular has nothing under SRC_PATH).
+        if self.category in _SRC_PATH_REQUIRED_CATEGORIES:
+            self._check_src_path()
+
         # Pre-flight: a non-UTF-8 CSV otherwise surfaces as a misleading
         # "No data found" (validators read UTF-8 and swallow decode errors).
         # Catch it once here with a clear, actionable message.
         self._check_csv_encoding(source)
 
-        validators = map_validators(self.category, self.file_options)
+        # Pass the configured label_column through (without permanently
+        # mutating file_options / metadata) so label-aware validators like
+        # BIOLabelValidator check the right column when a custom name is used.
+        validators = map_validators(
+            self.category, {**self.file_options, "label_column": self.label_column}
+        )
         logger.info(f"Running {len(validators)} validator(s) on data source")
         all_valid = True
         validation_errors = []
@@ -472,6 +721,29 @@ class BaseIngestor(ABC):
         Returns:
             List of failed records
         """
+        # Concurrent-ingest guard (backend/#772 P2). Two ingests targeting
+        # the same `table_name` used to race ``create_table`` and
+        # interleave upserts; the second submission would see a
+        # partially-populated table and fail mid-run, with the original
+        # ingestor unaware. Acquire an exclusive file-lock keyed by the
+        # table name; on conflict, fail fast naming the holder. The lock
+        # is released in the finally below — that wraps the ENTIRE
+        # post-acquire body so every exit path (#221 bugbot) releases,
+        # including ones the inner ``except Exception`` doesn't catch
+        # (Session() construction failure, _count_records exceptions,
+        # KeyboardInterrupt, etc.).
+        _lock_path = self._acquire_table_lock()
+        try:
+            return self._ingest_with_lock(source, batch_size)
+        finally:
+            self._release_table_lock(_lock_path)
+
+    def _ingest_with_lock(
+        self, source: Any, batch_size: int = 50
+    ) -> List[Dict[str, Any]]:
+        """Inner ingest body invoked once the table lock is held. Split
+        out from ``ingest`` so the lock-release lives in a finally that
+        covers every exit path (#221 bugbot — HIGH)."""
         # Validate data before ingestion
         logger.info(f"{CYAN}Starting data validation before ingestion...{RESET}")
         try:
@@ -517,6 +789,7 @@ class BaseIngestor(ABC):
                                 TaskCategory.IMAGE_CLASSIFICATION,
                                 TaskCategory.OBJECT_DETECTION,
                                 TaskCategory.TEXT_CLASSIFICATION,
+                                TaskCategory.TOKEN_CLASSIFICATION,
                                 TaskCategory.SEMANTIC_SEGMENTATION,
                                 TaskCategory.KEYPOINT_DETECTION,
                                 TaskCategory.MASKED_LANGUAGE_MODELING,
@@ -560,19 +833,9 @@ class BaseIngestor(ABC):
 
                             if len(batch) >= batch_size:
                                 try:
-                                    inserted_ids, api_success, db_failures = (
-                                        self._process_batch(batch, session)
+                                    self._flush_batch(
+                                        batch, session, stats, failed_records
                                     )
-                                    # Only count records that were successfully inserted
-                                    if inserted_ids:
-                                        stats["inserted_records"] += len(inserted_ids)
-                                    if api_success:
-                                        stats["api_sent_records"] += len(inserted_ids)
-                                    if db_failures:
-                                        stats["failed_records"] += len(db_failures)
-                                        failed_records.extend(db_failures)
-                                except Exception as e:
-                                    logger.error(f"Batch processing failed: {str(e)}")
                                 finally:
                                     pbar.update(len(batch))
                                     batch = []
@@ -588,20 +851,9 @@ class BaseIngestor(ABC):
                 # Process remaining records
                 if batch:
                     try:
-                        inserted_ids, api_success, db_failures = self._process_batch(
-                            batch, session
-                        )
-                        # Only count records that were successfully inserted
-                        if inserted_ids:
-                            stats["inserted_records"] += len(inserted_ids)
-                        if api_success:
-                            stats["api_sent_records"] += len(inserted_ids)
-                        if db_failures:
-                            stats["failed_records"] += len(db_failures)
-                            failed_records.extend(db_failures)
+                        self._flush_batch(batch, session, stats, failed_records)
+                    finally:
                         pbar.update(len(batch))
-                    except Exception as e:
-                        logger.error(f"Final batch processing failed: {str(e)}")
 
                 session.commit()
                 pbar.close()
@@ -618,14 +870,26 @@ class BaseIngestor(ABC):
                 # the failure surfaces (the CLI streams these logs live and marks
                 # the Job failed). The api_client has already logged the
                 # underlying HTTP detail before returning False.
-                if not self.api_client.send_generate_edge_label_meta(
-                    self.table_name, self.ingestor_id, self.intent
-                ):
-                    raise RuntimeError(
-                        "Backend rejected edge-label metadata; the dataset was "
-                        "NOT registered (its rows are already in the database). "
-                        "See the logged API error above."
-                    )
+                # Skip the edge-label backend call for self-supervised
+                # categories (#213). They have no `label` column on the rows;
+                # the backend's edge-label endpoint then returns a misleading
+                # HTTP 400 ("No data found for table X" — wrong, the table HAS
+                # rows, it just has no edge labels). Combined with PR #187's
+                # fail-loud behaviour, the user saw a registration crash that
+                # had nothing to do with the actual misconfiguration. The
+                # schema now rejects `label:` on these categories at
+                # submission, but this gate is the defensive in-ingestor half
+                # so script-driven / older-schema runs don't trip the same
+                # trap.
+                if self.category not in _SELF_SUPERVISED_CATEGORIES:
+                    if not self.api_client.send_generate_edge_label_meta(
+                        self.table_name, self.ingestor_id, self.intent
+                    ):
+                        raise RuntimeError(
+                            "Backend rejected edge-label metadata; the dataset was "
+                            "NOT registered (its rows are already in the database). "
+                            "See the logged API error above."
+                        )
 
                 schema_dict = self.database.get_table_schema(self.table_name)
                 if not self.api_client.send_global_meta_meta(
@@ -671,6 +935,74 @@ class BaseIngestor(ABC):
         """Cleanup when used as context manager"""
         pass
 
+    def _flush_batch(
+        self,
+        batch: List[Dict[str, Any]],
+        session: Session,
+        stats: Dict[str, int],
+        failed_records: List[Dict[str, Any]],
+    ) -> None:
+        """Process one batch and fold its outcome into ``stats`` /
+        ``failed_records``. Shared by the in-loop and final-batch flush
+        sites in ``_ingest_with_lock``.
+
+        Failure accounting is the point of this helper. A run where every
+        batch POST was rejected with HTTP 400 used to finish with
+        "All records processed successfully" and exit 0 — the rows were
+        in MySQL but the backend had zero records, and the next platform
+        call failed with "No data found for table name". Two swallow
+        points caused that:
+
+        - ``api_success=False`` only skipped the ``api_sent_records``
+          increment; the records never reached ``failed_records``, so
+          ``ingest()`` returned ``[]`` and the caller exited 0. Now each
+          inserted-but-unsent record is returned as a failed record with
+          ``error="api_send_failed"`` (the rows stay committed — they're
+          in MySQL but invisible to the platform until re-sent).
+        - an exception from ``_process_batch`` was logged and dropped,
+          leaving the whole batch out of every counter. Now the batch is
+          counted and returned as failed.
+
+        The summary needs no extra field: "Failed to Send to API" is
+        derived from ``inserted_records - api_sent_records``, and
+        ``IngestionSummary.has_failures`` already trips on that gap.
+        """
+        try:
+            inserted_ids, api_success, db_failures = self._process_batch(
+                batch, session
+            )
+            # Only count records that were successfully inserted
+            if inserted_ids:
+                stats["inserted_records"] += len(inserted_ids)
+                if api_success:
+                    stats["api_sent_records"] += len(inserted_ids)
+                else:
+                    # The inserted-but-unsent records are the batch minus
+                    # the DB failures. Don't assume they're the first
+                    # len(ids) entries: insert_batch's per-record fallback
+                    # appends successes in scan order, so a mid-batch DB
+                    # failure shifts which records were inserted. Failure
+                    # entries carry a *copy* of the record (processed_record
+                    # adds updated_at), so match by data_id — set on every
+                    # processed record by _map_unique_id — not by identity.
+                    db_failed_data_ids = {
+                        f.get("record", {}).get("data_id") for f in db_failures
+                    }
+                    failed_records.extend(
+                        {"record": record, "error": "api_send_failed"}
+                        for record in batch
+                        if record.get("data_id") not in db_failed_data_ids
+                    )
+            if db_failures:
+                stats["failed_records"] += len(db_failures)
+                failed_records.extend(db_failures)
+        except Exception as e:
+            logger.error(f"Batch processing failed: {str(e)}")
+            stats["failed_records"] += len(batch)
+            failed_records.extend(
+                {"record": record, "error": str(e)} for record in batch
+            )
+
     def _process_batch(
         self, batch: List[Dict[str, Any]], session: Session
     ) -> List[int]:
@@ -688,6 +1020,18 @@ class BaseIngestor(ABC):
             Exception: If batch processing fails
         """
         try:
+            # Strip framework-internal runtime indirections that don't
+            # correspond to a DB column before binding. ``mask_id`` is
+            # carried on semantic_segmentation records purely so
+            # ``file_transfer.map_file_transfer`` can locate the per-row
+            # mask file; the standard tracebloc table has no ``mask_id``
+            # column (see database.py:standard_columns), so leaving it on
+            # the record would cause SQLAlchemy to treat it as an
+            # unconsumed column on insert (#212 bugbot). By the time we
+            # reach this point, file_transfer has already used the value
+            # — it's safe to drop.
+            for r in batch:
+                r.pop("mask_id", None)
             # Insert batch and get IDs
             ids, db_failures = self.database.insert_batch(self.table_name, batch)
             api_success = False
@@ -706,8 +1050,14 @@ class BaseIngestor(ABC):
 
         except Exception as e:
             logger.error(f"{RED}Error processing batch: {str(e)}{RESET}")
-            if hasattr(e.response, "text"):
-                logger.error(f"{RED}Error response: {e.response.text}{RESET}")
+            # Guard the attribute chain: a non-HTTP exception (e.g. a DB
+            # error) has no .response at all, and the old
+            # hasattr(e.response, "text") raised AttributeError INSIDE the
+            # handler — replacing the real error with "'RuntimeError'
+            # object has no attribute 'response'".
+            response = getattr(e, "response", None)
+            if response is not None and hasattr(response, "text"):
+                logger.error(f"{RED}Error response: {response.text}{RESET}")
             raise
 
     def _log_summary(self, summary: IngestionSummary):

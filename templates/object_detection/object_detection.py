@@ -6,6 +6,7 @@ corresponding XML annotation files from the VisDrone dataset format.
 """
 
 import logging
+import sys
 import shutil
 import xml.etree.ElementTree as ET
 from typing import Dict, Any
@@ -28,7 +29,11 @@ logger = logging.getLogger(__name__)
 
 # Object detection specific options including CSV options
 object_detection_options = {
-    "target_size": (448, 448),  # image size. Height = Width
+    # Matches the bundled VisDrone aerial sample under data/images/ (#199),
+    # kept at native resolution because aggressive downscaling obliterates
+    # the tiny-object content the sample exists to demonstrate. Override per
+    # dataset when running against tiled / pre-resized data.
+    "target_size": (1920, 1080),
     "extension": FileExtension.JPG,  # allowed extension for images: jpeg, jpg, png
 }
 
@@ -78,6 +83,11 @@ def main():
                     logger.warning(
                         f"Error details: {record.get('error', 'Unknown error')}"
                     )
+                # Failed records (DB insert, API send, or processing) must
+                # fail the run — exit non-zero so the K8s Job is marked
+                # failed instead of reporting silent success (SystemExit
+                # bypasses the except Exception handler below).
+                sys.exit(1)
             else:
                 logger.info("All records processed successfully")
 

@@ -1,6 +1,11 @@
 # Object detection: image + Pascal VOC XML annotations.
 # `category: object_detection` implies validators include PascalVOCXMLValidator
 # and a separate FileTypeValidator(.xml) for the annotations directory.
+# Default file_options: target_size [1920, 1080] (matches the bundled VisDrone
+# aerial sample under `templates/object_detection/data/images/`, kept at native
+# resolution because aggressive downscaling obliterates the tiny-object content
+# the sample exists to demonstrate). Override `spec.file_options.target_size`
+# below for any other dataset shape (e.g. 448×448 tiles).
 apiVersion: tracebloc.io/v1
 kind: IngestConfig
 table: visdrone_train

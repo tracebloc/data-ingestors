@@ -37,9 +37,16 @@ class TokenizerValidator(BaseValidator):
         self,
         required_tokens: tuple = ("[MASK]", "[PAD]"),
         name: str = "Tokenizer Validator",
+        optional: bool = False,
     ):
         super().__init__(name)
         self.required_tokens = set(required_tokens)
+        # When True, a missing tokenizer.json is a warning (not an error):
+        # the training client falls back to the HuggingFace tokenizer_id /
+        # default. Used by text/token classification, where the tokenizer is
+        # optional. MLM keeps optional=False — its vocab IS the prediction
+        # space, so a missing tokenizer must fail loud at ingest.
+        self.optional = optional
 
     def validate(self, data: Any, **kwargs) -> ValidationResult:
         """Validate tokenizer.json at the configured source path.
@@ -55,6 +62,23 @@ class TokenizerValidator(BaseValidator):
             tokenizer_path = Path(config.SRC_PATH) / "tokenizer.json"
 
             if not tokenizer_path.exists():
+                if self.optional:
+                    warning = (
+                        f"No tokenizer.json found at {tokenizer_path}. This is "
+                        "optional for this category — the training client will "
+                        "use the HuggingFace tokenizer_id / model_id (default "
+                        "bert-base-uncased). Ship a tokenizer.json here only if "
+                        "you need a custom tokenizer."
+                    )
+                    logger.warning(warning)
+                    return self._create_result(
+                        is_valid=True,
+                        warnings=[warning],
+                        metadata={
+                            "path_checked": str(tokenizer_path),
+                            "tokenizer_present": False,
+                        },
+                    )
                 return self._create_result(
                     is_valid=False,
                     errors=[

@@ -79,3 +79,35 @@ def test_extract_vocab_returns_none_when_empty():
 def test_custom_required_tokens():
     v = TokenizerValidator(required_tokens=("[CLS]",))
     assert v.required_tokens == {"[CLS]"}
+
+
+# ---------------------------------------------------------------------------
+# optional=True (text/token classification): missing tokenizer is a warning,
+# not an error; a present tokenizer is still validated.
+# ---------------------------------------------------------------------------
+
+
+def test_optional_missing_file_warns_and_passes(clean_env, tmp_path):
+    clean_env.setenv("SRC_PATH", str(tmp_path))  # no tokenizer.json
+    v = TokenizerValidator(required_tokens=("[PAD]",), optional=True)
+    result = v.validate(None)
+    assert result.is_valid
+    assert result.warnings and "tokenizer.json" in result.warnings[0]
+    assert result.metadata.get("tokenizer_present") is False
+
+
+def test_optional_present_without_pad_still_fails(clean_env, make_tokenizer):
+    src = make_tokenizer(vocab=("hello", "world"))  # no [PAD]
+    clean_env.setenv("SRC_PATH", str(src))
+    v = TokenizerValidator(required_tokens=("[PAD]",), optional=True)
+    result = v.validate(None)
+    assert not result.is_valid
+    assert "[PAD]" in result.errors[0]
+
+
+def test_optional_present_with_pad_passes(clean_env, make_tokenizer):
+    src = make_tokenizer(vocab=("hello", "world", "[PAD]"))
+    clean_env.setenv("SRC_PATH", str(src))
+    v = TokenizerValidator(required_tokens=("[PAD]",), optional=True)
+    result = v.validate(None)
+    assert result.is_valid

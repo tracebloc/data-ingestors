@@ -32,6 +32,7 @@
         "semantic_segmentation",
         "instance_segmentation",
         "text_classification",
+        "token_classification",
         "tabular_classification",
         "tabular_regression",
         "time_series_forecasting",
@@ -86,7 +87,7 @@
     "texts": {
       "type": "string",
       "minLength": 1,
-      "description": "Directory holding text files referenced by the labels CSV. Required for text_classification."
+      "description": "Directory holding text files referenced by the labels CSV. Required for text_classification and token_classification."
     },
 
     "sequences": {
@@ -143,7 +144,7 @@
       "items": { "type": "integer", "minimum": 1 },
       "minItems": 2,
       "maxItems": 2,
-      "description": "[height, width] to resize images to. Required for keypoint_detection (no default — depends on the customer's pose model). Other image categories use category defaults if unset."
+      "description": "[width, height] to resize images to. Required for keypoint_detection (no default — depends on the customer's pose model). Other image categories use category defaults if unset. The order matches PIL.Image.size and what ImageResolutionValidator expects."
     },
 
     "number_of_keypoints": {
@@ -198,7 +199,7 @@
               "items": { "type": "integer", "minimum": 1 },
               "minItems": 2,
               "maxItems": 2,
-              "description": "[height, width]. Image categories only. Default [512, 512]."
+              "description": "[width, height]. Image categories only. Default [512, 512]. The order matches PIL.Image.size and what ImageResolutionValidator expects."
             },
             "extension": {
               "type": "string",
@@ -322,6 +323,14 @@
       "then": { "required": ["texts"] }
     },
     {
+      "description": "token_classification requires `texts`.",
+      "if": {
+        "properties": { "category": { "const": "token_classification" } },
+        "required": ["category"]
+      },
+      "then": { "required": ["texts"] }
+    },
+    {
       "description": "masked_language_modeling requires `sequences`.",
       "if": {
         "properties": { "category": { "const": "masked_language_modeling" } },
@@ -390,6 +399,7 @@
               "semantic_segmentation",
               "instance_segmentation",
               "text_classification",
+              "token_classification",
               "tabular_classification"
             ]
           }
@@ -397,6 +407,20 @@
         "required": ["category"]
       },
       "then": { "required": ["label"] }
+    },
+    {
+      "description": "Self-supervised categories MUST NOT set `label`. The shipped CSV has no label column, and the framework registers no edge-label metadata for them. Setting `label` anyway used to ingest rows successfully, then crash at backend registration with a misleading HTTP 400 'No data found' (issue #213). Reject at submission instead.",
+      "if": {
+        "properties": {
+          "category": {
+            "enum": [
+              "masked_language_modeling"
+            ]
+          }
+        },
+        "required": ["category"]
+      },
+      "then": { "not": { "required": ["label"] } }
     }
   ]
 }
