@@ -5,6 +5,7 @@ It validates that data types in CSV files match the data types specified
 in the schema and provides clear errors when mismatches are found.
 """
 
+import csv as _csv
 import logging
 import re
 from pathlib import Path
@@ -58,6 +59,13 @@ class DataValidator(BaseValidator):
             "FLOAT": self._validate_float,
             "DOUBLE": self._validate_double,
             "DECIMAL": self._validate_decimal,
+            # NUMERIC is a MySQL alias for DECIMAL and is accepted by both
+            # Database._get_sqlalchemy_type (DDL) and CSVIngestor._validate_csv
+            # (type cast). Without this entry the preflight DataValidator
+            # rejects a NUMERIC(p,s) schema with "Unknown data type" even
+            # though ingestion would happily proceed — the two layers must
+            # accept the same vocabulary, not diverge.
+            "NUMERIC": self._validate_decimal,
             "BOOLEAN": self._validate_boolean,
             "BOOL": self._validate_boolean,
             "DATE": self._validate_date,
@@ -89,9 +97,30 @@ class DataValidator(BaseValidator):
                     metadata={"schema_provided": False},
                 )
 
-            sample_size = kwargs.get("sample_size", 1000)
+            # Validate the ENTIRE column, not a sample. The old default of 1000
+            # meant a bad value past row 1000 (a non-numeric in an INT column, a
+            # too-long VARCHAR) passed validation and then corrupted or crashed
+            # the ingest — validation success did not predict ingestion success.
+            # Callers can still pass an explicit sample_size to cap it.
+            sample_size = kwargs.get("sample_size", None)
 
-            # Load data
+            # Full-column scan of a CSV is done CHUNK BY CHUNK so a very large
+            # file is never materialised at once — the old full load OOM'd the
+            # pod (Killed/137) on multi-GB datasets. Each chunk is validated and
+            # we return on the FIRST failing chunk (reporting that problem
+            # without scanning further or holding the whole file). DataFrame /
+            # JSON inputs, and any explicit sample_size, keep the single-shot
+            # path below.
+            if (
+                sample_size is None
+                and isinstance(data, (str, Path))
+                and Path(data).suffix.lower() == ".csv"
+            ):
+                return self._validate_csv_streaming(
+                    Path(data), chunk_size=kwargs.get("chunk_size", 50_000)
+                )
+
+            # Load data (DataFrame, JSON, or an explicitly capped CSV sample)
             df = self._load_data(data, sample_size)
             if df is None or df.empty:
                 return self._create_result(
@@ -110,6 +139,80 @@ class DataValidator(BaseValidator):
                 errors=[f"Data type validation error: {str(e)}"],
                 metadata={"error_type": "validation_exception"},
             )
+
+    def _validate_csv_streaming(
+        self, path: Path, chunk_size: int = 50_000
+    ) -> ValidationResult:
+        """Validate a CSV's full contents chunk by chunk, with bounded memory.
+
+        Reads ``chunk_size`` rows at a time, validates each against the schema,
+        and returns on the FIRST failing chunk — so a bad value anywhere in a
+        large file is caught without materialising the whole file or scanning
+        past the first problem. A clean file scans to the end and reports the
+        total rows checked.
+        """
+        # Preflight read rules MUST match CSVIngestor.read_data — otherwise a
+        # file can pass validation and then explode at ingest time on a
+        # structural error the validator never surfaced. Two mismatches were
+        # silent until #190's bugbot caught them:
+        #   1. on_bad_lines="error" (CSVIngestor.read_data #76711e6) so a
+        #      ragged row is rejected here too, not silently warned-and-dropped.
+        #   2. Reject duplicate headers up front so they fail in validation,
+        #      not later in the ingestor — same error CSVIngestor raises.
+        try:
+            with open(path, "r", encoding="utf-8", newline="") as _fh:
+                _raw_header = next(_csv.reader(_fh), [])
+            _stripped = [str(h).strip() for h in _raw_header]
+            _dups = sorted({h for h in _stripped if _stripped.count(h) > 1})
+            if _dups:
+                return self._create_result(
+                    is_valid=False,
+                    errors=[
+                        f"Duplicate column name(s) in the CSV header: {_dups}. "
+                        f"Each column must be unique — otherwise the second is "
+                        f"silently renamed '<name>.1' by the parser and the "
+                        f"schema maps onto the wrong column."
+                    ],
+                    metadata={"rows_checked": 0},
+                )
+        except (OSError, UnicodeDecodeError, _csv.Error, TypeError, StopIteration):
+            # Header probe failed; let pd.read_csv surface the real error below.
+            pass
+
+        try:
+            reader = pd.read_csv(
+                path, chunksize=chunk_size, encoding="utf-8", on_bad_lines="error"
+            )
+        except pd.errors.EmptyDataError:
+            return self._create_result(
+                is_valid=False,
+                errors=["No data found to validate"],
+                metadata={"rows_checked": 0},
+            )
+
+        rows_checked = 0
+        saw_data = False
+        for chunk in reader:
+            if chunk.empty:
+                continue
+            saw_data = True
+            rows_checked += len(chunk)
+            result = self._validate_schema(chunk)
+            if not result.is_valid:
+                if isinstance(result.metadata, dict):
+                    result.metadata["rows_checked"] = rows_checked
+                return result
+
+        if not saw_data:
+            return self._create_result(
+                is_valid=False,
+                errors=["No data found to validate"],
+                metadata={"rows_checked": 0},
+            )
+        return self._create_result(
+            is_valid=True,
+            metadata={"rows_checked": rows_checked, "schema_provided": True},
+        )
 
     def _load_data(self, data: Any, sample_size: int) -> Optional[pd.DataFrame]:
         """Load data from input source.
@@ -173,6 +276,15 @@ class DataValidator(BaseValidator):
         Returns:
             ValidationResult containing validation status and messages
         """
+        # Strip header whitespace so validation matches what the ingestor
+        # actually ingests: CSVIngestor.read_data does `chunk.columns.str.strip()`
+        # on every chunk, so a header like " age" becomes "age" and is ingested
+        # against schema key "age". Without the same strip here, the validator
+        # saw " age" (!= "age"), silently skipped the column, and a bad value in
+        # it passed pre-flight validation only to fail later at ingest. rename()
+        # returns a new frame, so the caller's DataFrame is untouched.
+        df = df.rename(columns=lambda c: str(c).strip())
+
         errors = []
         warnings = []
         metadata = {
@@ -261,15 +373,24 @@ class DataValidator(BaseValidator):
         length_match = re.search(r"VARCHAR\((\d+)\)", expected_type.upper())
         max_length = int(length_match.group(1)) if length_match else None
 
-        # Check for non-string values. A NULL is valid for any column, and
-        # ``NaN != NaN`` would otherwise count every missing value as
-        # "non-string" — an error the user can never clear (inserting NaN
-        # doesn't help). Mirror the INT/FLOAT validators: only flag values
-        # that are non-null AND not strings.
-        non_string_count = (series.notna() & series.astype(str).ne(series)).sum()
-        if non_string_count > 0:
+        # Issue #188: do NOT compare ``astype(str)`` to the original typed
+        # value. pd.read_csv infers numeric-looking columns as int64/float64,
+        # so for value 100 the check ``"100" != 100`` is True and the column
+        # was falsely rejected as "non-string" — blocking legitimate zip
+        # codes, numeric IDs kept as text, and 0/1 labels declared VARCHAR.
+        # MySQL binds any scalar as a string against a VARCHAR column, so the
+        # only real constraints to enforce here are presence/null tolerance
+        # (handled by other layers) and length. Flag genuinely non-scalar
+        # values (list/dict/set/tuple) — those have no sensible string form
+        # and indicate a real shape error — but let every scalar pass.
+        non_scalar_mask = series.apply(
+            lambda v: isinstance(v, (list, dict, set, tuple))
+        )
+        non_scalar_count = int(non_scalar_mask.sum())
+        if non_scalar_count > 0:
             errors.append(
-                f"Column '{column_name}' contains {non_string_count} non-string values"
+                f"Column '{column_name}' contains {non_scalar_count} non-scalar value(s) "
+                f"(list/dict/set/tuple) that cannot be stored as a string"
             )
 
         # Check length constraints
@@ -305,15 +426,18 @@ class DataValidator(BaseValidator):
         length_match = re.search(r"CHAR\((\d+)\)", expected_type.upper())
         max_length = int(length_match.group(1)) if length_match else None
 
-        # Check for non-string values. A NULL is valid for any column, and
-        # ``NaN != NaN`` would otherwise count every missing value as
-        # "non-string" — an error the user can never clear (inserting NaN
-        # doesn't help). Mirror the INT/FLOAT validators: only flag values
-        # that are non-null AND not strings.
-        non_string_count = (series.notna() & series.astype(str).ne(series)).sum()
-        if non_string_count > 0:
+        # Issue #188: see _validate_varchar — same astype(str)!=value
+        # over-rejection bug. CHAR columns with numeric values (e.g. a
+        # 2-character state code "10") were blocked. Same fix: flag only
+        # genuinely non-scalar values, let any scalar through.
+        non_scalar_mask = series.apply(
+            lambda v: isinstance(v, (list, dict, set, tuple))
+        )
+        non_scalar_count = int(non_scalar_mask.sum())
+        if non_scalar_count > 0:
             errors.append(
-                f"Column '{column_name}' contains {non_string_count} non-string values"
+                f"Column '{column_name}' contains {non_scalar_count} non-scalar value(s) "
+                f"(list/dict/set/tuple) that cannot be stored as a string"
             )
 
         # Check length constraints (CHAR should be fixed length)
@@ -345,15 +469,18 @@ class DataValidator(BaseValidator):
         errors = []
         warnings = []
 
-        # Check for non-string values. A NULL is valid for any column, and
-        # ``NaN != NaN`` would otherwise count every missing value as
-        # "non-string" — an error the user can never clear (inserting NaN
-        # doesn't help). Mirror the INT/FLOAT validators: only flag values
-        # that are non-null AND not strings.
-        non_string_count = (series.notna() & series.astype(str).ne(series)).sum()
-        if non_string_count > 0:
+        # Issue #188: see _validate_varchar — same astype(str)!=value bug.
+        # TEXT columns with numeric values (notes that happen to be all
+        # digits, integer IDs kept as text) were blocked. Same fix:
+        # flag only genuinely non-scalar values; any scalar passes.
+        non_scalar_mask = series.apply(
+            lambda v: isinstance(v, (list, dict, set, tuple))
+        )
+        non_scalar_count = int(non_scalar_mask.sum())
+        if non_scalar_count > 0:
             errors.append(
-                f"Column '{column_name}' contains {non_string_count} non-string values"
+                f"Column '{column_name}' contains {non_scalar_count} non-scalar value(s) "
+                f"(list/dict/set/tuple) that cannot be stored as a string"
             )
 
         return {"is_valid": len(errors) == 0, "errors": errors, "warnings": warnings}

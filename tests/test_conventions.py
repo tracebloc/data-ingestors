@@ -124,30 +124,42 @@ def test_semantic_segmentation_sidecars_set():
 # Default options
 # ---------------------------------------------------------------------------
 
-def test_image_classification_gets_512x512_default():
+def test_image_classification_default_matches_shipped_sample():
+    """Default file_options for image_classification round-trip through the
+    bundled onboarding sample (256×256 .jpeg) with zero overrides — issue
+    #198. Previously the default was 512×512 .jpg and the framework's own
+    sample failed validation out-of-box."""
     r = resolve(_load("image_classification.yaml"))
     assert r.file_options == DEFAULT_IMAGE_FILE_OPTIONS_BY_CATEGORY[
         TaskCategory.IMAGE_CLASSIFICATION
     ]
+    assert r.file_options["target_size"] == [256, 256]
+    assert r.file_options["extension"] == ".jpeg"
 
 
-def test_object_detection_gets_448x448_default():
-    """Object detection's template historically uses 448×448, not 512×512."""
+def test_object_detection_default_matches_shipped_sample():
+    """Default file_options for object_detection match the bundled VisDrone
+    aerial sample (1920×1080) — issue #199. Previously the default was
+    448×448 and the framework's own sample failed validation out-of-box."""
     r = resolve(_load("object_detection.yaml"))
     assert r.file_options == DEFAULT_IMAGE_FILE_OPTIONS_BY_CATEGORY[
         TaskCategory.OBJECT_DETECTION
     ]
-    assert r.file_options["target_size"] == [448, 448]
+    assert r.file_options["target_size"] == [1920, 1080]
 
 
 def test_keypoint_detection_bridges_top_level_fields():
     """Keypoint detection has no convention defaults for target_size or
     number_of_keypoints — both are dataset-specific. The example YAML
     supplies them top-level; resolve() must bridge them into file_options
-    so validators see them at the same key the template path uses."""
+    so validators see them at the same key the template path uses.
+
+    The yaml's target_size was updated to [448, 448] (#199) to match the
+    bundled sample under templates/keypoint_detection/data/images/, which
+    is 448×448 — copy-paste against the framework's own sample now works."""
     r = resolve(_load("keypoint_detection.yaml"))
     assert r.file_options["extension"] == ".jpg"
-    assert r.file_options["target_size"] == [256, 256]
+    assert r.file_options["target_size"] == [448, 448]
     assert r.file_options["number_of_keypoints"] == 9
 
 

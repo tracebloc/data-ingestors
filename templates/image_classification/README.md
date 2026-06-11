@@ -55,7 +55,11 @@ image_classification/
 ## Data Format
 
 ### Images
-- Supported formats: PNG, JPEG, JPG
+- Each dataset uses **one** image extension across all files: `.jpg`, `.jpeg`,
+  or `.png`. Mixed extensions in a single dataset are not supported by design —
+  `FileTypeValidator` is strict and rejects any file whose extension doesn't
+  match the declared one. Set the extension via `spec.file_options.extension`
+  in your YAML (default `.jpeg` — see `cli/conventions.py`).
 - Images should be placed in the `data/images/` directory
 - Each image must have a corresponding row in the CSV file
 
@@ -80,8 +84,9 @@ python image_classification.py
 ## Configuration
 
 The script uses the following configuration:
-- **Target Size**: (512, 512) - Images will be resized to this dimension (height = width)
-- **Extension**: JPG - Expected image file extension (jpeg, jpg, and png are also accepted)
+- **Target Size**: (256, 256) - Images will be resized to this dimension (height = width)
+- **Extension**: `.jpeg` — strictly enforced for every image in the dataset.
+  Override via `spec.file_options.extension` (one of `.jpg` / `.jpeg` / `.png`).
 - **Chunk Size**: 1000 - Number of records to process in each batch
 - **Category**: IMAGE_CLASSIFICATION
 - **Data Format**: IMAGE

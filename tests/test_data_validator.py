@@ -37,6 +37,30 @@ def test_loads_from_csv(make_csv):
     assert result.is_valid
 
 
+def test_streaming_validator_rejects_duplicate_headers(tmp_path):
+    # Regression (#190 bugbot): the streaming CSV validator used to accept
+    # duplicate headers (pandas silently disambiguates "a, a" to "a, a.1"),
+    # while CSVIngestor.read_data rejects them outright — so a file passed
+    # validation and then exploded at ingest with a structural error the
+    # preflight step never surfaced. Align: reject up front.
+    p = tmp_path / "dups.csv"
+    p.write_text("a,a\n1,2\n3,4\n")
+    result = DataValidator(schema={"a": "INT"}).validate(str(p))
+    assert not result.is_valid
+    assert "Duplicate column" in result.errors[0]
+
+
+def test_streaming_validator_rejects_ragged_rows(tmp_path):
+    # Regression (#190 bugbot): the streaming validator used on_bad_lines=
+    # "warn" — a ragged row was silently dropped, validation reported success,
+    # then CSVIngestor.read_data (on_bad_lines="error") failed at ingest. Now
+    # both fail at the same point.
+    p = tmp_path / "ragged.csv"
+    p.write_text("a,b\n1,2\n3,4,5\n6,7\n")
+    result = DataValidator(schema={"a": "INT", "b": "INT"}).validate(str(p))
+    assert not result.is_valid
+
+
 def test_loads_from_json(tmp_path):
     """JSON top-level array of records must validate, mirroring the file shape
     JSONIngestor.read_data consumes.
@@ -153,8 +177,12 @@ def test_bigint_delegates_to_int():
 # FLOAT / DOUBLE / DECIMAL
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("dtype", ["FLOAT", "DOUBLE", "DECIMAL(10,2)"])
+@pytest.mark.parametrize("dtype", ["FLOAT", "DOUBLE", "DECIMAL(10,2)", "NUMERIC(8,3)", "NUMERIC"])
 def test_float_family_valid(dtype):
+    # NUMERIC is a MySQL alias for DECIMAL; #190 bugbot caught that the DDL
+    # and ingestor type-cast layers accepted NUMERIC but the validator's
+    # type_validators dict didn't, so a schema using NUMERIC failed preflight
+    # with "Unknown data type" even though ingest would proceed.
     df = pd.DataFrame({"x": [1.5, 2.25]})
     assert DataValidator(schema={"x": dtype}).validate(df).is_valid
 
@@ -288,13 +316,71 @@ def test_text_with_nulls_is_valid():
     assert DataValidator(schema={"s": "TEXT"}).validate(df).is_valid
 
 
-def test_varchar_still_flags_real_non_strings():
-    # NULL tolerance must NOT mask a genuine type error: a real numeric value
-    # in a VARCHAR column is still non-string and must be reported.
-    df = pd.DataFrame({"s": ["abc", 5, "de"]})
+def test_varchar_accepts_numeric_scalars(make_csv):
+    # Issue #188: pd.read_csv infers numeric-looking columns as int64/float64,
+    # so an all-numeric VARCHAR column (zip / category code, 0/1 label
+    # declared VARCHAR) was rejected with "Column 'code' contains N
+    # non-string values" — an error the user could never clear because
+    # MySQL would happily bind the int as a string. Any scalar (int, float,
+    # bool) must pass the validator; MySQL handles the conversion at bind.
+    df = pd.DataFrame({"code": [100, 200, 300], "label": [0, 1, 0]})
+    result = DataValidator(
+        schema={"code": "VARCHAR(10)", "label": "VARCHAR(8)"}
+    ).validate(df)
+    assert result.is_valid, f"expected valid; errors={result.errors}"
+
+
+def test_varchar_rejects_non_scalar_containers():
+    # The only real shape error left at this layer: a list/dict/set/tuple
+    # has no sensible single-string form, so flag it as non-scalar. This is
+    # what replaces the (over-broad) astype(str)!=value check the fix drops.
+    df = pd.DataFrame({"s": ["abc", [1, 2, 3], "de"]})
     result = DataValidator(schema={"s": "VARCHAR(255)"}).validate(df)
     assert not result.is_valid
-    assert "non-string" in result.errors[0]
+    assert "non-scalar" in result.errors[0]
+
+
+def test_varchar_length_still_enforced_on_numeric():
+    # Length check applies to the stringified form, so a numeric value whose
+    # decimal representation exceeds max_length is still rejected.
+    df = pd.DataFrame({"s": [12345]})
+    result = DataValidator(schema={"s": "VARCHAR(3)"}).validate(df)
+    assert not result.is_valid
+    assert "exceeding max length" in result.errors[0]
+
+
+def test_issue_188_full_repro_csv(make_csv):
+    # End-to-end repro from issue #188:
+    #   schema {id: INT, feat: FLOAT, code: VARCHAR(10), label: VARCHAR(8)}
+    #   id,feat,code,label
+    #   1,1.2,100,A
+    #   2,3.4,200,B
+    # Before the fix: is_valid=False, two "Column 'code' contains 2
+    # non-string values" + "Column 'label' …" errors. After the fix:
+    # passes (pandas reads `code` as int64, but VARCHAR accepts any scalar).
+    path = make_csv(
+        {"id": [1, 2], "feat": [1.2, 3.4], "code": [100, 200], "label": ["A", "B"]}
+    )
+    result = DataValidator(
+        schema={
+            "id": "INT", "feat": "FLOAT",
+            "code": "VARCHAR(10)", "label": "VARCHAR(8)",
+        }
+    ).validate(str(path))
+    assert result.is_valid, f"expected valid; errors={result.errors}"
+
+
+@pytest.mark.parametrize("dtype", ["VARCHAR(10)", "CHAR(3)", "TEXT"])
+def test_issue_188_numeric_scalars_pass_string_family(dtype):
+    # All three string-family validators share the same astype(str)!=value
+    # over-rejection; the fix is applied uniformly.
+    df = pd.DataFrame({"s": ["abc", 100, 200]})  # ints mixed in (CHAR case
+                                                 # is special — see below)
+    if "CHAR(" in dtype:
+        # CHAR enforces fixed length, so use values that all stringify to 3.
+        df = pd.DataFrame({"s": ["abc", 100, 200]})
+    result = DataValidator(schema={"s": dtype}).validate(df)
+    assert result.is_valid, f"{dtype}: errors={result.errors}"
 
 
 def test_char_wrong_length_fails():
@@ -418,3 +504,36 @@ def test_constraints_are_stripped_from_type():
 )
 def test_detect_column_type(series, expected):
     assert DataValidator()._detect_column_type(series) == expected
+
+
+# ---------------------------------------------------------------------------
+# Streaming / large-file validation (bounded memory, full coverage)
+# ---------------------------------------------------------------------------
+
+def test_validate_csv_streams_and_catches_late_chunk(tmp_path):
+    # A bad value PAST the first chunk must still be caught — the validator
+    # scans the whole file chunk by chunk (memory-bounded), not just a sample
+    # and not by loading the entire file. chunk_size forces multiple chunks.
+    p = tmp_path / "big.csv"
+    rows = [str(i) for i in range(50)]
+    rows[35] = "not-an-int"  # lands in the 4th chunk of 10
+    p.write_text("n\n" + "\n".join(rows) + "\n")
+    res = DataValidator(schema={"n": "INT"}).validate(str(p), chunk_size=10)
+    assert not res.is_valid and "non-numeric" in res.errors[0]
+
+
+def test_validate_csv_streaming_clean_file_is_valid(tmp_path):
+    p = tmp_path / "clean.csv"
+    p.write_text("n\n" + "\n".join(str(i) for i in range(50)) + "\n")
+    res = DataValidator(schema={"n": "INT"}).validate(str(p), chunk_size=10)
+    assert res.is_valid and res.metadata["rows_checked"] == 50
+
+
+def test_validate_strips_header_whitespace_to_match_ingestor():
+    # The ingestor strips header whitespace on every chunk (" age" -> "age");
+    # the validator must do the same so it validates the column the ingestor
+    # will actually ingest, rather than silently skipping it.
+    res = DataValidator(schema={"age": "INT"}).validate(
+        pd.DataFrame({" age": [1, "bad"]})
+    )
+    assert not res.is_valid

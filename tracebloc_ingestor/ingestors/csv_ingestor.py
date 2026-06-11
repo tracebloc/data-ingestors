@@ -5,6 +5,8 @@ pandas-based reading and validation capabilities.
 """
 
 from typing import Dict, Any, Generator, Optional, List
+import csv as _csv
+import numpy as np
 import pandas as pd
 import logging
 from pathlib import Path
@@ -17,6 +19,39 @@ from ..utils import label_policy as label_policy_module
 from ..config import Config
 
 config = Config()
+
+
+def _raise_on_overflow(
+    column: str, original: pd.Series, converted: pd.Series, dtype: str
+) -> None:
+    """Reject overflow ±inf in a numeric column at cast time.
+
+    ``pd.to_numeric("1e400")`` returns ``+inf`` silently (IEEE float
+    overflow). Without this guard the overflowed value lands in MySQL as
+    a legitimately-looking number. ``DataValidator`` already runs an inf
+    guard at the gate via ``_non_finite_error``; this is defense-in-depth
+    on the cast path so a bad token that slips through validation can't
+    corrupt the row silently.
+
+    Distinguishes overflow from legitimate missing: a genuinely empty
+    cell was ``NaN``/``NA`` in ``original`` *before* coercion, so we
+    only flag values that are non-finite in ``converted`` AND were
+    present (non-NA) in ``original``.
+    """
+    # Use np.isinf rather than ~np.isfinite to keep NaN tolerance:
+    # legitimate missing cells were NaN in `original` and stay NaN in
+    # `converted`; pd.to_numeric never produces NaN from an inf path.
+    overflowed = np.isinf(converted) | (np.isnan(converted) & original.notna())
+    if overflowed.any():
+        offenders = original[overflowed].head(5).tolist()
+        raise ValueError(
+            f"Column '{column}' (dtype {dtype}) contains "
+            f"{int(overflowed.sum())} value(s) that overflow IEEE float "
+            f"(±inf / NaN). Sample: {offenders}. ``pd.to_numeric`` "
+            f"silently converted overflow (e.g. ``1e400``) into ±inf; "
+            f"this guard surfaces it at cast time instead of letting it "
+            f"reach MySQL."
+        )
 logger = logging.getLogger(__name__)
 logger.setLevel(config.LOG_LEVEL)
 
@@ -30,6 +65,48 @@ __all__ = ["Ingestor"]
 # explicitly via csv_options; the YAML path can't express it because
 # schema/ingest.v1.json restricts spec.csv_options to a small whitelist.
 _TABULAR_NA_VALUES = ["", "NA", "NULL", "None"]
+
+
+def _cast_datetime_strict(series: pd.Series, column: str, dtype: str) -> pd.Series:
+    """Cast a CSV column to datetime with the SAME error policy as numeric
+    columns: an un-parseable token raises (instead of silently coercing
+    to NaT).
+
+    Backend #765 item 3: date cast was ``errors="coerce"`` (silent NULL)
+    while numeric cast was ``errors="raise"`` — opposite policies for
+    the same bad-input class, adjacent lines. Pick one: both ``raise``,
+    because ``DataValidator`` is the gate (catches bad dates with a
+    clear per-column error at preflight), and the cast layer trusts
+    what passed it. A token that reaches the cast and fails to parse
+    means either a validator gap or a schema-mismatch — both surface
+    here as a clear ``ValueError`` instead of becoming a silent NULL.
+
+    Genuine missing cells (already ``NaN`` / ``NA`` in the input) stay
+    that way: ``pd.to_datetime`` with ``errors="raise"`` treats pre-
+    existing NaN as missing (returns ``NaT``), it only raises on a
+    *present* value that fails to parse.
+    """
+    try:
+        return pd.to_datetime(series, errors="raise", format="mixed")
+    except Exception as exc:
+        # Surface the offender per the project convention: name the
+        # column, dtype, and a sample of the bad tokens.
+        offenders = (
+            series[
+                pd.to_datetime(series, errors="coerce", format="mixed").isna()
+                & series.notna()
+            ]
+            .astype(str)
+            .head(5)
+            .tolist()
+        )
+        raise ValueError(
+            f"Column '{column}' (dtype {dtype}) has un-parseable date "
+            f"value(s). Sample: {offenders}. The cast layer raises on "
+            f"un-parseable dates (matching the numeric branch); fix the "
+            f"value(s) or declare the column as VARCHAR if the content "
+            f"isn't actually a date. (Underlying parser error: {exc})"
+        ) from exc
 _TABULAR_FAMILY_CATEGORIES = frozenset({
     TaskCategory.TABULAR_CLASSIFICATION,
     TaskCategory.TABULAR_REGRESSION,
@@ -132,13 +209,56 @@ class CSVIngestor(BaseIngestor):
             dtype = self.schema[column]
             try:
                 if "INT" in dtype.upper():
-                    df[column] = pd.to_numeric(df[column], downcast="integer")
-                elif "FLOAT" in dtype.upper():
-                    df[column] = pd.to_numeric(df[column], downcast="float")
+                    # Nullable Int64, NOT to_numeric(downcast="integer"): under
+                    # the old code any missing cell forced the column to float64,
+                    # so 7 round-tripped as "7.0" — silent corruption of every
+                    # integer in any INT column that had a single blank cell.
+                    # Int64 keeps integers integral and stores missing as pd.NA
+                    # (-> SQL NULL); default errors="raise" still surfaces a
+                    # genuinely non-numeric value as a clear per-column error.
+                    converted = pd.to_numeric(df[column])
+                    _raise_on_overflow(column, df[column], converted, dtype)
+                    df[column] = converted.astype("Int64")
+                elif any(t in dtype.upper() for t in ("FLOAT", "DOUBLE", "DECIMAL", "NUMERIC")):
+                    # float64 — NOT downcast='float' (float32), which corrupted
+                    # precision: 3.14 -> '3.140000104904175'. Also covers DOUBLE/
+                    # DECIMAL/NUMERIC, which previously matched NO branch and let
+                    # non-numeric junk flow untouched to the DB; errors='raise'
+                    # (the default) now rejects junk with a clear per-column
+                    # error. MySQL still applies the column's own precision/scale
+                    # on write.
+                    converted = pd.to_numeric(df[column])
+                    _raise_on_overflow(column, df[column], converted, dtype)
+                    df[column] = converted
                 elif "BOOL" in dtype.upper():
-                    df[column] = df[column].astype("boolean")
-                elif "DATE" in dtype.upper() or "DATETIME" in dtype.upper() or "TIMESTAMP" in dtype.upper() or "TIME" in dtype.upper():
-                    df[column] = pd.to_datetime(df[column], errors="coerce", format='mixed')
+                    # Map the textual/numeric boolean forms DataValidator accepts
+                    # (true/false, yes/no, t/f, y/n, 1/0) to a nullable boolean
+                    # column. df.astype("boolean") alone raises "Need to pass
+                    # bool-like values" on those strings — a direct contradiction
+                    # with the validator, which blesses them, so a CSV with a
+                    # yes/no column passed validation then crashed the ingestor.
+                    _truthy = {"true", "t", "yes", "y", "1", "1.0"}
+                    _falsy = {"false", "f", "no", "n", "0", "0.0"}
+                    _norm = df[column].astype("string").str.strip().str.lower()
+                    df[column] = _norm.map(
+                        lambda x: True if x in _truthy
+                        else (False if x in _falsy else pd.NA),
+                        na_action="ignore",
+                    ).astype("boolean")
+                elif "DATETIME" in dtype.upper() or "TIMESTAMP" in dtype.upper():
+                    # Full date+time. Checked before DATE/TIME because the
+                    # substrings "DATE" and "TIME" both appear in "DATETIME"
+                    # (and "TIME" in "TIMESTAMP").
+                    df[column] = _cast_datetime_strict(df[column], column, dtype)
+                elif "DATE" in dtype.upper():
+                    # DATE only — emit a plain date so the value doesn't gain a
+                    # spurious time ('2026-01-02' was becoming '2026-01-02 00:00:00').
+                    df[column] = _cast_datetime_strict(df[column], column, dtype).dt.date
+                elif "TIME" in dtype.upper():
+                    # TIME only — emit a plain time so the value doesn't gain a
+                    # spurious (today's) date ('14:30:00' was becoming
+                    # '2026-06-08 14:30:00', which MySQL TIME then truncates).
+                    df[column] = _cast_datetime_strict(df[column], column, dtype).dt.time
                 elif any(t in dtype.upper() for t in ("STRING", "TEXT", "VARCHAR", "CHAR")):
                     # Coerce to pandas StringDtype so missing cells become pd.NA
                     # (not float NaN), then map pd.NA -> Python None so the DB
@@ -194,18 +314,110 @@ class CSVIngestor(BaseIngestor):
             is_tabular = self.category in _TABULAR_FAMILY_CATEGORIES
             na_values = _TABULAR_NA_VALUES if is_tabular else [""]
 
+            # Pin string-family schema columns to dtype=str so pandas can't infer
+            # them numeric and silently strip meaning. An all-digit code column
+            # (zip / UniProt accession / zero-padded ID) like "007" is otherwise
+            # inferred as int64 at read time and is already 7 by the time the
+            # VARCHAR cast in _validate_csv runs -> "7", with the leading zeros
+            # gone. na_values are still applied first, so empty/NA cells become
+            # NaN (-> SQL NULL) before the str pin; only present values are kept
+            # verbatim. dtype keys for columns absent from the file are ignored
+            # by pandas, so this is safe when the schema lists more columns than
+            # the CSV carries.
+            _STRING_TYPES = ("VARCHAR", "CHAR", "TEXT", "STRING")
+            _string_schema_cols = {
+                col
+                for col, t in self.schema.items()
+                if isinstance(t, str)
+                and t.upper().split("(")[0].strip() in _STRING_TYPES
+            }
+            # Pandas applies `dtype` keyed by the RAW header literal — before
+            # `chunk.columns.str.strip()` runs. If a header carries surrounding
+            # whitespace (" code "), keying the dtype dict by the clean schema
+            # name ("code") misses, pandas infers numeric, and "007" lands as
+            # 7 — the leading zeros silently lost on the very read this pin was
+            # meant to prevent. Read the raw header up front (same csv module
+            # path we use for duplicate detection) and pin every raw spelling
+            # whose stripped form matches a string-family schema column.
+            _string_raw_headers = set()
+            try:
+                _sep_probe = self.csv_options.get(
+                    "sep", self.csv_options.get("delimiter", ",")
+                )
+                with open(
+                    file_path,
+                    "r",
+                    encoding=self.csv_options.get("encoding", "utf-8"),
+                    newline="",
+                ) as _fh:
+                    _raw = next(_csv.reader(_fh, delimiter=_sep_probe), [])
+                for _h in _raw:
+                    if str(_h).strip() in _string_schema_cols:
+                        _string_raw_headers.add(_h)
+            except (OSError, UnicodeDecodeError, _csv.Error, TypeError, StopIteration):
+                # Probe failed; fall back to keying by the schema name only —
+                # files without leading/trailing whitespace headers (the
+                # common case) still get pinned.
+                _string_raw_headers = set(_string_schema_cols)
+            else:
+                # Always include the bare schema name too, so a file without
+                # the whitespace variant still gets pinned cleanly.
+                _string_raw_headers |= _string_schema_cols
+            string_dtype = {h: str for h in _string_raw_headers}
+
             # Enhanced default options for pandas
             default_options = {
-                "dtype": None,  # Let pandas infer types initially
+                # Pin string-family columns to str; let pandas infer the rest
+                # (numeric/bool/date columns are coerced explicitly in
+                # _validate_csv). None when there are no string columns.
+                "dtype": string_dtype or None,
                 "keep_default_na": is_tabular,
                 "na_values": na_values,
                 "encoding": "utf-8",
-                "on_bad_lines": "warn",
+                # Fail loudly on a malformed (ragged) row instead of silently
+                # dropping it. A wrong-field-count line almost always signals a
+                # real problem (wrong delimiter, an unquoted/embedded comma), and
+                # silently shrinking the dataset corrupts it with no signal and a
+                # still-green "success". pandas' error names the offending line +
+                # field counts. (This also matches _count_records, which reads
+                # with pandas' default on_bad_lines='error'.)
+                "on_bad_lines": "error",
                 "low_memory": False,  # Prevent mixed type inference warnings
                 "engine": "c",  # Use faster C engine
             }
 
             csv_options = {**default_options, **self.csv_options}
+
+            # Reject duplicate column names before pandas silently disambiguates
+            # them (a, a -> a, a.1) and the schema mapping then targets the wrong
+            # physical column — invisible corruption. Read just the raw header row
+            # with the stdlib csv module (NOT pandas) so this is independent of
+            # the pd.read_csv path (and the same delimiter/encoding as the main
+            # read). csv.reader needs a single-char delimiter; a multi-char/regex
+            # sep or a bad encoding falls back to "no header read" (the main read
+            # then surfaces the real error).
+            _sep = csv_options.get("sep", csv_options.get("delimiter", ","))
+            _header = []
+            try:
+                with open(
+                    file_path,
+                    "r",
+                    encoding=csv_options.get("encoding", "utf-8"),
+                    newline="",
+                ) as _fh:
+                    _row = next(_csv.reader(_fh, delimiter=_sep), [])
+                _header = [str(h).strip() for h in _row]
+            except (OSError, UnicodeDecodeError, _csv.Error, TypeError):
+                _header = []
+            _dup_headers = sorted({h for h in _header if _header.count(h) > 1})
+            if _dup_headers:
+                raise ValueError(
+                    f"{RED}Duplicate column name(s) in the CSV header: "
+                    f"{_dup_headers}. Each column must be unique — otherwise the "
+                    f"second is silently renamed '<name>.1' by the parser and the "
+                    f"schema maps onto the wrong column. Rename the duplicates and "
+                    f"re-ingest.{RESET}"
+                )
 
             first_chunk = True
             for chunk in pd.read_csv(file_path, chunksize=chunk_size, **csv_options):
@@ -284,8 +496,19 @@ class CSVIngestor(BaseIngestor):
             Total number of records if countable, None otherwise
         """
         try:
-            # Use pandas to count lines efficiently
-            return pd.read_csv(file_path).shape[0]
+            # Count rows WITHOUT materialising the whole file. The old
+            # `pd.read_csv(file_path).shape[0]` loaded every column of every row
+            # into memory just to get a count — for a multi-GB dataset that's an
+            # OOM (the pod is Killed/137) before ingestion even starts. Read a
+            # single column in chunks and sum the lengths: CSV-aware (quoting /
+            # embedded newlines handled, unlike a raw line count) and bounded
+            # memory. usecols=[0] keeps each chunk to one column.
+            total = 0
+            for chunk in pd.read_csv(
+                file_path, usecols=[0], chunksize=100_000, encoding="utf-8"
+            ):
+                total += len(chunk)
+            return total
         except Exception as e:
             logger.debug(
                 f"{YELLOW}Unable to count CSV records using pandas: {str(e)}{RESET}"

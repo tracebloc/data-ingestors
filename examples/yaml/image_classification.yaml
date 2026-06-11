@@ -1,7 +1,10 @@
 # The dominant case: 8 lines, no `spec` block needed.
 # `category: image_classification` implies:
 #   - data_format: image
-#   - default file_options: target_size [512, 512], extension .jpg
+#   - default file_options: target_size [256, 256], extension .jpeg
+#     (matches the bundled onboarding sample under
+#     `templates/image_classification/data/images/`; override `spec.file_options`
+#     for any other dataset shape)
 #   - default validators: [FileTypeValidator(images), ImageResolutionValidator,
 #                         TableNameValidator, DuplicateValidator]
 #   - required CSV columns: `filename` (image filename, with or without

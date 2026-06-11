@@ -8,7 +8,11 @@ intent: train
 category: time_series_forecasting
 csv: /data/shared/energy-demand/demand.csv
 schema:
-  timestamp: VARCHAR(64)
+  # `timestamp` must be the SQL TIMESTAMP type — TimeFormatValidator
+  # rejects anything else with "Timestamp column in schema must be of type
+  # 'TIMESTAMP'". The previous `VARCHAR(64)` here failed on the very
+  # first validator (#200).
+  timestamp: TIMESTAMP
   region: VARCHAR(32)
   temperature_c: FLOAT
   is_holiday: INT

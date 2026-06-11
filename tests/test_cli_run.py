@@ -182,9 +182,10 @@ def test_csv_kwargs_match_resolved_config(clean_env, mock_runtime, monkeypatch):
     assert kwargs["data_format"] == "image"
     assert kwargs["label_column"] == "image_label"
     assert kwargs["unique_id_column"] is None  # UUID generation, the default
-    # File / CSV options carry the conventional defaults.
-    assert kwargs["file_options"]["target_size"] == [512, 512]
-    assert kwargs["file_options"]["extension"] == ".jpg"
+    # File / CSV options carry the conventional defaults — now aligned with
+    # the bundled image_classification onboarding sample (256×256 .jpeg, #198).
+    assert kwargs["file_options"]["target_size"] == [256, 256]
+    assert kwargs["file_options"]["extension"] == ".jpeg"
     assert kwargs["csv_options"]["chunk_size"] == 1000
 
 

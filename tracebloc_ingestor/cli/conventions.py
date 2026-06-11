@@ -97,9 +97,14 @@ DEFAULT_CSV_OPTIONS: Dict[str, Any] = {
 # customer-tuned values. Refining these defaults after first customer
 # migrations is explicitly out-of-scope for #44 per the ticket.
 DEFAULT_IMAGE_FILE_OPTIONS_BY_CATEGORY: Dict[str, Dict[str, Any]] = {
-    TaskCategory.IMAGE_CLASSIFICATION:    {"target_size": [512, 512], "extension": ".jpg"},
+    # IMAGE_CLASSIFICATION + OBJECT_DETECTION defaults now match the bundled
+    # onboarding samples under `templates/*/data/images/` (#198, #199) so the
+    # framework's own samples round-trip through the documented happy-path
+    # config with zero overrides. Production users with differently-sized data
+    # should set `spec.file_options` in their YAML.
+    TaskCategory.IMAGE_CLASSIFICATION:    {"target_size": [256, 256], "extension": ".jpeg"},
     TaskCategory.SEMANTIC_SEGMENTATION:   {"target_size": [512, 512], "extension": ".jpg"},
-    TaskCategory.OBJECT_DETECTION:        {"target_size": [448, 448], "extension": ".jpg"},
+    TaskCategory.OBJECT_DETECTION:        {"target_size": [1920, 1080], "extension": ".jpg"},
     # keypoint_detection: no target_size default — the customer's pose model
     # dictates input resolution, so the schema requires it top-level.
     TaskCategory.KEYPOINT_DETECTION:      {"extension": ".jpg"},
