@@ -722,3 +722,12 @@ def test_check_src_path_only_runs_for_file_bearing_categories():
         TaskCategory.MASKED_LANGUAGE_MODELING,
     ):
         assert cat in _SRC_PATH_REQUIRED_CATEGORIES
+
+
+def test_check_src_path_required_for_token_classification():
+    """token_classification reads per-row .txt sidecars from texts/ under
+    SRC_PATH (same layout as text_classification), so it must get the
+    early staging preflight instead of N file-transfer 'not found' errors."""
+    from tracebloc_ingestor.utils.constants import TaskCategory
+    from tracebloc_ingestor.ingestors.base import _SRC_PATH_REQUIRED_CATEGORIES
+    assert TaskCategory.TOKEN_CLASSIFICATION in _SRC_PATH_REQUIRED_CATEGORIES

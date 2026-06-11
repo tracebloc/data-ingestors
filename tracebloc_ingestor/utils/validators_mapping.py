@@ -9,12 +9,21 @@ from tracebloc_ingestor.validators.xml_validator import PascalVOCXMLValidator
 from tracebloc_ingestor.validators.time_to_event_validator import TimeToEventValidator
 from tracebloc_ingestor.validators.time_format_validator import TimeFormatValidator
 from tracebloc_ingestor.validators.time_ordered_validator import TimeOrderedValidator
-from tracebloc_ingestor.validators.time_before_today_validator import TimeBeforeTodayValidator
-from tracebloc_ingestor.validators.numeric_columns_validator import NumericColumnsValidator
-from tracebloc_ingestor.validators.keypoint_annotation_validator import KeypointAnnotationValidator
-from tracebloc_ingestor.validators.keypoint_visibility_validator import KeypointVisibilityValidator
+from tracebloc_ingestor.validators.time_before_today_validator import (
+    TimeBeforeTodayValidator,
+)
+from tracebloc_ingestor.validators.numeric_columns_validator import (
+    NumericColumnsValidator,
+)
+from tracebloc_ingestor.validators.keypoint_annotation_validator import (
+    KeypointAnnotationValidator,
+)
+from tracebloc_ingestor.validators.keypoint_visibility_validator import (
+    KeypointVisibilityValidator,
+)
 from tracebloc_ingestor.validators.tokenizer_validator import TokenizerValidator
 from tracebloc_ingestor.validators.file_pairing_validator import FilePairingValidator
+from tracebloc_ingestor.validators.bio_label_validator import BIOLabelValidator
 from tracebloc_ingestor.utils.constants import TaskCategory, FileExtension
 
 
@@ -34,7 +43,9 @@ def map_validators(
             FileTypeValidator(allowed_extension=".xml", path="annotations"),
             PascalVOCXMLValidator(),
             FilePairingValidator(
-                image_path="images", sidecar_path="annotations", sidecar_label="annotation"
+                image_path="images",
+                sidecar_path="annotations",
+                sidecar_label="annotation",
             ),
             ImageResolutionValidator(expected_resolution=options["target_size"]),
             TableNameValidator(),
@@ -61,6 +72,44 @@ def map_validators(
             ),
         )
 
+        # Optional user-supplied tokenizer.json — warn (don't fail) if absent;
+        # if present, it must contain [PAD] (text classification pads batches).
+        validators.append(TokenizerValidator(required_tokens=("[PAD]",), optional=True))
+
+        # Add data validator if schema is provided
+        if options.get("schema"):
+            validators.append(DataValidator(schema=options["schema"]))
+
+        validators.append(TableNameValidator())
+        validators.append(DuplicateValidator())
+
+        return validators
+    elif task_category == TaskCategory.TOKEN_CLASSIFICATION:
+        validators = []
+
+        # Validate text file extensions (one .txt of whitespace-tokenized words
+        # per sample, same layout as text classification).
+        validators.append(
+            FileTypeValidator(
+                allowed_extension=options.get("extension", FileExtension.TXT),
+                path="texts",
+            ),
+        )
+
+        # Validate BIO labels: one tag per word, valid BIO/IOB2 format.
+        # Honor a custom label column name when one is configured in the YAML.
+        validators.append(
+            BIOLabelValidator(
+                texts_path="texts",
+                extension=options.get("extension", FileExtension.TXT),
+                label_column=options.get("label_column") or "label",
+            )
+        )
+
+        # Optional user-supplied tokenizer.json — warn (don't fail) if absent;
+        # if present, it must contain [PAD].
+        validators.append(TokenizerValidator(required_tokens=("[PAD]",), optional=True))
+
         # Add data validator if schema is provided
         if options.get("schema"):
             validators.append(DataValidator(schema=options["schema"]))
@@ -73,20 +122,19 @@ def map_validators(
         validators = []
 
         schema = options.get("schema", {})
-        
+
         validators.append(TimeFormatValidator(schema=schema))
         validators.append(TimeOrderedValidator())
         validators.append(TimeBeforeTodayValidator())
         validators.append(NumericColumnsValidator(schema=schema))
-        
+
         if options.get("schema"):
             schema_without_timestamp = {
-                k: v for k, v in options["schema"].items() 
-                if k.lower() != "timestamp"
+                k: v for k, v in options["schema"].items() if k.lower() != "timestamp"
             }
             if schema_without_timestamp:
                 validators.append(DataValidator(schema=schema_without_timestamp))
-        
+
         validators.append(TableNameValidator())
         validators.append(DuplicateValidator())
 

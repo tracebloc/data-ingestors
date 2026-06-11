@@ -32,6 +32,7 @@
         "semantic_segmentation",
         "instance_segmentation",
         "text_classification",
+        "token_classification",
         "tabular_classification",
         "tabular_regression",
         "time_series_forecasting",
@@ -86,7 +87,7 @@
     "texts": {
       "type": "string",
       "minLength": 1,
-      "description": "Directory holding text files referenced by the labels CSV. Required for text_classification."
+      "description": "Directory holding text files referenced by the labels CSV. Required for text_classification and token_classification."
     },
 
     "sequences": {
@@ -322,6 +323,14 @@
       "then": { "required": ["texts"] }
     },
     {
+      "description": "token_classification requires `texts`.",
+      "if": {
+        "properties": { "category": { "const": "token_classification" } },
+        "required": ["category"]
+      },
+      "then": { "required": ["texts"] }
+    },
+    {
       "description": "masked_language_modeling requires `sequences`.",
       "if": {
         "properties": { "category": { "const": "masked_language_modeling" } },
@@ -390,6 +399,7 @@
               "semantic_segmentation",
               "instance_segmentation",
               "text_classification",
+              "token_classification",
               "tabular_classification"
             ]
           }

@@ -1,0 +1,4 @@
+filename,extension,label
+sample1,'.txt',B-PER I-PER O O B-ORG
+sample2,'.txt',B-LOC O O
+sample3,'.txt',B-ORG O B-MISC O

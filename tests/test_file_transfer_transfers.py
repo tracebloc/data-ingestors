@@ -44,6 +44,7 @@ def _seed(src, subdir, name, content=b"data"):
 # helpers
 # ---------------------------------------------------------------------------
 
+
 def test_find_src_with_extension(dirs):
     src, _ = dirs
     _seed(src, "images", "cat.jpg")
@@ -88,6 +89,7 @@ def test_copy_file_with_retry_overwrites(dirs, tmp_path):
 # ---------------------------------------------------------------------------
 # image_transfer / text_transfer / annotation / mask success
 # ---------------------------------------------------------------------------
+
 
 def test_image_transfer_success(dirs):
     src, dest = dirs
@@ -143,6 +145,7 @@ def test_mask_transfer_success(dirs):
 # map_file_transfer routing
 # ---------------------------------------------------------------------------
 
+
 def test_map_image_classification(dirs):
     src, dest = dirs
     _seed(src, "images", "cat.jpg")
@@ -186,7 +189,8 @@ def test_map_semantic_segmentation_success(dirs):
     _seed(src, "masks", "m.png")
     rec = file_transfer.map_file_transfer(
         TaskCategory.SEMANTIC_SEGMENTATION,
-        {"filename": "x", "mask_id": "m"}, {"extension": ".jpg"},
+        {"filename": "x", "mask_id": "m"},
+        {"extension": ".jpg"},
     )
     assert rec is not None
     assert (dest / "m.png").exists()
@@ -206,10 +210,22 @@ def test_map_mlm_copies_tokenizer(dirs):
     _seed(src, "sequences", "seq.txt", b"tokens")
     (src / "tokenizer.json").write_text("{}")
     rec = file_transfer.map_file_transfer(
-        TaskCategory.MASKED_LANGUAGE_MODELING, {"filename": "seq"}, {"extension": ".txt"}
+        TaskCategory.MASKED_LANGUAGE_MODELING,
+        {"filename": "seq"},
+        {"extension": ".txt"},
     )
     assert rec is not None
     assert (dest / "tokenizer.json").exists()
+
+
+def test_map_token_classification(dirs):
+    src, dest = dirs
+    _seed(src, "texts", "doc.txt", b"John Smith")
+    rec = file_transfer.map_file_transfer(
+        TaskCategory.TOKEN_CLASSIFICATION, {"filename": "doc"}, {"extension": ".txt"}
+    )
+    assert rec is not None
+    assert (dest / "doc.txt").exists()
 
 
 def test_map_keypoint_detection(dirs):
@@ -223,3 +239,36 @@ def test_map_keypoint_detection(dirs):
 
 def test_map_unknown_category_returns_none(dirs):
     assert file_transfer.map_file_transfer("weird", {"filename": "x"}, {}) is None
+
+
+def test_map_text_classification_copies_optional_tokenizer(dirs):
+    src, dest = dirs
+    _seed(src, "texts", "doc.txt", b"hello world")
+    (src / "tokenizer.json").write_text("{}")
+    rec = file_transfer.map_file_transfer(
+        TaskCategory.TEXT_CLASSIFICATION, {"filename": "doc"}, {"extension": ".txt"}
+    )
+    assert rec is not None
+    assert (dest / "tokenizer.json").exists()
+
+
+def test_map_token_classification_copies_optional_tokenizer(dirs):
+    src, dest = dirs
+    _seed(src, "texts", "doc.txt", b"John Smith")
+    (src / "tokenizer.json").write_text("{}")
+    rec = file_transfer.map_file_transfer(
+        TaskCategory.TOKEN_CLASSIFICATION, {"filename": "doc"}, {"extension": ".txt"}
+    )
+    assert rec is not None
+    assert (dest / "tokenizer.json").exists()
+
+
+def test_map_token_classification_without_tokenizer_is_fine(dirs):
+    src, dest = dirs
+    _seed(src, "texts", "doc.txt", b"John Smith")  # no tokenizer.json
+    rec = file_transfer.map_file_transfer(
+        TaskCategory.TOKEN_CLASSIFICATION, {"filename": "doc"}, {"extension": ".txt"}
+    )
+    assert rec is not None
+    assert (dest / "doc.txt").exists()
+    assert not (dest / "tokenizer.json").exists()
