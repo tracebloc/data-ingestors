@@ -977,12 +977,21 @@ class BaseIngestor(ABC):
                 if api_success:
                     stats["api_sent_records"] += len(inserted_ids)
                 else:
-                    # zip(ids, batch) in _process_batch pairs the inserted
-                    # ids with the first len(ids) records of the batch —
-                    # those are the records whose API send failed.
+                    # The inserted-but-unsent records are the batch minus
+                    # the DB failures. Don't assume they're the first
+                    # len(ids) entries: insert_batch's per-record fallback
+                    # appends successes in scan order, so a mid-batch DB
+                    # failure shifts which records were inserted. Failure
+                    # entries carry a *copy* of the record (processed_record
+                    # adds updated_at), so match by data_id — set on every
+                    # processed record by _map_unique_id — not by identity.
+                    db_failed_data_ids = {
+                        f.get("record", {}).get("data_id") for f in db_failures
+                    }
                     failed_records.extend(
                         {"record": record, "error": "api_send_failed"}
-                        for record in batch[: len(inserted_ids)]
+                        for record in batch
+                        if record.get("data_id") not in db_failed_data_ids
                     )
             if db_failures:
                 stats["failed_records"] += len(db_failures)

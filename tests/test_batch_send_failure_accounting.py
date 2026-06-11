@@ -239,6 +239,35 @@ def test_ingest_partial_db_failure_not_double_counted():
     assert summary.failed_records == 1
 
 
+def test_ingest_mid_batch_db_failure_plus_api_failure_tags_right_records():
+    # Bugbot regression guard: insert_batch's per-record fallback appends
+    # successes in scan order, so after a MID-batch DB failure the inserted
+    # records are NOT the first len(ids) entries. The api_send_failed tag
+    # must land on the records that actually inserted (here: #0 and #2),
+    # not on a batch[:len(ids)] prefix that would include the DB-failed #1
+    # and omit #2.
+    records = [{"a": str(i), "filename": f"f{i}"} for i in range(3)]
+    ing = make_ingestor(records=records, category=None)
+    ing.api_client.send_batch.return_value = False
+
+    def fake_insert(table_name, batch):
+        # Middle record fails; failure carries a COPY of the record (the
+        # real insert_batch builds processed_record = {**record, ...}).
+        failed_copy = {**batch[1], "updated_at": "now"}
+        return [10, 12], [{"record": failed_copy, "error": "dup key"}]
+
+    ing.database.insert_batch.side_effect = fake_insert
+
+    failed, summary = _run_ingest(ing)
+
+    api_failed = [f for f in failed if f["error"] == "api_send_failed"]
+    assert {f["record"]["a"] for f in api_failed} == {"0", "2"}
+    assert [f["error"] for f in failed if f["error"] != "api_send_failed"] == ["dup key"]
+    assert summary.inserted_records == 2
+    assert summary.api_sent_records == 0
+    assert summary.failed_records == 1
+
+
 # ---------------------------------------------------------------------------
 # 3. templates exit non-zero when ingest() returns failed records
 # ---------------------------------------------------------------------------
