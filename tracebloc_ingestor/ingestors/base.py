@@ -1037,8 +1037,27 @@ class BaseIngestor(ABC):
             api_success = False
             # Send to API with ingestor_id
             if ids:  # Only send to API if we have valid IDs
+                # Send only the records that actually inserted.
+                # ``zip(ids, batch)`` pairs positionally and truncates to
+                # ``len(ids)``; after a MID-batch DB failure (insert_batch's
+                # per-record fallback appends successes in scan order) that
+                # would send the DB-failed record to the API and drop the
+                # last inserted one — a phantom backend record pointing at
+                # no MySQL row, plus a committed row the platform never
+                # sees. Match by data_id, same as _flush_batch.
+                if db_failures:
+                    db_failed_data_ids = {
+                        f.get("record", {}).get("data_id") for f in db_failures
+                    }
+                    records_to_send = [
+                        record
+                        for record in batch
+                        if record.get("data_id") not in db_failed_data_ids
+                    ]
+                else:
+                    records_to_send = batch
                 api_success = self.api_client.send_batch(
-                    [(id, record) for id, record in zip(ids, batch)],
+                    [(id, record) for id, record in zip(ids, records_to_send)],
                     self.table_name,
                     ingestor_id=self.ingestor_id,  # Include ingestor_id in API requests
                 )
