@@ -22,11 +22,10 @@ table: ner_conll_train
 intent: train
 csv: /data/shared/ner/labels.csv
 texts: /data/shared/ner/texts/
-schema:
-  filename: VARCHAR(255)
-  label: VARCHAR(2048)
 label: label
 ```
+
+> **Note:** `filename` and the label column are framework-managed (`filename` is reserved by the DB layer) and must **not** be declared in a `schema:` block — doing so fails ingestor init with a reserved-column collision. `schema:` is only for additional feature columns.
 
 **3. Install:**
 
