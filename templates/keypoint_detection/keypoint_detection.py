@@ -38,7 +38,9 @@ keypoints = [
 
 # File options for keypoint detection
 file_options = {
-    "target_size": (256, 256),  # image size. Height = Width
+    "target_size": (448, 448),  # image size. Height = Width — matches the
+    # bundled sample under data/images/ (448×448) and the declarative
+    # example examples/yaml/keypoint_detection.yaml.
     "extension": FileExtension.JPG,  # allowed extension for images: jpeg, jpg, png
     "number_of_keypoints": len(keypoints),  # number of keypoints per sample
 }

@@ -138,7 +138,8 @@ CASES = [
     ),
 
     # -----------------------------------------------------------------------
-    # keypoint_detection — template uses 256×256 with 9 keypoints. No
+    # keypoint_detection — template uses 448×448 with 9 keypoints (matches
+    # the bundled 448×448 sample under templates/keypoint_detection/data/). No
     # convention defaults for these (both dataset-specific); schema requires
     # them top-level. label_column="image_label", annotation_column="Annotation",
     # unique_id_column="filename" (opt-in column-mapping per #44).
@@ -151,7 +152,7 @@ CASES = [
             csv="/data/labels.csv",
             images="/data/images/",
             label="image_label",
-            target_size=[256, 256],
+            target_size=[448, 448],
             number_of_keypoints=9,
             data_id={"strategy": "column", "column": "filename"},
         ),
@@ -164,7 +165,7 @@ CASES = [
             "unique_id_column": "filename",
             "annotation_column": "Annotation",  # convention default per category
             "file_options": {
-                "target_size": [256, 256],
+                "target_size": [448, 448],
                 "extension": FileExtension.JPG,
                 "number_of_keypoints": 9,
             },
