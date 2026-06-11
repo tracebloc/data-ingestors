@@ -87,6 +87,13 @@ def test_text_classification_data_format():
     assert r.texts == "/data/shared/support-tickets/texts/"
 
 
+def test_token_classification_data_format():
+    r = resolve(_load("token_classification.yaml"))
+    assert r.data_format == DataFormat.TEXT
+    assert r.file_options == DEFAULT_TEXT_FILE_OPTIONS
+    assert r.label_column == "label"
+
+
 def test_tabular_classification_data_format():
     r = resolve(_load("tabular_classification.yaml"))
     assert r.data_format == DataFormat.TABULAR

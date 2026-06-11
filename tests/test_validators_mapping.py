@@ -14,9 +14,15 @@ from tracebloc_ingestor.validators.duplicate_validator import DuplicateValidator
 from tracebloc_ingestor.validators.xml_validator import PascalVOCXMLValidator
 from tracebloc_ingestor.validators.time_to_event_validator import TimeToEventValidator
 from tracebloc_ingestor.validators.time_format_validator import TimeFormatValidator
-from tracebloc_ingestor.validators.numeric_columns_validator import NumericColumnsValidator
-from tracebloc_ingestor.validators.keypoint_annotation_validator import KeypointAnnotationValidator
-from tracebloc_ingestor.validators.keypoint_visibility_validator import KeypointVisibilityValidator
+from tracebloc_ingestor.validators.numeric_columns_validator import (
+    NumericColumnsValidator,
+)
+from tracebloc_ingestor.validators.keypoint_annotation_validator import (
+    KeypointAnnotationValidator,
+)
+from tracebloc_ingestor.validators.keypoint_visibility_validator import (
+    KeypointVisibilityValidator,
+)
 from tracebloc_ingestor.validators.tokenizer_validator import TokenizerValidator
 
 
@@ -30,7 +36,10 @@ def _types(validators):
 def test_image_classification():
     v = map_validators(TaskCategory.IMAGE_CLASSIFICATION, IMAGE_OPTS)
     assert _types(v) == [
-        FileTypeValidator, ImageResolutionValidator, TableNameValidator, DuplicateValidator
+        FileTypeValidator,
+        ImageResolutionValidator,
+        TableNameValidator,
+        DuplicateValidator,
     ]
 
 
@@ -78,6 +87,37 @@ def test_text_classification_defaults_extension():
     assert _types(v)[0] is FileTypeValidator
 
 
+def test_token_classification_includes_bio_validator():
+    from tracebloc_ingestor.validators.bio_label_validator import BIOLabelValidator
+
+    v = map_validators(TaskCategory.TOKEN_CLASSIFICATION, {})
+    types = _types(v)
+    assert types[0] is FileTypeValidator
+    assert BIOLabelValidator in types
+    assert TableNameValidator in types and DuplicateValidator in types
+
+
+def test_token_classification_with_schema_adds_data_validator():
+    v = map_validators(TaskCategory.TOKEN_CLASSIFICATION, {"schema": {"a": "INT"}})
+    assert DataValidator in _types(v)
+
+
+def test_token_classification_threads_custom_label_column():
+    from tracebloc_ingestor.validators.bio_label_validator import BIOLabelValidator
+
+    v = map_validators(TaskCategory.TOKEN_CLASSIFICATION, {"label_column": "ner_tags"})
+    bio = next(x for x in v if isinstance(x, BIOLabelValidator))
+    assert bio.label_column == "ner_tags"
+
+
+def test_token_classification_defaults_label_column_when_unset():
+    from tracebloc_ingestor.validators.bio_label_validator import BIOLabelValidator
+
+    v = map_validators(TaskCategory.TOKEN_CLASSIFICATION, {"label_column": None})
+    bio = next(x for x in v if isinstance(x, BIOLabelValidator))
+    assert bio.label_column == "label"
+
+
 def test_time_series_forecasting_validator_set():
     v = map_validators(
         TaskCategory.TIME_SERIES_FORECASTING,
@@ -122,3 +162,14 @@ def test_masked_language_modeling_includes_tokenizer():
 
 def test_unknown_category_returns_empty():
     assert map_validators("not_a_category", {}) == []
+
+
+def test_text_and_token_classification_include_optional_tokenizer_validator():
+    from tracebloc_ingestor.validators.tokenizer_validator import TokenizerValidator
+
+    for cat in (TaskCategory.TEXT_CLASSIFICATION, TaskCategory.TOKEN_CLASSIFICATION):
+        v = map_validators(cat, {})
+        tok = [x for x in v if isinstance(x, TokenizerValidator)]
+        assert tok, f"{cat}: expected an (optional) TokenizerValidator"
+        assert tok[0].optional is True
+        assert tok[0].required_tokens == {"[PAD]"}
