@@ -2,6 +2,13 @@
 # Each .txt holds whitespace-tokenized words; the `label` column holds the
 # space-separated BIO tags — exactly one tag per word.
 # `texts:` is convention-mapped; default extension is .txt.
+#
+# Required CSV columns: `filename` (the .txt sidecar's filename) and the
+# label column you set below. Both are framework-managed (`filename` is
+# reserved by the DB layer), so they do NOT belong in a `schema:` block —
+# declaring them there fails ingestor init with a reserved-column
+# collision. `schema:` is optional here (only for additional feature
+# columns to type-check). Same contract as text_classification (#197).
 apiVersion: tracebloc.io/v1
 kind: IngestConfig
 table: ner_conll_train
@@ -9,7 +16,4 @@ intent: train
 category: token_classification
 csv: /data/shared/ner/labels.csv
 texts: /data/shared/ner/texts/
-schema:
-  filename: VARCHAR(255)
-  label: VARCHAR(2048)
 label: label
