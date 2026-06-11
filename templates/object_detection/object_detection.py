@@ -6,6 +6,7 @@ corresponding XML annotation files from the VisDrone dataset format.
 """
 
 import logging
+import sys
 import shutil
 import xml.etree.ElementTree as ET
 from typing import Dict, Any
@@ -82,6 +83,11 @@ def main():
                     logger.warning(
                         f"Error details: {record.get('error', 'Unknown error')}"
                     )
+                # Failed records (DB insert, API send, or processing) must
+                # fail the run — exit non-zero so the K8s Job is marked
+                # failed instead of reporting silent success (SystemExit
+                # bypasses the except Exception handler below).
+                sys.exit(1)
             else:
                 logger.info("All records processed successfully")
 

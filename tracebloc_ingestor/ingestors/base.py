@@ -833,19 +833,9 @@ class BaseIngestor(ABC):
 
                             if len(batch) >= batch_size:
                                 try:
-                                    inserted_ids, api_success, db_failures = (
-                                        self._process_batch(batch, session)
+                                    self._flush_batch(
+                                        batch, session, stats, failed_records
                                     )
-                                    # Only count records that were successfully inserted
-                                    if inserted_ids:
-                                        stats["inserted_records"] += len(inserted_ids)
-                                    if api_success:
-                                        stats["api_sent_records"] += len(inserted_ids)
-                                    if db_failures:
-                                        stats["failed_records"] += len(db_failures)
-                                        failed_records.extend(db_failures)
-                                except Exception as e:
-                                    logger.error(f"Batch processing failed: {str(e)}")
                                 finally:
                                     pbar.update(len(batch))
                                     batch = []
@@ -861,20 +851,9 @@ class BaseIngestor(ABC):
                 # Process remaining records
                 if batch:
                     try:
-                        inserted_ids, api_success, db_failures = self._process_batch(
-                            batch, session
-                        )
-                        # Only count records that were successfully inserted
-                        if inserted_ids:
-                            stats["inserted_records"] += len(inserted_ids)
-                        if api_success:
-                            stats["api_sent_records"] += len(inserted_ids)
-                        if db_failures:
-                            stats["failed_records"] += len(db_failures)
-                            failed_records.extend(db_failures)
+                        self._flush_batch(batch, session, stats, failed_records)
+                    finally:
                         pbar.update(len(batch))
-                    except Exception as e:
-                        logger.error(f"Final batch processing failed: {str(e)}")
 
                 session.commit()
                 pbar.close()
@@ -956,6 +935,74 @@ class BaseIngestor(ABC):
         """Cleanup when used as context manager"""
         pass
 
+    def _flush_batch(
+        self,
+        batch: List[Dict[str, Any]],
+        session: Session,
+        stats: Dict[str, int],
+        failed_records: List[Dict[str, Any]],
+    ) -> None:
+        """Process one batch and fold its outcome into ``stats`` /
+        ``failed_records``. Shared by the in-loop and final-batch flush
+        sites in ``_ingest_with_lock``.
+
+        Failure accounting is the point of this helper. A run where every
+        batch POST was rejected with HTTP 400 used to finish with
+        "All records processed successfully" and exit 0 — the rows were
+        in MySQL but the backend had zero records, and the next platform
+        call failed with "No data found for table name". Two swallow
+        points caused that:
+
+        - ``api_success=False`` only skipped the ``api_sent_records``
+          increment; the records never reached ``failed_records``, so
+          ``ingest()`` returned ``[]`` and the caller exited 0. Now each
+          inserted-but-unsent record is returned as a failed record with
+          ``error="api_send_failed"`` (the rows stay committed — they're
+          in MySQL but invisible to the platform until re-sent).
+        - an exception from ``_process_batch`` was logged and dropped,
+          leaving the whole batch out of every counter. Now the batch is
+          counted and returned as failed.
+
+        The summary needs no extra field: "Failed to Send to API" is
+        derived from ``inserted_records - api_sent_records``, and
+        ``IngestionSummary.has_failures`` already trips on that gap.
+        """
+        try:
+            inserted_ids, api_success, db_failures = self._process_batch(
+                batch, session
+            )
+            # Only count records that were successfully inserted
+            if inserted_ids:
+                stats["inserted_records"] += len(inserted_ids)
+                if api_success:
+                    stats["api_sent_records"] += len(inserted_ids)
+                else:
+                    # The inserted-but-unsent records are the batch minus
+                    # the DB failures. Don't assume they're the first
+                    # len(ids) entries: insert_batch's per-record fallback
+                    # appends successes in scan order, so a mid-batch DB
+                    # failure shifts which records were inserted. Failure
+                    # entries carry a *copy* of the record (processed_record
+                    # adds updated_at), so match by data_id — set on every
+                    # processed record by _map_unique_id — not by identity.
+                    db_failed_data_ids = {
+                        f.get("record", {}).get("data_id") for f in db_failures
+                    }
+                    failed_records.extend(
+                        {"record": record, "error": "api_send_failed"}
+                        for record in batch
+                        if record.get("data_id") not in db_failed_data_ids
+                    )
+            if db_failures:
+                stats["failed_records"] += len(db_failures)
+                failed_records.extend(db_failures)
+        except Exception as e:
+            logger.error(f"Batch processing failed: {str(e)}")
+            stats["failed_records"] += len(batch)
+            failed_records.extend(
+                {"record": record, "error": str(e)} for record in batch
+            )
+
     def _process_batch(
         self, batch: List[Dict[str, Any]], session: Session
     ) -> List[int]:
@@ -1003,8 +1050,14 @@ class BaseIngestor(ABC):
 
         except Exception as e:
             logger.error(f"{RED}Error processing batch: {str(e)}{RESET}")
-            if hasattr(e.response, "text"):
-                logger.error(f"{RED}Error response: {e.response.text}{RESET}")
+            # Guard the attribute chain: a non-HTTP exception (e.g. a DB
+            # error) has no .response at all, and the old
+            # hasattr(e.response, "text") raised AttributeError INSIDE the
+            # handler — replacing the real error with "'RuntimeError'
+            # object has no attribute 'response'".
+            response = getattr(e, "response", None)
+            if response is not None and hasattr(response, "text"):
+                logger.error(f"{RED}Error response: {response.text}{RESET}")
             raise
 
     def _log_summary(self, summary: IngestionSummary):

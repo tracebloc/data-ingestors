@@ -259,18 +259,28 @@ class APIClient:
                 timeout=API_TIMEOUT,
             )
 
-            # Check status after retries are exhausted
+            # Check status after retries are exhausted. Attach the response
+            # so the handler below can log the status and body — a bare
+            # HTTPError has e.response = None, which used to route a DRF 400
+            # into the str(e)[:100] branch, truncating the message right
+            # after "HTTP 400: " and hiding the field error that explains
+            # why every batch was rejected.
             if response.status_code >= 400:
                 raise requests.exceptions.HTTPError(
-                    f"HTTP {response.status_code}: {response.text}"
+                    f"HTTP {response.status_code}: {response.text}",
+                    response=response,
                 )
             return True
 
         except requests.exceptions.RequestException as e:
-            if hasattr(e.response, "text"):
-                logger.error(f"{RED}Error response: {e.response.text}{RESET}")
+            if e.response is not None:
+                body = (e.response.text or "")[:2000]
+                logger.error(
+                    f"{RED}Error sending batch to API: "
+                    f"HTTP {e.response.status_code}: {body}{RESET}"
+                )
             else:
-                logger.error(f"{RED}Error sending batch to API: {str(e)[:100]}{RESET}")
+                logger.error(f"{RED}Error sending batch to API: {str(e)[:500]}{RESET}")
             return False
 
     def send_global_meta_meta(
