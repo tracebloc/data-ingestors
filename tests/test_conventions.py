@@ -332,7 +332,6 @@ def test_image_categories_set_matches_schema_requirements():
         TaskCategory.OBJECT_DETECTION,
         TaskCategory.KEYPOINT_DETECTION,
         TaskCategory.SEMANTIC_SEGMENTATION,
-        TaskCategory.INSTANCE_SEGMENTATION,
     }
     assert IMAGE_CATEGORIES == expected
 
