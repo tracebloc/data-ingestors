@@ -45,8 +45,13 @@ class TaskCategory:
     TIME_SERIES_FORECASTING = "time_series_forecasting"
     TIME_TO_EVENT_PREDICTION = "time_to_event_prediction"
     SEMANTIC_SEGMENTATION = "semantic_segmentation"
-    INSTANCE_SEGMENTATION = "instance_segmentation"
     MASKED_LANGUAGE_MODELING = "masked_language_modeling"
+
+    # instance_segmentation is deliberately absent: it briefly shipped here
+    # and in the schema enum with no validators and no file transfer, so
+    # configs half-ingested (DB rows + API records, zero files staged).
+    # Re-adding a category requires wiring every dispatch site — enforced
+    # by tests/test_category_congruence.py.
 
     @classmethod
     def get_all_categories(cls) -> list[str]:
@@ -67,7 +72,6 @@ class TaskCategory:
             cls.TIME_SERIES_FORECASTING,
             cls.TIME_TO_EVENT_PREDICTION,
             cls.SEMANTIC_SEGMENTATION,
-            cls.INSTANCE_SEGMENTATION,
             cls.MASKED_LANGUAGE_MODELING,
         ]
 

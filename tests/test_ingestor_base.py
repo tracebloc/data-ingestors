@@ -704,14 +704,14 @@ def test_check_src_path_only_runs_for_file_bearing_categories():
     CSV path is checked separately). This keeps tabular-only ingests
     working even when SRC_PATH isn't set."""
     from tracebloc_ingestor.utils.constants import TaskCategory
-    from tracebloc_ingestor.ingestors.base import _SRC_PATH_REQUIRED_CATEGORIES
+    from tracebloc_ingestor.ingestors.base import _FILE_BEARING_CATEGORIES
     for cat in (
         TaskCategory.TABULAR_CLASSIFICATION,
         TaskCategory.TABULAR_REGRESSION,
         TaskCategory.TIME_SERIES_FORECASTING,
         TaskCategory.TIME_TO_EVENT_PREDICTION,
     ):
-        assert cat not in _SRC_PATH_REQUIRED_CATEGORIES
+        assert cat not in _FILE_BEARING_CATEGORIES
     # Image / text / segmentation / MLM all need a staged SRC_PATH.
     for cat in (
         TaskCategory.IMAGE_CLASSIFICATION,
@@ -721,7 +721,7 @@ def test_check_src_path_only_runs_for_file_bearing_categories():
         TaskCategory.TEXT_CLASSIFICATION,
         TaskCategory.MASKED_LANGUAGE_MODELING,
     ):
-        assert cat in _SRC_PATH_REQUIRED_CATEGORIES
+        assert cat in _FILE_BEARING_CATEGORIES
 
 
 def test_check_src_path_required_for_token_classification():
@@ -729,5 +729,5 @@ def test_check_src_path_required_for_token_classification():
     SRC_PATH (same layout as text_classification), so it must get the
     early staging preflight instead of N file-transfer 'not found' errors."""
     from tracebloc_ingestor.utils.constants import TaskCategory
-    from tracebloc_ingestor.ingestors.base import _SRC_PATH_REQUIRED_CATEGORIES
-    assert TaskCategory.TOKEN_CLASSIFICATION in _SRC_PATH_REQUIRED_CATEGORIES
+    from tracebloc_ingestor.ingestors.base import _FILE_BEARING_CATEGORIES
+    assert TaskCategory.TOKEN_CLASSIFICATION in _FILE_BEARING_CATEGORIES

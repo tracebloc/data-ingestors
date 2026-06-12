@@ -45,20 +45,29 @@ _TABULAR_FAMILY_CATEGORIES = frozenset({
     TaskCategory.TIME_TO_EVENT_PREDICTION,
 })
 
-# File-bearing categories resolve every per-row sidecar against
-# ``config.SRC_PATH``. If that path is empty/unset/missing, every file
-# lookup silently falls through to a relative path (``"" + "images/x.jpg"``
-# -> ``"images/x.jpg"``), file_transfer skips every record, and the user
-# sees N copies of "Source image not found: images/x.jpg" — blaming the
-# data when the real cause is "SRC_PATH was never staged on the PVC".
+# File-bearing categories: every record references sidecar files (images,
+# annotations, masks, texts, sequences) that live under ``config.SRC_PATH``
+# and must be copied to DEST_PATH by ``map_file_transfer``. This single set
+# drives BOTH uses:
+#   1. the SRC_PATH preflight in ``validate_data`` — if SRC_PATH is
+#      empty/unset/missing, every file lookup silently falls through to a
+#      relative path and the user sees N copies of "Source image not
+#      found: images/x.jpg", blaming the data when the real cause is
+#      "SRC_PATH was never staged on the PVC";
+#   2. the per-record ``map_file_transfer`` gate in ``_ingest_with_lock``.
+# Keeping these two on one set is deliberate: when they were separate
+# lists, instance_segmentation sat in one but not the other and shipped
+# half-wired — rows reached MySQL and the backend API with zero files
+# staged (the silent-half-ingest pattern from #99).
+# ``tests/test_category_congruence.py`` anchors this set to the schema
+# enum's file-bearing categories.
 # Tabular / time-series have no sidecar dirs under SRC_PATH, so they're
-# excluded from the guard (the CSV path itself is checked elsewhere).
-_SRC_PATH_REQUIRED_CATEGORIES = frozenset({
+# excluded (the CSV path itself is checked elsewhere).
+_FILE_BEARING_CATEGORIES = frozenset({
     TaskCategory.IMAGE_CLASSIFICATION,
     TaskCategory.OBJECT_DETECTION,
     TaskCategory.KEYPOINT_DETECTION,
     TaskCategory.SEMANTIC_SEGMENTATION,
-    TaskCategory.INSTANCE_SEGMENTATION,
     TaskCategory.TEXT_CLASSIFICATION,
     TaskCategory.TOKEN_CLASSIFICATION,
     TaskCategory.MASKED_LANGUAGE_MODELING,
@@ -636,7 +645,7 @@ class BaseIngestor(ABC):
         # "Source image not found: images/x.jpg" — blames the data when
         # the real cause is "SRC_PATH was never staged / set" (#772 P2).
         # File-bearing categories only (tabular has nothing under SRC_PATH).
-        if self.category in _SRC_PATH_REQUIRED_CATEGORIES:
+        if self.category in _FILE_BEARING_CATEGORIES:
             self._check_src_path()
 
         # Pre-flight: a non-UTF-8 CSV otherwise surfaces as a misleading
@@ -785,15 +794,7 @@ class BaseIngestor(ABC):
                         if processed_record:
                             stats["processed_records"] += 1
 
-                            if self.category in [
-                                TaskCategory.IMAGE_CLASSIFICATION,
-                                TaskCategory.OBJECT_DETECTION,
-                                TaskCategory.TEXT_CLASSIFICATION,
-                                TaskCategory.TOKEN_CLASSIFICATION,
-                                TaskCategory.SEMANTIC_SEGMENTATION,
-                                TaskCategory.KEYPOINT_DETECTION,
-                                TaskCategory.MASKED_LANGUAGE_MODELING,
-                            ]:
+                            if self.category in _FILE_BEARING_CATEGORIES:
                                 processed_record = map_file_transfer(
                                     self.category, processed_record, self.file_options
                                 )
