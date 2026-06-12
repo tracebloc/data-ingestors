@@ -131,6 +131,46 @@ def test_loads_from_json_empty_string_is_missing(tmp_path):
     assert result.is_valid, f"expected valid; errors={result.errors}"
 
 
+def test_loads_from_json_single_dict_normalised_to_one_record(tmp_path):
+    """A top-level JSON dict (one record, not wrapped in `[...]`) must validate
+    the same way `[{...}]` does — matching JSONIngestor.read_data's contract.
+
+    Regression: `JSONIngestor.read_data` is explicit:
+
+        # Handle both array and object formats
+        if isinstance(data, dict):
+            data = [data]
+        elif not isinstance(data, list):
+            raise ValueError("JSON data must be an object or array of objects")
+
+    And its docstring promises "handles both single-object and
+    array-of-objects formats". But `DataValidator._load_data`'s .json branch
+    used `pd.read_json(orient="records")`, which expects a list — a
+    top-level dict produced a DataFrame the validator then rejected with
+    "No data found to validate", before `read_data` ever ran. A user
+    submitting a single-record JSON file got the same "0 rows" treatment
+    as an empty file even though their data was perfectly well-formed.
+
+    Surfaced by adversarial testing against v0.3.9-rc1 (issue #232).
+    """
+    p = tmp_path / "single.json"
+    p.write_text('{"id": 1, "age": 30, "label": "A"}')
+    result = DataValidator(
+        schema={"id": "INT", "age": "INT", "label": "VARCHAR(8)"}
+    ).validate(str(p))
+    assert result.is_valid, f"expected valid; errors={result.errors}"
+
+
+def test_loads_from_json_non_object_top_level_still_fails(tmp_path):
+    """A top-level JSON value that's neither a dict nor a list (a bare
+    string, number, etc.) must still be rejected — the normalisation only
+    wraps dicts, not arbitrary scalars."""
+    p = tmp_path / "bare.json"
+    p.write_text('"just a string"')
+    result = DataValidator(schema={"a": "INT"}).validate(str(p))
+    assert not result.is_valid
+
+
 def test_unknown_type_fails():
     df = pd.DataFrame({"a": [1]})
     result = DataValidator(schema={"a": "WEIRDTYPE"}).validate(df)
