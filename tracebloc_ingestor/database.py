@@ -492,34 +492,48 @@ class Database:
         # Get all columns from the table
         columns = inspector.get_columns(table_name)
 
-        # Convert SQLAlchemy types back to MySQL types
+        # Reflection against a live MySQL returns DIALECT type classes whose
+        # names already ARE the MySQL keywords (VARCHAR, INTEGER, DECIMAL,
+        # TINYINT, ...), while in-process metadata uses the GENERIC classes
+        # (String, Integer, Numeric, ...). Upper-casing the class name unifies
+        # the two; this map only covers names that differ from the platform's
+        # MySQL vocabulary (the keywords _get_sqlalchemy_type accepts).
         type_mapping = {
-            "String": "VARCHAR",
-            "Text": "TEXT",
-            "Integer": "INT",
-            "BigInteger": "BIGINT",
-            "Float": "FLOAT",
-            "Double": "DOUBLE",
-            "Boolean": "BOOLEAN",
-            "Date": "DATE",
-            "DateTime": "DATETIME",
-            "Timestamp": "TIMESTAMP",
-            "Time": "TIME",
-            "BLOB": "BLOB",
-            "LONGBLOB": "LONGBLOB",
+            "STRING": "VARCHAR",
+            "INTEGER": "INT",
+            "BIGINTEGER": "BIGINT",
+            "SMALLINTEGER": "SMALLINT",
+            "NUMERIC": "DECIMAL",
+            "DOUBLE_PRECISION": "DOUBLE",
+            "LARGEBINARY": "BLOB",
         }
 
         schema = {}
         for column in columns:
-            # Get the type name
-            type_name = column["type"].__class__.__name__
+            col_type = column["type"]
+            type_name = col_type.__class__.__name__.upper()
 
-            # Convert SQLAlchemy type to MySQL type
-            mysql_type = type_mapping.get(type_name, "VARCHAR")
+            # MySQL has no native BOOLEAN type: BOOL columns are created — and
+            # therefore reflected — as TINYINT(1).
+            if (
+                type_name == "TINYINT"
+                and getattr(col_type, "display_width", None) == 1
+            ):
+                schema[column["name"]] = "BOOLEAN"
+                continue
 
-            # Add length for VARCHAR types
-            if mysql_type == "VARCHAR" and hasattr(column["type"], "length"):
-                mysql_type = f"{mysql_type}({column['type'].length})"
+            mysql_type = type_mapping.get(type_name, type_name)
+
+            # Re-attach the parametrisation MySQL carries in the DDL string.
+            if mysql_type in ("VARCHAR", "CHAR", "BINARY", "VARBINARY"):
+                length = getattr(col_type, "length", None)
+                if length:
+                    mysql_type = f"{mysql_type}({length})"
+            elif mysql_type == "DECIMAL":
+                precision = getattr(col_type, "precision", None)
+                if precision is not None:
+                    scale = getattr(col_type, "scale", None) or 0
+                    mysql_type = f"DECIMAL({precision},{scale})"
 
             schema[column["name"]] = mysql_type
 
