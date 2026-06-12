@@ -6,14 +6,19 @@ corresponding XML annotation files from the VisDrone dataset format.
 """
 
 import logging
-import sys
 import shutil
 import xml.etree.ElementTree as ET
 from typing import Dict, Any
 import json
 import os
 
-from tracebloc_ingestor import Config, Database, APIClient, CSVIngestor
+from tracebloc_ingestor import (
+    Config,
+    Database,
+    APIClient,
+    CSVIngestor,
+    run_ingestion,
+)
 from tracebloc_ingestor.utils.logging import setup_logging
 from tracebloc_ingestor.utils.constants import (
     TaskCategory,
@@ -50,50 +55,28 @@ csv_options = {
 
 def main():
     """Run the object detection ingestion example."""
-    try:
-        # Initialize components
-        database = Database(config)
-        api_client = APIClient(config)
+    # Initialize components
+    database = Database(config)
+    api_client = APIClient(config)
 
-        # Create ingestor for object detection data with validators
-        ingestor = CSVIngestor(
-            database=database,
-            api_client=api_client,
-            table_name=config.TABLE_NAME,
-            data_format=DataFormat.IMAGE,
-            category=TaskCategory.OBJECT_DETECTION,
-            csv_options=csv_options,
-            file_options=object_detection_options,
-            label_column="image_label",
-            intent=Intent.TRAIN,  # Is the data for training or testing
-        )
+    # Create ingestor for object detection data with validators
+    ingestor = CSVIngestor(
+        database=database,
+        api_client=api_client,
+        table_name=config.TABLE_NAME,
+        data_format=DataFormat.IMAGE,
+        category=TaskCategory.OBJECT_DETECTION,
+        csv_options=csv_options,
+        file_options=object_detection_options,
+        label_column="image_label",
+        intent=Intent.TRAIN,  # Is the data for training or testing
+    )
 
-        # Ingest data with validation
-        logger.info("Starting object detection ingestion with data validation...")
-        with ingestor:
-            failed_records = ingestor.ingest(
-                config.LABEL_FILE, batch_size=config.BATCH_SIZE
-            )
-            if failed_records:
-                logger.warning(f"Failed to process {len(failed_records)} records")
-                for record in failed_records:
-                    logger.warning(
-                        f"Failed record: {record.get('record', {}).get('filename', 'Unknown')}"
-                    )
-                    logger.warning(
-                        f"Error details: {record.get('error', 'Unknown error')}"
-                    )
-                # Failed records (DB insert, API send, or processing) must
-                # fail the run — exit non-zero so the K8s Job is marked
-                # failed instead of reporting silent success (SystemExit
-                # bypasses the except Exception handler below).
-                sys.exit(1)
-            else:
-                logger.info("All records processed successfully")
-
-    except Exception as e:
-        logger.error(f"Ingestion failed: {str(e)}")
-        raise
+    # Ingest data with validation
+    logger.info("Starting object detection ingestion with data validation...")
+    run_ingestion(
+        ingestor, config.LABEL_FILE, batch_size=config.BATCH_SIZE, logger=logger
+    )
 
 
 if __name__ == "__main__":
