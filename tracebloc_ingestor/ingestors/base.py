@@ -110,12 +110,14 @@ class IngestionSummary(NamedTuple):
     def has_failures(self) -> bool:
         """True if any non-trivial failure occurred — DB insert short of
         total, API short of inserted, file-transfer skipped any record,
-        or processing errored. Used to gate the "completed successfully"
+        a record was dropped during processing (skipped_records), or
+        processing errored. Used to gate the "completed successfully"
         banner so customers can't mistake a partial run for a clean one.
         """
         return (
             self.failed_records > 0
             or self.file_transfer_failures > 0
+            or self.skipped_records > 0
             or self.inserted_records < self.total_records
             or self.api_sent_records < self.inserted_records
         )
@@ -710,6 +712,24 @@ class BaseIngestor(ABC):
             logger.debug(f"Unable to count records: {str(e)}")
             return None
 
+    def _check_intent(self) -> None:
+        """Fail fast on a missing/invalid ``intent`` before any lock, DB, or
+        row work (#234).
+
+        ``intent`` is a single run-wide config value, not per-row data. When
+        it was wrong (e.g. a ``"trian"`` typo), ``_map_unique_id`` returned
+        None for EVERY record, so every row was silently skipped and — before
+        #234 — the run still exited 0 with an empty dataset and a Job marked
+        Succeeded. A config error must abort loudly, not masquerade as N
+        per-row skips.
+        """
+        if not self.intent or self.intent not in Intent.get_all_intents():
+            raise ValueError(
+                f"{RED}Invalid intent {self.intent!r}. Must be one of "
+                f"{Intent.get_all_intents()}. This is a configuration error — "
+                f"set 'intent: train' or 'intent: test' in your config.{RESET}"
+            )
+
     def ingest(self, source: Any, batch_size: int = 50) -> List[Dict[str, Any]]:
         """
         Ingest data from the source with progress tracking
@@ -732,6 +752,9 @@ class BaseIngestor(ABC):
         # including ones the inner ``except Exception`` doesn't catch
         # (Session() construction failure, _count_records exceptions,
         # KeyboardInterrupt, etc.).
+        # Fail fast on a config error (bad intent) before acquiring a table
+        # lock or touching the DB — it would otherwise skip every row (#234).
+        self._check_intent()
         _lock_path = self._acquire_table_lock()
         try:
             return self._ingest_with_lock(source, batch_size)
@@ -840,7 +863,24 @@ class BaseIngestor(ABC):
                                     pbar.update(len(batch))
                                     batch = []
                         else:
+                            # process_record returned None: the record was
+                            # dropped (blank/invalid unique_id, or an error
+                            # inside process_record). Count it AND surface it
+                            # as a failed record so the run exits non-zero —
+                            # a dropped record is silent data loss, not a
+                            # clean skip. Before #234 these reached only
+                            # skipped_records, never failed_records, so
+                            # run_ingestion returned [] and the K8s Job was
+                            # marked Succeeded despite losing rows. The
+                            # specific reason was already logged by
+                            # process_record / _map_unique_id.
                             stats["skipped_records"] += 1
+                            failed_records.append(
+                                {
+                                    "record": record,
+                                    "error": "record_dropped_in_processing",
+                                }
+                            )
                             pbar.update(1)  # Update progress bar for skipped records
                     except Exception as e:
                         # Count processing errors (including missing columns) as failed records
@@ -1160,17 +1200,22 @@ class BaseIngestor(ABC):
                 f"{BOLD}📊 Success Rate:{RESET} [{status_color}{bar}{RESET}] {status_color}{success_rate:.1f}%{RESET}"
             )
 
-        # Status banner. Any non-trivial failure (DB, API, or file-transfer)
-        # disqualifies the "completed successfully" message — a customer
-        # seeing 🎉 should be able to trust that no record was silently
-        # dropped. The three failure channels are mutually exclusive per
-        # record (file-transfer failures never reach DB; DB failures never
-        # reach API; api_only_failures are records that hit DB but didn't
-        # ship), so summing them gives a clean unique count instead of
-        # the double-count `total_records - api_sent_records` would produce.
+        # Status banner. Any non-trivial failure (DB, API, file-transfer, or a
+        # record dropped during processing) disqualifies the "completed
+        # successfully" message — a customer seeing 🎉 should be able to trust
+        # that no record was silently dropped. The four failure channels are
+        # mutually exclusive per record (a dropped record never reaches
+        # file-transfer; file-transfer failures never reach DB; DB failures
+        # never reach API; api_only_failures are records that hit DB but didn't
+        # ship), so summing them gives a clean unique count instead of the
+        # double-count `total_records - api_sent_records` would produce.
+        # ``skipped_records`` MUST be included or the count contradicts the
+        # severity text — a run that drops most rows printed "0 failure(s)"
+        # while success_rate said "most records failed" (#234).
         total_failures = (
             summary.failed_records
             + summary.file_transfer_failures
+            + summary.skipped_records
             + api_only_failures
         )
         if not summary.has_failures:
