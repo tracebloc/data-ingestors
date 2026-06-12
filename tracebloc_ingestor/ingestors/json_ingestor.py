@@ -371,21 +371,26 @@ class JSONIngestor(BaseIngestor):
         single-object and array-streaming paths in ``read_data``. Factored
         out so the array path can ``yield from`` it inside the ``with
         open(...)`` block — the file handle stays open exactly as long as
-        the generator is being consumed."""
+        the generator is being consumed.
+
+        A type-invalid or malformed record RAISES (fail-fast); it is NOT
+        silently skipped. Skipping reported a partial ingest as success and
+        exited 0 (#234), and it diverged from the CSV cast and the
+        DataValidator gate, which both abort on a bad record. Raising makes
+        JSON behave consistently with CSV (#235): a bad record aborts the
+        run with a clear, non-zero exit instead of vanishing from the
+        dataset with only a log line nobody durably sees."""
         for record in records:
             if not isinstance(record, dict):
-                logger.warning(
-                    f"{YELLOW}Skipping invalid record: {record}{RESET}"
+                raise ValueError(
+                    f"{RED}JSON record is not an object: {record!r}. Every item "
+                    f"in a JSON array must be an object mapping column names to "
+                    f"values.{RESET}"
                 )
-                continue
-            try:
-                self._validate_record(record)
-                yield record  # Let base class handle the cleaning and unique ID mapping
-            except ValueError as e:
-                logger.warning(
-                    f"{YELLOW}Skipping invalid record: {str(e)}{RESET}"
-                )
-                continue
+            # _validate_record raises ValueError on a type-invalid record;
+            # let it propagate (fail-fast) rather than skip-and-continue.
+            self._validate_record(record)
+            yield record  # base handles cleaning + unique-ID mapping
 
     def _count_records(self, file_path: str) -> Optional[int]:
         """Count total records in JSON file without materialising it.

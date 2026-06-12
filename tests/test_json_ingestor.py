@@ -59,19 +59,25 @@ def test_read_data_invalid_top_level_type_raises(tmp_path):
         list(ing.read_data(str(p)))
 
 
-def test_read_data_skips_non_dict_items(tmp_path):
+def test_read_data_non_dict_item_raises(tmp_path):
+    # A non-object array item is malformed data: fail fast instead of silently
+    # skipping it (which exited 0 on a partial ingest — #234) and diverging
+    # from CSV/the gate, which abort on a bad record (#235).
     p = _write_json(tmp_path, [{"a": 1}, "not-a-dict", {"a": 2}])
     ing = make_json_ingestor(schema={"a": "INT"})
-    records = list(ing.read_data(str(p)))
-    assert len(records) == 2
+    with pytest.raises(ValueError, match="not an object"):
+        list(ing.read_data(str(p)))
 
 
-def test_read_data_skips_records_failing_validation(tmp_path):
-    # record missing unique_id_column -> _validate_record raises -> skipped
+def test_read_data_record_failing_validation_raises(tmp_path):
+    # A record missing the configured unique_id_column makes _validate_record
+    # raise; that now propagates (fail-fast) instead of silently skipping the
+    # record and reporting a partial ingest as success (#234), consistent with
+    # the CSV cast and the DataValidator gate (#235).
     p = _write_json(tmp_path, [{"a": 1}, {"a": 2, "uid": "x"}])
     ing = make_json_ingestor(schema={"a": "INT"}, unique_id_column="uid")
-    records = list(ing.read_data(str(p)))
-    assert records == [{"a": 2, "uid": "x"}]
+    with pytest.raises(ValueError, match="uid"):
+        list(ing.read_data(str(p)))
 
 
 def test_read_data_malformed_json_raises(tmp_path):
