@@ -62,6 +62,38 @@ def _copy_file_with_retry(src_path: str, dest_path: str) -> None:
     logger.debug(f"Successfully copied file from {src_path} to {dest_path}")
 
 
+def _safe_join(root: str, *parts: str) -> str:
+    """Join ``parts`` under ``root`` and guarantee the result stays inside it.
+
+    The per-row ``filename`` / ``mask_id`` come straight from the user's
+    manifest and are joined onto ``SRC_PATH`` / ``DEST_PATH`` to read and write
+    sidecar files. ``os.path.join`` makes two unsafe moves on hostile input:
+
+      - an absolute component drops everything before it
+        (``os.path.join("/data/shared", "images", "/etc/passwd")`` ->
+        ``"/etc/passwd"``), and
+      - ``..`` segments walk up out of ``root``.
+
+    On the shared cluster PVC that lets a crafted manifest read another
+    tenant's files into the dataset, or clobber files anywhere the Job can
+    write (#239). Normalise the join and reject anything that resolves outside
+    ``root``. ``os.path.abspath`` (not ``realpath``) collapses ``.`` / ``..``
+    and makes the path absolute WITHOUT resolving symlinks, so legitimately
+    symlinked PVC mounts keep working while traversal / absolute injection is
+    blocked.
+    """
+    root_abs = os.path.abspath(root)
+    candidate = os.path.abspath(os.path.join(root_abs, *parts))
+    if candidate != root_abs and not candidate.startswith(root_abs + os.sep):
+        raise ValueError(
+            f"{RED}Refusing path that escapes {root_abs!r}: the manifest value "
+            f"{os.path.join(*parts)!r} resolved to {candidate!r}. A filename / "
+            f"mask_id must stay within the dataset directory — absolute paths "
+            f"and '..' traversal are rejected (path-traversal guard, #239).{RESET}"
+        )
+    return candidate
+
+
 def _has_extension(filename: str) -> bool:
     """Check if filename has an extension, handling multiple dots correctly.
 
@@ -102,7 +134,10 @@ def _find_src(subdirectory: str, filename: str, extension: str):
     filename_with_ext = (
         filename if _has_extension(filename) else f"{filename}{extension}"
     )
-    candidate = os.path.join(config.SRC_PATH, subdirectory, filename_with_ext)
+    # _safe_join raises on a traversal/absolute filename (#239); a genuinely
+    # missing file still returns None below (skip), so a malicious manifest
+    # value is rejected loudly while an absent sidecar is tolerated.
+    candidate = _safe_join(config.SRC_PATH, subdirectory, filename_with_ext)
     if os.path.exists(candidate):
         return candidate, filename_with_ext
     return None, filename_with_ext
@@ -146,8 +181,8 @@ def image_transfer(
                 )
                 return None
 
-        # Save the resized image
-        image_dest_path = os.path.join(config.DEST_PATH, filename_with_ext)
+        # Save the resized image (write target guarded against escaping DEST — #239)
+        image_dest_path = _safe_join(config.DEST_PATH, filename_with_ext)
         # Copy file with retry logic
         _copy_file_with_retry(src_path, image_dest_path)
 
@@ -201,8 +236,8 @@ def annotation_transfer(
                 )
                 return None
 
-        # Save the file
-        file_dest_path = os.path.join(config.DEST_PATH, filename_with_ext)
+        # Save the file (write target guarded against escaping DEST — #239)
+        file_dest_path = _safe_join(config.DEST_PATH, filename_with_ext)
         # Copy file with retry logic
         _copy_file_with_retry(src_path, file_dest_path)
 
@@ -247,14 +282,15 @@ def text_transfer(
         else:
             filename_with_ext = filename
 
-        # Process the text file
-        text_src_path = os.path.join(config.SRC_PATH, src_subdir, filename_with_ext)
+        # Process the text file (both ends guarded against escaping the
+        # SRC/DEST sandboxes via a crafted filename — #239)
+        text_src_path = _safe_join(config.SRC_PATH, src_subdir, filename_with_ext)
         if not os.path.exists(text_src_path):
             logger.error(f"{RED}Source text file not found: {text_src_path}{RESET}")
             return None
 
         # Save the text file
-        text_dest_path = os.path.join(config.DEST_PATH, filename_with_ext)
+        text_dest_path = _safe_join(config.DEST_PATH, filename_with_ext)
         # Copy file with retry logic
         _copy_file_with_retry(text_src_path, text_dest_path)
 
@@ -276,7 +312,8 @@ def _find_mask_src(mask_id: str):
     """
     mask_name = mask_id.split(".")[0] if "." in mask_id else mask_id
     for ext in [".png", ".jpg", ".jpeg"]:
-        candidate = os.path.join(config.SRC_PATH, "masks", f"{mask_name}{ext}")
+        # _safe_join raises on a traversal/absolute mask_id (#239).
+        candidate = _safe_join(config.SRC_PATH, "masks", f"{mask_name}{ext}")
         if os.path.exists(candidate):
             return candidate, ext, mask_name
     return None, None, mask_name
@@ -297,7 +334,8 @@ def mask_transfer(
     os.makedirs(config.DEST_PATH, exist_ok=True)
 
     try:
-        mask_dest_path = os.path.join(config.DEST_PATH, f"{mask_name}{mask_ext}")
+        # Write target guarded against escaping DEST via a crafted mask_id (#239)
+        mask_dest_path = _safe_join(config.DEST_PATH, f"{mask_name}{mask_ext}")
         _copy_file_with_retry(mask_src_path, mask_dest_path)
 
         logger.info(f"{GREEN}Successfully copied mask: {mask_name}{RESET}")
