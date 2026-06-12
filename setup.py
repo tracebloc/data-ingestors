@@ -25,8 +25,25 @@ def _read_version():
     return match.group(1)
 
 
-with open("requirements.txt", "r") as f:
-    requirements = f.read().splitlines()
+def _read_requirements(filename):
+    """Return the runtime requirement strings from a pip requirements file,
+    skipping blank lines, comments, and ``-r`` / ``-c`` include directives.
+
+    Without the filter, a section header like ``# Database`` (and the blank
+    separators) were fed verbatim into ``install_requires`` — only tolerated
+    by luck of the installer. Filtering keeps install_requires to actual
+    requirement specifiers now that runtime/dev deps are split across
+    requirements.txt and requirements-dev.txt.
+    """
+    lines = (this_directory / filename).read_text().splitlines()
+    return [
+        s
+        for line in lines
+        if (s := line.strip()) and not s.startswith(("#", "-"))
+    ]
+
+
+requirements = _read_requirements("requirements.txt")
 
 setup(
     name="tracebloc_ingestor",
