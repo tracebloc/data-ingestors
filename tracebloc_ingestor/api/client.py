@@ -320,10 +320,16 @@ class APIClient:
                 timeout=API_TIMEOUT,
             )
 
-            # Check status after retries are exhausted
+            # Check status after retries are exhausted. Attach the response
+            # so the handler below can log the status and the full body —
+            # a bare HTTPError has e.response = None, which routed a DRF 400
+            # into a str(e)[:100] branch that truncated the message right
+            # after "HTTP 400: ", hiding the field error (same swallow point
+            # send_batch had — fixed in #223).
             if response.status_code >= 400:
                 raise requests.exceptions.HTTPError(
-                    f"HTTP {response.status_code}: {response.text}"
+                    f"HTTP {response.status_code}: {response.text}",
+                    response=response,
                 )
             logger.info(
                 f"{GREEN}Successfully sent global metadata. "
@@ -332,11 +338,16 @@ class APIClient:
             return True
 
         except requests.exceptions.RequestException as e:
-            logger.error(
-                f"{RED}Error sending global metadata to API: {str(e)[:100]}{RESET}"
-            )
-            if hasattr(e.response, "text"):
-                logger.error(f"{RED}Error response: {e.response.text}{RESET}")
+            if e.response is not None:
+                body = (e.response.text or "")[:2000]
+                logger.error(
+                    f"{RED}Error sending global metadata to API: "
+                    f"HTTP {e.response.status_code}: {body}{RESET}"
+                )
+            else:
+                logger.error(
+                    f"{RED}Error sending global metadata to API: {str(e)[:500]}{RESET}"
+                )
             return False
 
     def send_generate_edge_label_meta(
@@ -364,10 +375,12 @@ class APIClient:
             )
             response = self._authed_request("GET", url, timeout=API_TIMEOUT)
 
-            # Check status after retries are exhausted
+            # Check status after retries are exhausted. Response attached so
+            # the handler logs the full backend error (see send_batch / #223).
             if response.status_code >= 400:
                 raise requests.exceptions.HTTPError(
-                    f"HTTP {response.status_code}: {response.text}"
+                    f"HTTP {response.status_code}: {response.text}",
+                    response=response,
                 )
             logger.info(
                 f"{GREEN}Successfully generated edge label metadata. Response{RESET}"
@@ -375,11 +388,16 @@ class APIClient:
             return True
 
         except requests.exceptions.RequestException as e:
-            logger.error(
-                f"{RED}Error generating edge label metadata: {str(e)[:100]}{RESET}"
-            )
-            if hasattr(e.response, "text"):
-                logger.error(f"{RED}Error response: {e.response.text}{RESET}")
+            if e.response is not None:
+                body = (e.response.text or "")[:2000]
+                logger.error(
+                    f"{RED}Error generating edge label metadata: "
+                    f"HTTP {e.response.status_code}: {body}{RESET}"
+                )
+            else:
+                logger.error(
+                    f"{RED}Error generating edge label metadata: {str(e)[:500]}{RESET}"
+                )
             return False
 
     def prepare_dataset(
@@ -416,10 +434,12 @@ class APIClient:
             )
             response = self._authed_request("GET", url, timeout=API_TIMEOUT)
 
-            # Check status after retries are exhausted
+            # Check status after retries are exhausted. Response attached so
+            # the handler logs the full backend error (see send_batch / #223).
             if response.status_code >= 400:
                 raise requests.exceptions.HTTPError(
-                    f"HTTP {response.status_code}: {response.text}"
+                    f"HTTP {response.status_code}: {response.text}",
+                    response=response,
                 )
             logger.info(
                 f"{GREEN}Successfully prepared data. "
@@ -428,9 +448,14 @@ class APIClient:
             return True
 
         except requests.exceptions.RequestException as e:
-            logger.error(f"{RED}Error preparing data: {str(e)[:100]}{RESET}")
-            if hasattr(e.response, "text"):
-                logger.error(f"{RED}Error response: {e.response.text}{RESET}")
+            if e.response is not None:
+                body = (e.response.text or "")[:2000]
+                logger.error(
+                    f"{RED}Error preparing data: "
+                    f"HTTP {e.response.status_code}: {body}{RESET}"
+                )
+            else:
+                logger.error(f"{RED}Error preparing data: {str(e)[:500]}{RESET}")
             return False
 
     def create_dataset(
@@ -487,10 +512,12 @@ class APIClient:
                 timeout=API_TIMEOUT,
             )
 
-            # Check status after retries are exhausted
+            # Check status after retries are exhausted. Response attached so
+            # the handler logs the full backend error (see send_batch / #223).
             if response.status_code >= 400:
                 raise requests.exceptions.HTTPError(
-                    f"HTTP {response.status_code}: {response.text}"
+                    f"HTTP {response.status_code}: {response.text}",
+                    response=response,
                 )
             dataset = self._parse_json(response, required=True)
             logger.info(
@@ -499,9 +526,14 @@ class APIClient:
             return dataset
 
         except requests.exceptions.RequestException as e:
-            logger.error(f"{RED}Error creating dataset: {str(e)[:100]}{RESET}")
-            if hasattr(e.response, "text"):
-                logger.error(f"{RED}Error response: {e.response.text}{RESET}")
+            if e.response is not None:
+                body = (e.response.text or "")[:2000]
+                logger.error(
+                    f"{RED}Error creating dataset: "
+                    f"HTTP {e.response.status_code}: {body}{RESET}"
+                )
+            else:
+                logger.error(f"{RED}Error creating dataset: {str(e)[:500]}{RESET}")
             raise
 
     def __del__(self):

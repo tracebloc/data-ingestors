@@ -83,7 +83,12 @@ def main():
                 logger.info("All records processed successfully")
 
     except Exception as e:
-        logger.error(f"{str(e)}")
+        logger.error(f"Ingestion failed: {str(e)}")
+        # Re-raise so the process exits non-zero — swallowing here let a
+        # hard failure (validation error, DB error, backend registration
+        # rejection raised by ingest()) end with exit code 0 and a K8s
+        # Job marked Succeeded.
+        raise
 
 
 if __name__ == "__main__":
