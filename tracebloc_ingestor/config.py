@@ -72,6 +72,24 @@ class Config:
             return self._overrides[name]
         return default
 
+    @staticmethod
+    def _as_int(field: str, env_name: str, raw: Any) -> int:
+        """``int(raw)`` with a clear config error (#238).
+
+        A non-numeric ``MYSQL_PORT`` / ``BATCH_SIZE`` (e.g. a typo'd
+        ``MYSQL_PORT=abc``) otherwise surfaced as a raw
+        ``ValueError: invalid literal for int() with base 10: 'abc'`` at the
+        point of property access — opaque about which setting is wrong. Name
+        the field and the env var the user should fix instead.
+        """
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            raise ValueError(
+                f"{field} must be an integer, got {raw!r}. Set the "
+                f"{env_name} environment variable to a valid integer."
+            )
+
     # ===== Database =====
     # Cluster-internal MySQL ships with these credentials baked into its
     # image; they're connection conventions, not secrets. Override via env
@@ -85,7 +103,7 @@ class Config:
     def DB_PORT(self) -> int:
         ov = self._override("DB_PORT")
         raw = ov if ov is not _MISSING else os.environ.get("MYSQL_PORT", "3306")
-        return int(raw)
+        return self._as_int("DB_PORT", "MYSQL_PORT", raw)
 
     @property
     def DB_USER(self) -> str:
@@ -106,7 +124,7 @@ class Config:
     def BATCH_SIZE(self) -> int:
         ov = self._override("BATCH_SIZE")
         raw = ov if ov is not _MISSING else os.environ.get("BATCH_SIZE", "4000")
-        return int(raw)
+        return self._as_int("BATCH_SIZE", "BATCH_SIZE", raw)
 
     # ===== API =====
     @property

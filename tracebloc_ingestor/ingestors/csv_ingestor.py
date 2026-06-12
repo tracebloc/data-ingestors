@@ -200,8 +200,30 @@ class CSVIngestor(BaseIngestor):
         # Log which schema columns are not in the CSV (for information only)
         missing_columns = set(self.schema.keys()) - set(df.columns)
         if missing_columns:
+            # A delimiter mismatch is the usual cause when EVERY schema column
+            # reads as "missing": a ;/tab/pipe-delimited file (European Excel
+            # export, or a TSV saved as .csv) parses as a single column whose
+            # header still contains the real delimiter. Surface that instead of
+            # the misleading "every column missing" (#238).
+            hint = ""
+            if len(df.columns) == 1:
+                only = str(df.columns[0])
+                for delim, label in (
+                    (";", "';' (semicolon)"),
+                    ("\t", "a tab"),
+                    ("|", "'|' (pipe)"),
+                ):
+                    if delim in only:
+                        hint = (
+                            f" The file parsed as a single column — it appears to "
+                            f"be delimited by {label}, not a comma. Set the "
+                            f"delimiter (csv_options 'delimiter') to match and "
+                            f"re-ingest."
+                        )
+                        break
             raise ValueError(
-                f"{RED}Schema columns not present in CSV: {', '.join(missing_columns)}{RESET}"
+                f"{RED}Schema columns not present in CSV: "
+                f"{', '.join(sorted(missing_columns))}.{hint}{RESET}"
             )
 
         # Type validation using pandas dtypes - only for columns that exist in the CSV

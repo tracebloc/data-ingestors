@@ -457,21 +457,39 @@ class BaseIngestor(ABC):
 
     @staticmethod
     def _check_csv_encoding(source: Any) -> None:
-        """Fail fast with a clear message if a CSV source is not valid UTF-8.
+        """Fail fast with a clear message on a CSV that isn't valid UTF-8 or
+        that contains a NUL byte.
 
         Every validator reads CSVs as UTF-8 and swallows decode errors into a
         misleading "No data found"; a non-UTF-8 export (e.g. a Latin-1/Windows
-        CSV with umlauts) would otherwise crash or mislead. Probe once, up front.
+        CSV with umlauts) would otherwise crash or mislead. A NUL byte (0x00)
+        is sneakier: it IS valid UTF-8 (U+0000) so it slips past the decode
+        check, but pandas' C parser silently TRUNCATES the field at the NUL
+        (``"a\\x00b"`` -> ``"a"``) — silent corruption (#238). Probe once, up
+        front, and reject both.
         """
         if not isinstance(source, (str, Path)):
             return
         path = Path(source)
         if path.suffix.lower() != ".csv" or not path.exists():
             return
+        offset = 0
         try:
             with open(path, "r", encoding="utf-8") as fh:
-                while fh.read(1 << 20):  # decode in 1 MB chunks; raises on a bad byte
-                    pass
+                while True:
+                    chunk = fh.read(1 << 20)  # 1 MB; decode raises on a bad byte
+                    if not chunk:
+                        break
+                    nul = chunk.find("\x00")
+                    if nul != -1:
+                        raise ValueError(
+                            f"{RED}'{path.name}' contains a NUL byte (0x00) at "
+                            f"character {offset + nul}. This is not valid CSV text "
+                            f"— the file is likely binary or a corrupt export, and "
+                            f"pandas would silently truncate the field at the NUL. "
+                            f"Remove the NUL byte(s) and re-ingest.{RESET}"
+                        )
+                    offset += len(chunk)
         except UnicodeDecodeError as exc:
             raise ValueError(
                 f"{RED}'{path.name}' is not valid UTF-8 — a non-UTF-8 byte was found at "
