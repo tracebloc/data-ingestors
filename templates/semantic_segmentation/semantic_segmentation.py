@@ -6,10 +6,15 @@ both the image files and their corresponding mask annotation files.
 """
 
 import logging
-import sys
 from typing import Dict, Any
 
-from tracebloc_ingestor import Config, Database, APIClient, CSVIngestor
+from tracebloc_ingestor import (
+    Config,
+    Database,
+    APIClient,
+    CSVIngestor,
+    run_ingestion,
+)
 from tracebloc_ingestor.utils.logging import setup_logging
 from tracebloc_ingestor.utils.constants import (
     TaskCategory,
@@ -48,52 +53,30 @@ csv_options = {
 
 def main():
     """Run the semantic segmentation ingestion example."""
-    try:
-        # Initialize components
-        database = Database(config)
-        api_client = APIClient(config)
+    # Initialize components
+    database = Database(config)
+    api_client = APIClient(config)
 
-        # Create ingestor for semantic segmentation data with validators
-        ingestor = CSVIngestor(
-            database=database,
-            api_client=api_client,
-            table_name=config.TABLE_NAME,
-            schema=schema,
-            data_format=DataFormat.IMAGE,
-            category=TaskCategory.SEMANTIC_SEGMENTATION,
-            csv_options=csv_options,
-            file_options=semantic_segmentation_options,
-            label_column="image_label",
-            unique_id_column="filename",
-            intent=Intent.TRAIN,  # Is the data for training or testing
-        )
+    # Create ingestor for semantic segmentation data with validators
+    ingestor = CSVIngestor(
+        database=database,
+        api_client=api_client,
+        table_name=config.TABLE_NAME,
+        schema=schema,
+        data_format=DataFormat.IMAGE,
+        category=TaskCategory.SEMANTIC_SEGMENTATION,
+        csv_options=csv_options,
+        file_options=semantic_segmentation_options,
+        label_column="image_label",
+        unique_id_column="filename",
+        intent=Intent.TRAIN,  # Is the data for training or testing
+    )
 
-        # Ingest data with validation
-        logger.info("Starting semantic segmentation ingestion with data validation...")
-        with ingestor:
-            failed_records = ingestor.ingest(
-                config.LABEL_FILE, batch_size=config.BATCH_SIZE
-            )
-            if failed_records:
-                logger.warning(f"Failed to process {len(failed_records)} records")
-                for record in failed_records:
-                    logger.warning(
-                        f"Failed record: {record.get('record', {}).get('filename', 'Unknown')}"
-                    )
-                    logger.warning(
-                        f"Error details: {record.get('error', 'Unknown error')}"
-                    )
-                # Failed records (DB insert, API send, or processing) must
-                # fail the run — exit non-zero so the K8s Job is marked
-                # failed instead of reporting silent success (SystemExit
-                # bypasses the except Exception handler below).
-                sys.exit(1)
-            else:
-                logger.info("All records processed successfully")
-
-    except Exception as e:
-        logger.error(f"Ingestion failed: {str(e)}")
-        raise
+    # Ingest data with validation
+    logger.info("Starting semantic segmentation ingestion with data validation...")
+    run_ingestion(
+        ingestor, config.LABEL_FILE, batch_size=config.BATCH_SIZE, logger=logger
+    )
 
 
 if __name__ == "__main__":

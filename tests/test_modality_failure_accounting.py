@@ -179,35 +179,71 @@ def test_clean_run_has_no_failures_for_every_category(category):
 _TEMPLATES = sorted(Path(__file__).parent.parent.glob("templates/*/*.py"))
 
 
-def _main_except_handlers(template: Path):
-    """Yield every ``except Exception`` handler inside the template's
-    ``main()`` function."""
+def _main_node(template: Path):
     tree = ast.parse(template.read_text(encoding="utf-8"))
     for node in ast.walk(tree):
         if isinstance(node, ast.FunctionDef) and node.name == "main":
-            for sub in ast.walk(node):
-                if isinstance(sub, ast.ExceptHandler):
-                    if isinstance(sub.type, ast.Name) and sub.type.id == "Exception":
-                        yield sub
+            return node
+    raise AssertionError(f"{template}: no main() function")
+
+
+def _swallowing_handlers(func: ast.FunctionDef):
+    """Yield every exception handler inside ``func`` that could swallow an
+    Exception: ``except Exception``, a tuple containing Exception, or a
+    bare ``except:``."""
+    for sub in ast.walk(func):
+        if not isinstance(sub, ast.ExceptHandler):
+            continue
+        catches_exception = (
+            sub.type is None  # bare except
+            or (isinstance(sub.type, ast.Name) and sub.type.id == "Exception")
+            or (
+                isinstance(sub.type, ast.Tuple)
+                and any(
+                    isinstance(el, ast.Name) and el.id == "Exception"
+                    for el in sub.type.elts
+                )
+            )
+        )
+        if catches_exception:
+            yield sub
 
 
 @pytest.mark.parametrize("template", _TEMPLATES, ids=lambda p: p.parent.name)
 def test_template_except_handler_reraises(template):
-    """A template's ``except Exception`` must re-raise. Log-and-swallow
-    turned any exception escaping ``ingest()`` — validation failure, DB
-    error, the backend-registration RuntimeErrors from base.py — into
-    exit code 0 and a K8s Job marked Succeeded, the same silent-success
-    class #223 fixed for batch POST failures."""
-    handlers = list(_main_except_handlers(template))
-    assert handlers, f"{template}: no except-Exception handler in main()"
-    for handler in handlers:
+    """main() must not swallow exceptions. Log-and-swallow turned any
+    exception escaping ``ingest()`` — validation failure, DB error, the
+    backend-registration RuntimeErrors from base.py — into exit code 0
+    and a K8s Job marked Succeeded, the same silent-success class #223
+    fixed for batch POST failures (#230).
+
+    Since the duplication extraction, the templates delegate the whole
+    run/report/exit contract to ``run_ingestion`` (which logs and
+    re-raises — covered in tests/test_template_runner.py) and carry no
+    handler of their own. This guard remains so a reintroduced
+    ``except Exception`` (or bare ``except``) around the run can't bring
+    the swallow back: if a handler exists, it must re-raise, and main()
+    must still route through run_ingestion either way."""
+    main_fn = _main_node(template)
+    for handler in _swallowing_handlers(main_fn):
         has_raise = any(
             isinstance(stmt, ast.Raise) for stmt in ast.walk(handler)
         )
         assert has_raise, (
-            f"{template}: except-Exception handler in main() does not "
-            f"re-raise — a hard ingest failure would exit 0"
+            f"{template}: exception handler in main() does not re-raise "
+            f"— a hard ingest failure would exit 0"
         )
+    calls_run_ingestion = any(
+        isinstance(sub, ast.Call)
+        and isinstance(sub.func, ast.Name)
+        and sub.func.id == "run_ingestion"
+        for sub in ast.walk(main_fn)
+    )
+    assert calls_run_ingestion, (
+        f"{template}: main() does not call run_ingestion — the exit "
+        f"contract (sys.exit(1) on failed records, re-raise on hard "
+        f"errors) would not apply"
+    )
 
 
 # ---------------------------------------------------------------------------

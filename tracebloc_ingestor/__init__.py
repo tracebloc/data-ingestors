@@ -9,6 +9,7 @@ from .config import Config
 from .database import Database
 from .api.client import APIClient
 from .ingestors import BaseIngestor, CSVIngestor, JSONIngestor
+from .utils.template_runner import run_ingestion
 from .validators import (
     BaseValidator,
     ValidationResult,
@@ -34,4 +35,5 @@ __all__ = [
     "FileTypeValidator",
     "ImageResolutionValidator",
     "TableNameValidator",
+    "run_ingestion",
 ]
