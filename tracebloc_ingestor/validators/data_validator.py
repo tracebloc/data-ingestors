@@ -17,6 +17,7 @@ import pandas as pd
 
 from .base import BaseValidator, ValidationResult
 from ..config import Config
+from ..utils import coercion
 from ..utils.logging import setup_logging
 
 config = Config()
@@ -181,7 +182,18 @@ class DataValidator(BaseValidator):
 
         try:
             reader = pd.read_csv(
-                path, chunksize=chunk_size, encoding="utf-8", on_bad_lines="error"
+                path,
+                chunksize=chunk_size,
+                encoding="utf-8",
+                on_bad_lines="error",
+                # Read NA exactly as CSVIngestor will (per-column: typed
+                # columns treat NA/null/None as missing, string/structural
+                # columns only ""). Without this the gate read with pandas'
+                # global default set and a non-tabular numeric column with an
+                # "NA" token passed validation, then crashed the ingestor's
+                # cast — the validate-pass -> ingest-crash of #237.
+                na_values=coercion.build_csv_na_values(self.schema),
+                keep_default_na=False,
             )
         except pd.errors.EmptyDataError:
             return self._create_result(
@@ -232,7 +244,15 @@ class DataValidator(BaseValidator):
                 suffix = path.suffix.lower()
                 if suffix == ".csv":
                     df = pd.read_csv(
-                        path, nrows=sample_size, encoding="utf-8", on_bad_lines="warn"
+                        path,
+                        nrows=sample_size,
+                        encoding="utf-8",
+                        on_bad_lines="warn",
+                        # Same per-column NA policy as the streaming path and
+                        # CSVIngestor, so a sampled validation agrees with the
+                        # full ingest read (#237).
+                        na_values=coercion.build_csv_na_values(self.schema),
+                        keep_default_na=False,
                     )
                     return df
                 elif suffix == ".json":
@@ -539,6 +559,15 @@ class DataValidator(BaseValidator):
         non_finite = self._non_finite_error(series, numeric_series, column_name)
         if non_finite:
             errors.append(non_finite)
+
+        # Reject values beyond signed 64-bit range with the SAME check the
+        # ingestor runs, so preflight and ingest agree (#236). Without it a
+        # 26-digit value coerced to a finite, integer-valued float here and
+        # passed validation, then crashed the cast with a cryptic numpy /
+        # "Integer out of range" error.
+        overflow = coercion.int_range_error(series, column_name, expected_type)
+        if overflow:
+            errors.append(overflow)
 
         # Check for integer values among the parsed, finite, non-null numbers only
         # (NaN/inf would otherwise be miscounted as "non-integer" via NaN % 1).

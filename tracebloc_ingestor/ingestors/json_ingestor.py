@@ -60,6 +60,7 @@ from ..database import Database
 from ..api.client import APIClient
 from ..utils.constants import RESET, RED, YELLOW
 from ..utils import label_policy as label_policy_module
+from ..utils import coercion
 
 logger = logging.getLogger(__name__)
 
@@ -143,6 +144,21 @@ def _validate_value_against_dtype(value: Any, dtype_upper: str) -> None:
             raise ValueError(
                 f"value {value!r} is non-finite (inf/NaN) and cannot be "
                 f"stored in an INT column"
+            )
+        # Reject values beyond signed 64-bit range with the same verdict the
+        # CSV cast + DataValidator give (#236) — a value no MySQL integer type
+        # can hold. The "declare BIGINT" hint is dropped when the column is
+        # already BIGINT (its ceiling is int64 too).
+        if coercion.int_value_overflows(value):
+            base = dtype_upper.split("(")[0].strip()
+            hint = (
+                ""
+                if base == "BIGINT"
+                else " (declare the column as BIGINT for larger integers)"
+            )
+            raise ValueError(
+                f"value {value!r} is outside the signed 64-bit integer range "
+                f"(max {coercion.INT64_MAX}){hint}"
             )
         if not f.is_integer():
             raise ValueError(

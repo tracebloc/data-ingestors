@@ -14,8 +14,9 @@ from pathlib import Path
 from .base import BaseIngestor
 from ..database import Database
 from ..api.client import APIClient
-from ..utils.constants import RESET, RED, YELLOW, TaskCategory
+from ..utils.constants import RESET, RED, YELLOW
 from ..utils import label_policy as label_policy_module
+from ..utils import coercion
 from ..config import Config
 
 config = Config()
@@ -59,14 +60,6 @@ logger.setLevel(config.LOG_LEVEL)
 __all__ = ["Ingestor"]
 
 
-# Tabular-family categories parse CSVs with a wider null sentinel set so the
-# strings "NA" / "NULL" / "None" become NaN instead of being stored verbatim.
-# This matches what the legacy templates (templates/tabular_*/...) passed
-# explicitly via csv_options; the YAML path can't express it because
-# schema/ingest.v1.json restricts spec.csv_options to a small whitelist.
-_TABULAR_NA_VALUES = ["", "NA", "NULL", "None"]
-
-
 def _cast_datetime_strict(series: pd.Series, column: str, dtype: str) -> pd.Series:
     """Cast a CSV column to datetime with the SAME error policy as numeric
     columns: an un-parseable token raises (instead of silently coercing
@@ -107,12 +100,6 @@ def _cast_datetime_strict(series: pd.Series, column: str, dtype: str) -> pd.Seri
             f"value(s) or declare the column as VARCHAR if the content "
             f"isn't actually a date. (Underlying parser error: {exc})"
         ) from exc
-_TABULAR_FAMILY_CATEGORIES = frozenset({
-    TaskCategory.TABULAR_CLASSIFICATION,
-    TaskCategory.TABULAR_REGRESSION,
-    TaskCategory.TIME_SERIES_FORECASTING,
-    TaskCategory.TIME_TO_EVENT_PREDICTION,
-})
 
 
 class CSVIngestor(BaseIngestor):
@@ -209,6 +196,18 @@ class CSVIngestor(BaseIngestor):
             dtype = self.schema[column]
             try:
                 if "INT" in dtype.upper():
+                    # Reject out-of-int64 values FIRST with a clear message.
+                    # On a value beyond int64 pandas reads the column as object
+                    # (strings) and ``pd.to_numeric(errors="raise")`` below
+                    # throws a cryptic "Integer out of range" (or, on other
+                    # pandas versions, the old overflow guard threw numpy's
+                    # "ufunc 'isinf' not supported") — #236. The shared check
+                    # coerces-then-range-checks so it's object/string-dtype
+                    # safe, and it pre-empts the cryptic raise. Same check runs
+                    # in DataValidator so preflight and ingest agree.
+                    overflow = coercion.int_range_error(df[column], column, dtype)
+                    if overflow:
+                        raise ValueError(overflow)
                     # Nullable Int64, NOT to_numeric(downcast="integer"): under
                     # the old code any missing cell forced the column to float64,
                     # so 7 round-tripped as "7.0" — silent corruption of every
@@ -216,6 +215,8 @@ class CSVIngestor(BaseIngestor):
                     # Int64 keeps integers integral and stores missing as pd.NA
                     # (-> SQL NULL); default errors="raise" still surfaces a
                     # genuinely non-numeric value as a clear per-column error.
+                    # (Safe now: the only values that make to_numeric return an
+                    # object dtype are out-of-int64 ints, already rejected above.)
                     converted = pd.to_numeric(df[column])
                     _raise_on_overflow(column, df[column], converted, dtype)
                     df[column] = converted.astype("Int64")
@@ -223,11 +224,27 @@ class CSVIngestor(BaseIngestor):
                     # float64 — NOT downcast='float' (float32), which corrupted
                     # precision: 3.14 -> '3.140000104904175'. Also covers DOUBLE/
                     # DECIMAL/NUMERIC, which previously matched NO branch and let
-                    # non-numeric junk flow untouched to the DB; errors='raise'
-                    # (the default) now rejects junk with a clear per-column
-                    # error. MySQL still applies the column's own precision/scale
-                    # on write.
-                    converted = pd.to_numeric(df[column])
+                    # non-numeric junk flow untouched to the DB. MySQL still
+                    # applies the column's own precision/scale on write.
+                    #
+                    # Coerce-then-detect (NOT errors="raise"): a value with more
+                    # than ~15 integer digits is a perfectly valid float (1e26)
+                    # but pandas reads it as an object/string column, and
+                    # errors="raise" then threw the same cryptic "Integer out of
+                    # range" #236 hits on INT. Coercing yields the float; we
+                    # surface a genuinely non-numeric token with a clear
+                    # per-column message instead of a raw parser error.
+                    converted = pd.to_numeric(df[column], errors="coerce")
+                    non_numeric = converted.isna() & df[column].notna()
+                    if non_numeric.any():
+                        sample = df[column][non_numeric].head(5).tolist()
+                        raise ValueError(
+                            f"Column '{column}' contains {int(non_numeric.sum())} "
+                            f"non-numeric value(s). Sample: {sample}"
+                        )
+                    # inf guard (e.g. an overflow that coerced to ±inf). Safe to
+                    # call np.isinf here: `converted` is now a float series, never
+                    # the object dtype that made this throw on the raw column.
                     _raise_on_overflow(column, df[column], converted, dtype)
                     df[column] = converted
                 elif "BOOL" in dtype.upper():
@@ -304,15 +321,16 @@ class CSVIngestor(BaseIngestor):
         try:
             chunk_size = self.csv_options.pop("chunk_size", 1000)
 
-            # NA handling. Tabular-family CSVs use pandas' full default NA set
-            # (keep_default_na=True) so every common missing sentinel — ""/NaN/
-            # "N/A"/"null"/"NA"/"NULL"/"None" — parses as NaN. Crucially this
-            # MATCHES how the validators read the file (plain pd.read_csv with
-            # defaults), so a file that passes validation can't then crash the
-            # numeric type-conversion below on an unrecognised NA token. Other
-            # categories keep the conservative empty-only behaviour.
-            is_tabular = self.category in _TABULAR_FAMILY_CATEGORIES
-            na_values = _TABULAR_NA_VALUES if is_tabular else [""]
+            # NA handling — PER COLUMN, identical to the validator gate. Every
+            # schema column treats ""/NA/null/None as missing (-> NULL);
+            # non-schema columns (filename, mask_id, …) are omitted so a file
+            # named "NA.jpg" survives. The same builder feeds DataValidator's
+            # read, so a file can't pass validation and then crash the cast on a
+            # token one layer treats as missing and the other as data — the
+            # whole-category split (tabular vs other) that caused #237. Used
+            # with keep_default_na=False so pandas' global default set never
+            # reaches a non-schema column.
+            na_values = coercion.build_csv_na_values(self.schema)
 
             # Pin string-family schema columns to dtype=str so pandas can't infer
             # them numeric and silently strip meaning. An all-digit code column
@@ -371,7 +389,10 @@ class CSVIngestor(BaseIngestor):
                 # (numeric/bool/date columns are coerced explicitly in
                 # _validate_csv). None when there are no string columns.
                 "dtype": string_dtype or None,
-                "keep_default_na": is_tabular,
+                # keep_default_na=False: NA detection is driven entirely by the
+                # per-column na_values dict above, so pandas' global default set
+                # can't turn a protected column's "NA" into NULL.
+                "keep_default_na": False,
                 "na_values": na_values,
                 "encoding": "utf-8",
                 # Fail loudly on a malformed (ragged) row instead of silently
