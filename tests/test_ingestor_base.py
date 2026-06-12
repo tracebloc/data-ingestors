@@ -485,6 +485,16 @@ def test_check_csv_encoding_skips_non_csv_sources(tmp_path):
     BaseIngestor._check_csv_encoding(str(tmp_path / "missing.csv"))   # nonexistent
 
 
+def test_check_csv_encoding_rejects_nul_byte(tmp_path):
+    # A NUL byte (0x00) is valid UTF-8 so it slips past the decode check, but
+    # pandas' C parser silently TRUNCATES the field at it ("a\x00b" -> "a").
+    # Reject it up front with a clear message (#238).
+    bad = tmp_path / "nul.csv"
+    bad.write_bytes(b"id,name\n1,a\x00b\n2,ok\n")
+    with pytest.raises(ValueError, match="NUL byte"):
+        BaseIngestor._check_csv_encoding(str(bad))
+
+
 # ---------------------------------------------------------------------------
 # Concurrent-ingest table lock — backend/#772 P2
 # ---------------------------------------------------------------------------
