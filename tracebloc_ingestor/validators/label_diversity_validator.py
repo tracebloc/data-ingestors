@@ -96,40 +96,87 @@ class LabelDiversityValidator(BaseValidator):
                     metadata={"label_column": self.label_column},
                 )
 
-            distinct = df[col].dropna().unique()
+            # Surface whitespace-collapsable duplicates before counting
+            # distinct values (issue #261). A user CSV with values like
+            # ``"  A  "`` mixed with ``"A"`` looks fine in a notebook
+            # (pandas treats them as distinct, and so do we), inserts
+            # into MySQL with both stored verbatim, and trains a model
+            # with one extra class the user never intended — silent
+            # label-set corruption. Spot the pattern here so the warning
+            # reaches the user at preflight, and ingestion strips at the
+            # write side (BaseIngestor.process_record) so MySQL only
+            # sees the trimmed value.
+            warnings: list = []
+            raw_distinct = df[col].dropna().unique()
+            # Build the strip-collapsed set on string-typed values only
+            # (label columns are VARCHAR/CHAR/TEXT in our schema; INT or
+            # FLOAT labels — if anyone ever has them — have no whitespace
+            # to collapse).
+            collapsed: dict = {}
+            for v in raw_distinct:
+                if isinstance(v, str):
+                    stripped = v.strip()
+                    collapsed.setdefault(stripped, []).append(v)
+                else:
+                    collapsed.setdefault(v, []).append(v)
+            whitespace_dupes = {
+                stripped: variants
+                for stripped, variants in collapsed.items()
+                if len(variants) > 1
+            }
+            if whitespace_dupes:
+                # Cap the message length — a wholly-messy dataset shouldn't
+                # produce a 10kB warning.
+                sample = dict(list(whitespace_dupes.items())[:3])
+                warnings.append(
+                    f"label column '{col}' contains values that differ only "
+                    f"in surrounding whitespace and will be stored as "
+                    f"separate classes unless cleaned upstream: {sample}. "
+                    f"Ingestion strips whitespace from the label column at "
+                    f"write time, so MySQL stores the trimmed value — but "
+                    f"if you intended these to be DIFFERENT classes, fix "
+                    f"the CSV before re-running (see issue #261)."
+                )
+
+            # Count distinct AFTER collapsing whitespace duplicates — those
+            # land as ONE class in MySQL after the write-side strip, so the
+            # validator must use the same number when deciding whether the
+            # dataset crosses the min_distinct gate.
+            distinct = list(collapsed.keys())
             n = len(distinct)
             if n < self.min_distinct:
                 # Show the actual values found, capped — a user with a
                 # 50k-row degenerate dataset doesn't need the full list,
                 # but the first few values plus the count tell them
                 # exactly what's wrong with the input.
-                sample = list(distinct[:5])
+                sample = distinct[:5]
                 # Surface counts per distinct value to make "all one
                 # class" stand out clearly: "{'X': 10}" vs "{'X': 10000}"
                 # both clearly read as single-class but the latter gives
                 # the user the full row count for free.
-                value_counts = df[col].value_counts(dropna=True).head(5).to_dict()
+                raw_counts = df[col].value_counts(dropna=True).head(5).to_dict()
                 return self._create_result(
                     is_valid=False,
                     errors=[
                         f"Classification category requires at least "
                         f"{self.min_distinct} distinct label values in column "
-                        f"'{col}'; this dataset has {n} distinct value(s): "
-                        f"{sample}. Value counts: {value_counts}. If this is "
-                        f"intentional (e.g. you have a continuous target), "
-                        f"pick a regression-family category like "
-                        f"tabular_regression or time_series_forecasting "
-                        f"instead."
+                        f"'{col}' (after whitespace stripping); this dataset "
+                        f"has {n} distinct value(s): {sample}. Raw value "
+                        f"counts: {raw_counts}. If this is intentional "
+                        f"(e.g. you have a continuous target), pick a "
+                        f"regression-family category like tabular_regression "
+                        f"or time_series_forecasting instead."
                     ],
                     metadata={
                         "label_column": col,
                         "distinct_count": n,
-                        "value_counts": value_counts,
+                        "value_counts": raw_counts,
                     },
                 )
 
             return self._create_result(
                 is_valid=True,
+                warnings=warnings or None,
                 metadata={
                     "label_column": col,
                     "distinct_count": n,

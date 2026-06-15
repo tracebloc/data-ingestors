@@ -313,6 +313,22 @@ class BaseIngestor(ABC):
                     label_val = label_val.item()
                 except (ValueError, AttributeError):
                     pass
+            # Strip surrounding whitespace from string label values before
+            # the policy runs — protects against silent label-set
+            # corruption (issue #261) where ``"  A  "`` and ``"A"`` would
+            # otherwise land as distinct classes in MySQL. A user
+            # copy-pasting from Excel / another tool routinely has
+            # whitespace they can't see; the framework's contract for
+            # the label column is "the class identifier", and class
+            # identifiers don't carry whitespace semantics. The strip
+            # mirrors what the framework already does for the
+            # ``data_id`` column (line below) and for column headers
+            # (``chunk.columns.str.strip()`` in csv_ingestor).
+            #
+            # Non-string labels (INT class IDs, BIOLabelValidator's
+            # space-separated tags, etc.) pass through unchanged.
+            if isinstance(label_val, str):
+                label_val = label_val.strip()
             cleaned_record["label"] = label_policy_module.apply(
                 label_val, self.label_policy
             )

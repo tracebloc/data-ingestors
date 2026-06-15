@@ -269,6 +269,45 @@ def test_string_schema_label_no_numeric_collapse(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Whitespace handling — silent-corruption fix (#261)
+# ---------------------------------------------------------------------------
+
+def test_whitespace_duplicates_collapsed_and_warned():
+    """Whitespace-padded label values must collapse to the same class
+    AND surface a WARNING so the user knows the framework will strip
+    them at write time. Without this, a CSV with ``"  A  "`` and
+    ``"A"`` mixed would pass diversity (2 distinct) but train a model
+    with 3 classes after ingest — silent label-set corruption (#261).
+    """
+    df = pd.DataFrame({"label": ["  A  ", "A", "B", "  A"]})
+    result = LabelDiversityValidator().validate(df)
+    # After collapsing whitespace duplicates, distinct count == 2 (A, B).
+    assert result.is_valid
+    assert result.metadata["distinct_count"] == 2
+    # Warning must name the offending pre-strip variants so the user
+    # can fix their upstream data if they meant them to be different.
+    assert result.warnings, "expected a whitespace-duplicate warning"
+    w = result.warnings[0]
+    assert "whitespace" in w.lower()
+
+
+def test_whitespace_only_single_value_still_fails():
+    """If the dataset has ``["  A  ", "A", "  A"]`` (all collapse to ``A``),
+    after stripping it's a single-class dataset and the validator must
+    still reject — the silent-corruption fix doesn't undo the diversity
+    requirement, it just refuses to inflate distinct count via
+    whitespace differences.
+    """
+    df = pd.DataFrame({"label": ["  A  ", "A", "  A"]})
+    result = LabelDiversityValidator().validate(df)
+    assert not result.is_valid
+    assert "1 distinct" in result.errors[0]
+    # The error should mention whitespace stripping so the user knows
+    # what the validator did.
+    assert "whitespace" in result.errors[0].lower()
+
+
+# ---------------------------------------------------------------------------
 # Custom column name
 # ---------------------------------------------------------------------------
 
