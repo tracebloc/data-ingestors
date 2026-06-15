@@ -138,6 +138,40 @@ def test_process_record_applies_bucket_label_policy():
     assert rec["label"] != "12345"
 
 
+def test_process_record_strips_whitespace_from_string_label():
+    """Issue #261: a raw label value like ``"  A  "`` must be stripped
+    before the label policy runs, so MySQL stores ``"A"`` and a CSV
+    with ``"  A  "`` mixed with ``"A"`` doesn't land as two distinct
+    classes (silent label-set corruption).
+
+    The strip mirrors what the framework does for ``data_id`` (line
+    below in process_record) and for column headers (csv_ingestor).
+    """
+    ing = make_ingestor(label_column="lbl", category=None)
+    rec = ing.process_record({"lbl": "  A  ", "filename": "f"})
+    # PASSTHROUGH policy: label lands verbatim, but stripped.
+    assert rec["label"] == "A", f"expected stripped 'A', got {rec['label']!r}"
+
+
+def test_process_record_label_strip_makes_whitespace_variants_equivalent():
+    """End-to-end check that two records with ``"  A  "`` and ``"A"``
+    produce the SAME cleaned label — the contract the corruption fix
+    establishes."""
+    ing = make_ingestor(label_column="lbl", category=None)
+    rec1 = ing.process_record({"lbl": "  A  ", "filename": "f1"})
+    rec2 = ing.process_record({"lbl": "A", "filename": "f2"})
+    assert rec1["label"] == rec2["label"] == "A"
+
+
+def test_process_record_label_strip_preserves_non_string_labels():
+    """INT class IDs and other non-string labels (which have no
+    whitespace to strip) must pass through unchanged."""
+    ing = make_ingestor(label_column="lbl", category=None)
+    rec = ing.process_record({"lbl": 42, "filename": "f"})
+    # Numeric labels pass through the policy unchanged.
+    assert rec["label"] == 42
+
+
 def test_process_record_preserves_none_for_sql_null():
     """Null-like values (Python None, NaN, pd.NA, NaT) must round-trip as
     Python None so the DB binder writes SQL NULL — not as the literal
