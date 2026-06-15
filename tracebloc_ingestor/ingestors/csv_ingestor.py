@@ -490,8 +490,24 @@ class CSVIngestor(BaseIngestor):
                     yield record
 
         except pd.errors.EmptyDataError:
-            logger.warning(f"{YELLOW}Empty CSV file: {file_path}{RESET}")
-            return
+            # An empty (zero-byte) CSV is a hard input error, not a
+            # successful "0 rows" run. Previously this branch logged a
+            # WARNING and silently returned an empty generator — the
+            # ingestor then proceeded to create an empty MySQL table and
+            # called `send_generate_edge_label_meta`, which 400'd with
+            # the misleading "No data found for table X" message that
+            # blamed the BACKEND instead of the input. (Same misleading
+            # cascade #213 traced for self-supervised + label mismatch.)
+            # Raise here so DataValidator's existing "No data found to
+            # validate" error path surfaces the empty-input cause with a
+            # clear, source-truthful message — and no backend round-trip.
+            raise ValueError(
+                f"{RED}Empty CSV file: {file_path}. The file has no "
+                f"header and no rows. Either stage a non-empty CSV at "
+                f"this path, or check the cluster-side path (the chart "
+                f"mounts your PVC at /data/shared/ — confirm staging "
+                f"completed before helm install).{RESET}"
+            )
 
         except (pd.errors.ParserError, Exception):
             raise
