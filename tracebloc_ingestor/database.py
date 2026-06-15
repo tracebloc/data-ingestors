@@ -4,6 +4,7 @@ from sqlalchemy import (
     Table,
     Column,
     BigInteger,
+    CHAR,
     DateTime,
     Date,
     Time,
@@ -134,6 +135,7 @@ class Database:
         """
         type_mapping = {
             "VARCHAR": String,
+            "CHAR": CHAR,
             "TEXT": Text,
             "INT": Integer,
             "INTEGER": Integer,

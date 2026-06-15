@@ -115,6 +115,35 @@ def test_get_sqlalchemy_type_numeric_precision_scale(db):
     assert result.scale == 3
 
 
+def test_get_sqlalchemy_type_char_with_length(db):
+    """Regression: CHAR(N) was absent from `type_mapping`. The DataValidator
+    accepts CHAR(N) (see `_validate_char` in data_validator.py), so a user
+    could declare e.g. `code: CHAR(1)` in their schema, pass preflight, then
+    hit `ValueError: Unsupported MySQL type: CHAR(1)` at table creation —
+    the validator and DDL layers had divergent vocabularies. CHAR is a
+    valid MySQL type (fixed-width, padded), distinct from VARCHAR but same
+    SQLAlchemy semantics; add it to the mapping so the two layers agree.
+
+    Surfaced by an adversarial 'all-types' tabular schema run against
+    v0.3.10-rc1: a CSV declaring `code: CHAR(1)` failed at table creation
+    even though every column type the schema lists is documented as
+    supported.
+    """
+    result = db._get_sqlalchemy_type("CHAR(1)")
+    assert isinstance(result, db_mod.CHAR)
+    assert result.length == 1
+
+
+def test_get_sqlalchemy_type_char_bare(db):
+    """Bare ``CHAR`` (no length) is still valid SQL — MySQL defaults to
+    CHAR(1). Don't raise; map to the SQLAlchemy class so the column gets
+    created with the dialect default."""
+    result = db._get_sqlalchemy_type("CHAR")
+    # May be the class or an instance — either is acceptable as long as
+    # the dialect picks up the right default at DDL time.
+    assert isinstance(result, db_mod.CHAR) or result is db_mod.CHAR
+
+
 # ---------------------------------------------------------------------------
 # create_table
 # ---------------------------------------------------------------------------
