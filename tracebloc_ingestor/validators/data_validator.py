@@ -6,6 +6,7 @@ in the schema and provides clear errors when mismatches are found.
 """
 
 import csv as _csv
+import json
 import logging
 import re
 from pathlib import Path
@@ -236,14 +237,32 @@ class DataValidator(BaseValidator):
                     )
                     return df
                 elif suffix == ".json":
-                    # Mirror JSONIngestor.read_data: file is a top-level JSON
-                    # array of records. Without this branch DataValidator
-                    # returned None for every JSON input, the caller raised
-                    # "No data found to validate", and JSON ingestion was
-                    # impossible end-to-end — the recent per-record
-                    # null-tolerance fix (#170) lived behind an unreachable
-                    # gate.
-                    df = pd.read_json(path, orient="records").head(sample_size)
+                    # Mirror JSONIngestor.read_data, which accepts BOTH a
+                    # top-level array of records AND a top-level single dict
+                    # (one record). Its docstring is explicit: "handles both
+                    # single-object and array-of-objects formats", and the
+                    # implementation wraps a dict as `[data]` before iterating.
+                    # Read raw + normalise here so a single-dict JSON file
+                    # doesn't get rejected at the preflight gate with
+                    # "No data found to validate" while the ingestor itself
+                    # would have happily processed it — surfaced by #232.
+                    with open(path, "r", encoding="utf-8") as f:
+                        raw = json.load(f)
+                    if isinstance(raw, dict):
+                        raw = [raw]
+                    # Mirror JSONIngestor._iter_validated_records, which skips
+                    # every non-dict element (`if not isinstance(record, dict)`).
+                    # A top-level scalar array like [1, 2, 3] or ["a", "b"]
+                    # would otherwise become a non-empty 1-column DataFrame via
+                    # pd.DataFrame(raw), so schema validation could pass while
+                    # the ingestor skips all rows and ingests nothing
+                    # (validate-pass → ingest-nothing). Drop non-dict items here
+                    # so the resulting frame matches what actually gets ingested;
+                    # an all-scalar array collapses to empty → "No data found to
+                    # validate" at the gate (bugbot #233).
+                    if isinstance(raw, list):
+                        raw = [item for item in raw if isinstance(item, dict)]
+                    df = pd.DataFrame(raw).head(sample_size)
                     # pd.read_json (unlike pd.read_csv with keep_default_na=True)
                     # preserves "" as the literal empty string. Normalise to NaN
                     # so per-type validators below treat "" identically to JSON
