@@ -27,6 +27,17 @@ from ..utils.validators_mapping import map_validators
 from ..file_transfer import map_file_transfer
 from ..reporting import ConsoleRenderer
 
+# Per-category behavior flags now live in the ModalityRegistry (the single
+# source of truth — backend#796, P3a), derived from one ModalitySpec per
+# category instead of three hand-maintained frozensets here. Imported under
+# the previous names so the ``category in <set>`` checks below are unchanged
+# (and their None/unknown -> False semantics are preserved).
+from ..modalities.registry import (
+    FILE_BEARING_CATEGORIES as _FILE_BEARING_CATEGORIES,
+    SELF_SUPERVISED_CATEGORIES as _SELF_SUPERVISED_CATEGORIES,
+    TABULAR_FAMILY_CATEGORIES as _TABULAR_FAMILY_CATEGORIES,
+)
+
 # Logger for this module. Level is set by `setup_logging()` on the root
 # logger when the user script calls it; child loggers inherit that level.
 logger = logging.getLogger(__name__)
@@ -34,58 +45,11 @@ logger = logging.getLogger(__name__)
 __all__ = ["BaseIngestor", "IngestionSummary"]
 
 
-# Tabular-family categories carry `number_of_columns` in file_options;
-# image / text categories do not (a schema may still be supplied — e.g.
-# keypoint_detection's "Visibility" column — but a column count there
-# would be a misleading metric).
-_TABULAR_FAMILY_CATEGORIES = frozenset({
-    TaskCategory.TABULAR_CLASSIFICATION,
-    TaskCategory.TABULAR_REGRESSION,
-    TaskCategory.TIME_SERIES_FORECASTING,
-    TaskCategory.TIME_TO_EVENT_PREDICTION,
-})
-
-# File-bearing categories: every record references sidecar files (images,
-# annotations, masks, texts, sequences) that live under ``config.SRC_PATH``
-# and must be copied to DEST_PATH by ``map_file_transfer``. This single set
-# drives BOTH uses:
-#   1. the SRC_PATH preflight in ``validate_data`` — if SRC_PATH is
-#      empty/unset/missing, every file lookup silently falls through to a
-#      relative path and the user sees N copies of "Source image not
-#      found: images/x.jpg", blaming the data when the real cause is
-#      "SRC_PATH was never staged on the PVC";
-#   2. the per-record ``map_file_transfer`` gate in ``_ingest_with_lock``.
-# Keeping these two on one set is deliberate: when they were separate
-# lists, instance_segmentation sat in one but not the other and shipped
-# half-wired — rows reached MySQL and the backend API with zero files
-# staged (the silent-half-ingest pattern from #99).
-# ``tests/test_category_congruence.py`` anchors this set to the schema
-# enum's file-bearing categories.
-# Tabular / time-series have no sidecar dirs under SRC_PATH, so they're
-# excluded (the CSV path itself is checked elsewhere).
-_FILE_BEARING_CATEGORIES = frozenset({
-    TaskCategory.IMAGE_CLASSIFICATION,
-    TaskCategory.OBJECT_DETECTION,
-    TaskCategory.KEYPOINT_DETECTION,
-    TaskCategory.SEMANTIC_SEGMENTATION,
-    TaskCategory.TEXT_CLASSIFICATION,
-    TaskCategory.TOKEN_CLASSIFICATION,
-    TaskCategory.MASKED_LANGUAGE_MODELING,
-})
-
-
-# Self-supervised categories have no `label` column — the CSV manifest just
-# points at sidecar files and the model creates its own targets at training
-# time (e.g. masked_language_modeling masks tokens on-the-fly). The backend
-# correspondingly stores no edge-label metadata for these datasets, so the
-# `send_generate_edge_label_meta` call is a no-op at best and a misleading
-# HTTP 400 ("No data found for table X") at worst — see issue #213.
-# The schema (schema/ingest.v1.json) now rejects `label:` on these categories
-# at submission time; this set + the gate below are the defensive in-ingestor
-# half (script-driven runs that bypass the schema still skip the wasted call).
-_SELF_SUPERVISED_CATEGORIES = frozenset({
-    TaskCategory.MASKED_LANGUAGE_MODELING,
-})
+# NOTE: _TABULAR_FAMILY_CATEGORIES, _FILE_BEARING_CATEGORIES and
+# _SELF_SUPERVISED_CATEGORIES are imported above from modalities.registry
+# (derived from the per-category ModalitySpec flags — backend#796 P3a). The
+# ``self.category in <set>`` checks throughout this module use them unchanged;
+# the rationale for each set now lives on ModalitySpec's field docstrings.
 
 
 class IngestionSummary(NamedTuple):
