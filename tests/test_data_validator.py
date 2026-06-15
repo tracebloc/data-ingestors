@@ -206,6 +206,46 @@ def test_loads_from_json_mixed_array_keeps_only_objects(tmp_path):
     assert result.metadata["rows_checked"] == 2
 
 
+def test_loads_from_json_jsonl_surfaces_clear_error(tmp_path):
+    """A newline-delimited JSON (JSONL) file — one JSON object per
+    line, no top-level array — must surface a CLEAR error pointing at
+    the JSONL pattern and the fix (combine into an array). The opaque
+    ``json.JSONDecodeError: Extra data`` / ``Trailing data`` message
+    isn't actionable for users who didn't write json.load themselves.
+
+    Surfaced by adversarial new-user testing (N12 — common export
+    format from log / event pipelines).
+    """
+    p = tmp_path / "events.json"
+    p.write_text(
+        '{"id":1,"label":"A"}\n'
+        '{"id":2,"label":"B"}\n'
+        '{"id":3,"label":"A"}\n'
+    )
+    result = DataValidator(schema={"id": "INT", "label": "VARCHAR(8)"}).validate(
+        str(p)
+    )
+    assert not result.is_valid
+    err = result.errors[0]
+    assert "JSONL" in err or "newline-delimited" in err
+    # Should point at the fix.
+    assert "array" in err.lower()
+
+
+def test_loads_from_json_malformed_not_misidentified_as_jsonl(tmp_path):
+    """A genuinely malformed JSON file (not JSONL) must NOT be
+    misidentified — the JSONL detection requires the file's first
+    non-empty line to itself parse as JSON. ``{trailing garbage``
+    doesn't parse → fall through to the original 'Data type
+    validation error' path."""
+    p = tmp_path / "broken.json"
+    p.write_text("{this is not valid json at all")
+    result = DataValidator(schema={"a": "INT"}).validate(str(p))
+    assert not result.is_valid
+    # Must NOT claim it's JSONL.
+    assert "JSONL" not in result.errors[0]
+
+
 def test_unknown_type_fails():
     df = pd.DataFrame({"a": [1]})
     result = DataValidator(schema={"a": "WEIRDTYPE"}).validate(df)

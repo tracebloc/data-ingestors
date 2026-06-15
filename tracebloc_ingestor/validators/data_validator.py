@@ -27,6 +27,34 @@ logger = logging.getLogger(__name__)
 logger.setLevel(config.LOG_LEVEL)
 
 
+def _looks_like_jsonl(path: Path, decode_exc: json.JSONDecodeError) -> bool:
+    """Heuristic: is this file newline-delimited JSON (JSONL) rather
+    than malformed JSON?
+
+    Triggers on the specific ``json.load`` error class that JSONL
+    produces ("Extra data" / "Trailing data" — there's a valid JSON
+    value followed by more content) AND requires the file's first
+    non-empty line to itself parse as JSON. The second check rules
+    out genuinely malformed input that happens to share the error
+    string.
+
+    Issue #261 secondary finding (N12).
+    """
+    if "Extra data" not in str(decode_exc) and "Trailing data" not in str(decode_exc):
+        return False
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                json.loads(line)
+                return True
+            return False
+    except (json.JSONDecodeError, OSError):
+        return False
+
+
 class DataValidator(BaseValidator):
     """Validator for ensuring data type compliance with schema.
 
@@ -267,7 +295,28 @@ class DataValidator(BaseValidator):
                     # "No data found to validate" while the ingestor itself
                     # would have happily processed it — surfaced by #232.
                     with open(path, "r", encoding="utf-8") as f:
-                        raw = json.load(f)
+                        try:
+                            raw = json.load(f)
+                        except json.JSONDecodeError as exc:
+                            # JSONL (newline-delimited JSON) is a common
+                            # export format from log / event pipelines
+                            # and trips ``json.load`` with "Extra data" /
+                            # "Trailing data" — opaque to users who
+                            # didn't write json.load themselves. Detect
+                            # the JSONL shape and surface a clear fix
+                            # message. Issue #261 secondary finding (N12).
+                            if _looks_like_jsonl(path, exc):
+                                raise ValueError(
+                                    f"{path} looks like newline-delimited "
+                                    f"JSON (JSONL) — one JSON object per "
+                                    f"line. JSONL isn't supported as an "
+                                    f"input format; the ingestor expects "
+                                    f"a top-level JSON array of records or "
+                                    f"a single object. Combine the records "
+                                    f"into an array (wrap with ``[...]`` "
+                                    f"and join with ``,``) and re-ingest."
+                                ) from exc
+                            raise
                     if isinstance(raw, dict):
                         raw = [raw]
                     # Mirror JSONIngestor._iter_validated_records, which skips
@@ -299,6 +348,14 @@ class DataValidator(BaseValidator):
                 logger.warning(f"Unsupported data type: {type(data)}")
                 return None
 
+        except ValueError:
+            # Surfaceable user-facing error (e.g. the JSONL detection
+            # raises ValueError with a clear fix message). Let it
+            # propagate to validate()'s except-Exception handler, which
+            # threads ``str(e)`` into the user-visible
+            # ``"Data type validation error: ..."`` result — don't
+            # swallow it into a "No data found to validate" generic.
+            raise
         except Exception as e:
             logger.error(f"Error loading data: {str(e)}")
             return None

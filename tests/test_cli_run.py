@@ -119,7 +119,16 @@ def test_malformed_yaml_fails_fast(clean_env, mock_runtime, monkeypatch, capsys,
 
 def test_schema_violation_fails_fast(clean_env, mock_runtime, monkeypatch, capsys, tmp_path):
     """A config that passes YAML parsing but fails schema validation must
-    exit before any DB/network call, listing the failures."""
+    exit before any DB/network call, listing the failures.
+
+    Also pins that primitive checks ('X is a required property') keep
+    jsonschema's clear default message — they must NOT be replaced by
+    the schema's generic root description ("Declarative configuration
+    for the tracebloc data ingestor..."), which would happen if the
+    description-walker captured the root node's description (bugbot
+    #254). Schemas only attach their description when an INNER node
+    along the failing rule's path has one.
+    """
     bad = tmp_path / "bad.yaml"
     bad.write_text(
         # Missing `table`, `csv`, `images`, `label` — schema must reject.
@@ -139,8 +148,108 @@ def test_schema_violation_fails_fast(clean_env, mock_runtime, monkeypatch, capsy
     assert "validation failed" in err
     # Should mention at least one of the missing fields.
     assert "table" in err or "csv" in err or "images" in err or "label" in err
+    # The schema's GENERIC root description must NOT leak into primitive
+    # errors — bugbot #254 caught the walker capturing the root.
+    assert "Declarative configuration" not in err
+    # Primitive 'required property' messages must reach the user
+    # unmodified, NOT be replaced with a description + (rule:) line.
+    assert "is a required property" in err
     mock_runtime["Database"].assert_not_called()
     mock_runtime["APIClient"].assert_not_called()
+
+
+def test_schema_violation_surfaces_description_not_raw_mechanic(
+    clean_env, mock_runtime, monkeypatch, capsys, tmp_path
+):
+    """Setting ``label:`` for masked_language_modeling violates the
+    schema's allOf rule. The user-visible error must surface the rule
+    AUTHOR'S description (which names the self-supervised category, the
+    fix, and #213's history) — NOT just the raw JSON-schema mechanic
+    "<{full yaml dump}> should not be valid under {'required':
+    ['label']}", which is technically correct but unreadable: it dumps
+    the entire submission as a Python dict and uses JSON-schema
+    vocabulary the customer didn't write.
+
+    Verified end-to-end against v0.3.10-rc1: a user who copy-pasted
+    `label: label` from another category's yaml saw only the raw
+    mechanic and had no way to know that MLM is self-supervised.
+    """
+    bad = tmp_path / "mlm_with_label.yaml"
+    bad.write_text(
+        "apiVersion: tracebloc.io/v1\n"
+        "kind: IngestConfig\n"
+        "category: masked_language_modeling\n"
+        "table: ssh_test\n"
+        "intent: test\n"
+        "csv: /tmp/ignored.csv\n"
+        "sequences: /tmp/ignored/\n"
+        "label: label\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("INGEST_CONFIG", str(bad))
+
+    from tracebloc_ingestor.cli.run import main
+    rc = main()
+
+    err = capsys.readouterr().err
+    assert rc == 2
+    # The schema's description is what the user needs to see — it names
+    # the actual rationale and the fix.
+    assert "Self-supervised" in err
+    assert "MUST NOT set `label`" in err
+    # Don't drop the mechanic entirely — it's still on a follow-up line
+    # for power-user debugging.
+    assert "rule:" in err
+    # Should NOT dump the entire YAML body as a Python dict in the
+    # headline (the old behavior).
+    headline = err.split("\n", 1)[0]
+    assert "{'apiVersion'" not in headline  # raw dict dump suppressed
+    mock_runtime["Database"].assert_not_called()
+    mock_runtime["APIClient"].assert_not_called()
+
+
+def test_describe_from_schema_path_skips_root_description():
+    """Unit-test for the description walker:
+
+    The schema's ROOT description ("Declarative configuration for the
+    tracebloc data ingestor...") is a generic blurb about the schema
+    as a whole, not about any specific rule. It must NOT be returned
+    for primitive errors whose path doesn't dig into an `allOf`/`oneOf`
+    branch — otherwise EVERY validation error gets blanketed with the
+    same generic text and jsonschema's clear messages get hidden
+    (bugbot #254).
+
+    A primitive error like 'required' has schema_path == ('required',),
+    which walks into the schema's `required` list — a list with no
+    `description`. The walker must return None for that case.
+
+    The MLM+label case has schema_path == ('allOf', N, 'then', 'not'),
+    which DOES walk into a dict with the rule-specific description.
+    The walker must return THAT description.
+    """
+    from tracebloc_ingestor.cli.run import _describe_from_schema_path
+
+    schema = {
+        "description": "Generic root blurb that should NEVER be returned",
+        "properties": {"x": {"type": "integer"}},
+        "required": ["x"],
+        "allOf": [
+            {
+                "description": "Rule-specific prose with rationale and fix.",
+                "if": {"properties": {"category": {"const": "abc"}}},
+                "then": {"not": {"required": ["label"]}},
+            }
+        ],
+    }
+    # Primitive 'required' error path → no inner description → None
+    assert _describe_from_schema_path(schema, ["required"]) is None
+    # Generic top-level type error path → no inner description → None
+    assert _describe_from_schema_path(schema, ["properties", "x", "type"]) is None
+    # AllOf branch path → inner description is returned
+    assert (
+        _describe_from_schema_path(schema, ["allOf", 0, "then", "not"])
+        == "Rule-specific prose with rationale and fix."
+    )
 
 
 # ---------------------------------------------------------------------------
