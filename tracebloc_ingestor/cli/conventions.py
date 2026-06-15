@@ -27,42 +27,54 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, FrozenSet, List, Optional
 
-from ..utils.constants import DataFormat, Intent, TaskCategory
-
+from ..modalities.registry import spec_for
+from ..utils.constants import TaskCategory
 
 # ---------------------------------------------------------------------------
 # Category groupings — used both here and by the entrypoint when deciding
 # which sidecar paths matter. Single source of truth.
 # ---------------------------------------------------------------------------
 
-IMAGE_CATEGORIES: FrozenSet[str] = frozenset({
-    TaskCategory.IMAGE_CLASSIFICATION,
-    TaskCategory.OBJECT_DETECTION,
-    TaskCategory.KEYPOINT_DETECTION,
-    TaskCategory.SEMANTIC_SEGMENTATION,
-})
+IMAGE_CATEGORIES: FrozenSet[str] = frozenset(
+    {
+        TaskCategory.IMAGE_CLASSIFICATION,
+        TaskCategory.OBJECT_DETECTION,
+        TaskCategory.KEYPOINT_DETECTION,
+        TaskCategory.SEMANTIC_SEGMENTATION,
+    }
+)
 
-TEXT_CATEGORIES: FrozenSet[str] = frozenset({
-    TaskCategory.TEXT_CLASSIFICATION,
-    TaskCategory.TOKEN_CLASSIFICATION,
-})
+TEXT_CATEGORIES: FrozenSet[str] = frozenset(
+    {
+        TaskCategory.TEXT_CLASSIFICATION,
+        TaskCategory.TOKEN_CLASSIFICATION,
+    }
+)
 
-TABULAR_CATEGORIES: FrozenSet[str] = frozenset({
-    TaskCategory.TABULAR_CLASSIFICATION,
-    TaskCategory.TABULAR_REGRESSION,
-})
+TABULAR_CATEGORIES: FrozenSet[str] = frozenset(
+    {
+        TaskCategory.TABULAR_CLASSIFICATION,
+        TaskCategory.TABULAR_REGRESSION,
+    }
+)
 
-TIME_SERIES_CATEGORIES: FrozenSet[str] = frozenset({
-    TaskCategory.TIME_SERIES_FORECASTING,
-})
+TIME_SERIES_CATEGORIES: FrozenSet[str] = frozenset(
+    {
+        TaskCategory.TIME_SERIES_FORECASTING,
+    }
+)
 
-TIME_TO_EVENT_CATEGORIES: FrozenSet[str] = frozenset({
-    TaskCategory.TIME_TO_EVENT_PREDICTION,
-})
+TIME_TO_EVENT_CATEGORIES: FrozenSet[str] = frozenset(
+    {
+        TaskCategory.TIME_TO_EVENT_PREDICTION,
+    }
+)
 
-MLM_CATEGORIES: FrozenSet[str] = frozenset({
-    TaskCategory.MASKED_LANGUAGE_MODELING,
-})
+MLM_CATEGORIES: FrozenSet[str] = frozenset(
+    {
+        TaskCategory.MASKED_LANGUAGE_MODELING,
+    }
+)
 
 # Categories where the label is a numeric prediction target rather than
 # class metadata. The schema requires `label.policy` for these so the raw
@@ -101,12 +113,18 @@ DEFAULT_IMAGE_FILE_OPTIONS_BY_CATEGORY: Dict[str, Dict[str, Any]] = {
     # framework's own samples round-trip through the documented happy-path
     # config with zero overrides. Production users with differently-sized data
     # should set `spec.file_options` in their YAML.
-    TaskCategory.IMAGE_CLASSIFICATION:    {"target_size": [256, 256], "extension": ".jpeg"},
-    TaskCategory.SEMANTIC_SEGMENTATION:   {"target_size": [512, 512], "extension": ".jpg"},
-    TaskCategory.OBJECT_DETECTION:        {"target_size": [1920, 1080], "extension": ".jpg"},
+    TaskCategory.IMAGE_CLASSIFICATION: {
+        "target_size": [256, 256],
+        "extension": ".jpeg",
+    },
+    TaskCategory.SEMANTIC_SEGMENTATION: {
+        "target_size": [512, 512],
+        "extension": ".jpg",
+    },
+    TaskCategory.OBJECT_DETECTION: {"target_size": [1920, 1080], "extension": ".jpg"},
     # keypoint_detection: no target_size default — the customer's pose model
     # dictates input resolution, so the schema requires it top-level.
-    TaskCategory.KEYPOINT_DETECTION:      {"extension": ".jpg"},
+    TaskCategory.KEYPOINT_DETECTION: {"extension": ".jpg"},
 }
 
 DEFAULT_TEXT_FILE_OPTIONS: Dict[str, Any] = {
@@ -121,6 +139,7 @@ DEFAULT_MLM_FILE_OPTIONS: Dict[str, Any] = {
 # ---------------------------------------------------------------------------
 # Resolved configuration — what the entrypoint actually consumes.
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class ResolvedConfig:
@@ -182,6 +201,7 @@ class ResolvedConfig:
 # ---------------------------------------------------------------------------
 # Resolver
 # ---------------------------------------------------------------------------
+
 
 def resolve(config: Dict[str, Any]) -> ResolvedConfig:
     """Translate a validated ingest.yaml dict into a :class:`ResolvedConfig`.
@@ -302,25 +322,16 @@ def resolve(config: Dict[str, Any]) -> ResolvedConfig:
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _data_format_for(category: str) -> str:
-    """Map ``category`` to the ``DataFormat`` value the framework expects."""
-    if category in IMAGE_CATEGORIES:
-        return DataFormat.IMAGE
-    if category in TEXT_CATEGORIES:
-        return DataFormat.TEXT
-    if (
-        category in TABULAR_CATEGORIES
-        or category in TIME_SERIES_CATEGORIES
-        or category in TIME_TO_EVENT_CATEGORIES
-    ):
-        return DataFormat.TABULAR
-    if category in MLM_CATEGORIES:
-        return DataFormat.TEXT
-    raise ValueError(
-        f"Unknown category {category!r}; cannot derive data_format. "
-        "If this is a new category, add it to the relevant CATEGORY set "
-        "in conventions.py and to the schema enum."
-    )
+    """Map ``category`` to the ``DataFormat`` value the framework expects.
+
+    Reads the single source of truth — the ModalityRegistry — rather than the
+    per-format frozensets in this module (structural refactor backend#796,
+    P3d). ``spec_for`` raises ``ValueError`` on an unknown category, same as
+    the previous ladder did.
+    """
+    return spec_for(category).data_format
 
 
 def _default_file_options_for(category: str) -> Dict[str, Any]:
