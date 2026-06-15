@@ -97,6 +97,59 @@ def test_get_sqlalchemy_type_unsupported_raises(db):
         db._get_sqlalchemy_type("GEOMETRY")
 
 
+def test_get_sqlalchemy_type_typo_suggests_correction(db):
+    """A close-typo unknown type must surface a 'Did you mean X?' hint.
+
+    A new user typing ``BIGINTEGER`` (mixing up MySQL's ``BIGINT`` with
+    Python's ``int`` keyword) used to get a bare ``Unsupported MySQL
+    type: BIGINTEGER`` — correct but unhelpful. With the suggestion
+    layer the error guides them toward a related supported type and
+    lists the full vocabulary alongside, turning a 'wait, what's the
+    right spelling?' round-trip into a zero-thought fix. Surfaced by
+    adversarial new-user testing N3 (parent #261).
+
+    ``BIGINTEGER``'s nearest by Levenshtein distance is ``INTEGER``
+    (d=3 — drop the BIG prefix); ``BIGINT`` is d=4 (drop the EGER
+    suffix). Both are valid supported types, INTEGER wins by a single
+    edit. The full supported-types list (which the error also prints)
+    surfaces ``BIGINT`` for the user who actually wanted the 64-bit
+    range.
+    """
+    with pytest.raises(ValueError, match="Did you mean 'INTEGER'") as excinfo:
+        db._get_sqlalchemy_type("BIGINTEGER")
+    # The full supported-types listing must also be present so the user
+    # discovers BIGINT (the better fit by intent) even though the
+    # suggestion is INTEGER by edit distance.
+    assert "Supported types" in str(excinfo.value)
+    assert "BIGINT" in str(excinfo.value)
+
+
+def test_get_sqlalchemy_type_typo_no_suggestion_for_distant_input(db):
+    """A type name that's NOT close to any supported entry must NOT
+    misleadingly suggest one — ``GEOMETRY`` is a real MySQL type but
+    semantically unrelated to anything we map; suggesting ``DATETIME``
+    for it would be worse than no suggestion."""
+    with pytest.raises(ValueError, match="Unsupported MySQL type") as excinfo:
+        db._get_sqlalchemy_type("GEOMETRY")
+    assert "Did you mean" not in str(excinfo.value)
+
+
+@pytest.mark.parametrize("typo,suggestion", [
+    ("INTGER", "INTEGER"),
+    ("NUMRIC", "NUMERIC"),
+    ("BOLEAN", "BOOLEAN"),
+    ("VARCAHR", "VARCHAR"),
+])
+def test_get_sqlalchemy_type_typo_suggestions_cover_common_mistakes(
+    db, typo, suggestion
+):
+    """Several real-world typos a new user might make. Each is within
+    edit distance 2 of the suggested correction and far enough from
+    other candidates that the suggestion is unambiguous."""
+    with pytest.raises(ValueError, match=f"Did you mean '{suggestion}'"):
+        db._get_sqlalchemy_type(typo)
+
+
 def test_get_sqlalchemy_type_decimal_precision_scale(db):
     # Regression (#190 bugbot): DECIMAL(10,2) used to fail int("10,2") and
     # fall back to a bare Numeric() — declared precision and scale silently
