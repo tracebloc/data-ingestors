@@ -171,6 +171,41 @@ def test_loads_from_json_non_object_top_level_still_fails(tmp_path):
     assert not result.is_valid
 
 
+def test_loads_from_json_scalar_array_fails_not_silently_passes(tmp_path):
+    """A top-level JSON array of scalars (numbers/strings, no objects) must be
+    rejected, not pass validation against an unrelated schema.
+
+    Regression: after #232 switched `_load_data` from `pd.read_json` to
+    `json.load` + `pd.DataFrame(raw)`, a top-level scalar array like
+    `[1, 2, 3]` became a non-empty 1-column DataFrame, so schema validation
+    could pass even though `JSONIngestor._iter_validated_records` skips every
+    non-dict element and ingests *zero* records — a validate-pass →
+    ingest-nothing trap. `_load_data` now drops non-dict items to mirror the
+    ingestor, so an all-scalar array collapses to empty and is rejected with
+    "No data found to validate" (bugbot #233).
+    """
+    p = tmp_path / "scalars.json"
+    p.write_text("[1, 2, 3]")
+    result = DataValidator(schema={"id": "INT", "label": "VARCHAR(8)"}).validate(
+        str(p)
+    )
+    assert not result.is_valid
+    assert "No data found" in result.errors[0]
+
+
+def test_loads_from_json_mixed_array_keeps_only_objects(tmp_path):
+    """A top-level array mixing objects and scalars must validate only the
+    objects — matching `JSONIngestor`, which skips the scalars and ingests
+    the dict records (bugbot #233)."""
+    p = tmp_path / "mixed.json"
+    p.write_text('[{"id": 1, "label": "A"}, 42, {"id": 2, "label": "B"}]')
+    result = DataValidator(schema={"id": "INT", "label": "VARCHAR(8)"}).validate(
+        str(p)
+    )
+    assert result.is_valid, f"expected valid; errors={result.errors}"
+    assert result.metadata["rows_checked"] == 2
+
+
 def test_unknown_type_fails():
     df = pd.DataFrame({"a": [1]})
     result = DataValidator(schema={"a": "WEIRDTYPE"}).validate(df)

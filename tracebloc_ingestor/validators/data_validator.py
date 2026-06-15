@@ -250,6 +250,18 @@ class DataValidator(BaseValidator):
                         raw = json.load(f)
                     if isinstance(raw, dict):
                         raw = [raw]
+                    # Mirror JSONIngestor._iter_validated_records, which skips
+                    # every non-dict element (`if not isinstance(record, dict)`).
+                    # A top-level scalar array like [1, 2, 3] or ["a", "b"]
+                    # would otherwise become a non-empty 1-column DataFrame via
+                    # pd.DataFrame(raw), so schema validation could pass while
+                    # the ingestor skips all rows and ingests nothing
+                    # (validate-pass → ingest-nothing). Drop non-dict items here
+                    # so the resulting frame matches what actually gets ingested;
+                    # an all-scalar array collapses to empty → "No data found to
+                    # validate" at the gate (bugbot #233).
+                    if isinstance(raw, list):
+                        raw = [item for item in raw if isinstance(item, dict)]
                     df = pd.DataFrame(raw).head(sample_size)
                     # pd.read_json (unlike pd.read_csv with keep_default_na=True)
                     # preserves "" as the literal empty string. Normalise to NaN
