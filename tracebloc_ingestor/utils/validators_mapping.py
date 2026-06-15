@@ -45,6 +45,11 @@ def _label_diversity_validator(options: Dict[str, Any]) -> LabelDiversityValidat
     """
     return LabelDiversityValidator(
         label_column=options.get("label_column") or "label",
+        # Pass the schema so the label column is read with the SAME NA /
+        # dtype rules CSVIngestor and DataValidator use — otherwise the
+        # distinct-label count can disagree with what's actually ingested
+        # (bugbot #252).
+        schema=options.get("schema"),
     )
 
 

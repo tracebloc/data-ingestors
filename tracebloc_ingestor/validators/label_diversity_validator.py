@@ -26,12 +26,13 @@ label column at all.
 
 import logging
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 
 import pandas as pd
 
 from .base import BaseValidator, ValidationResult
 from ..config import Config
+from ..utils import coercion
 from ..utils.logging import setup_logging
 
 config = Config()
@@ -49,17 +50,23 @@ class LabelDiversityValidator(BaseValidator):
         min_distinct: Minimum required distinct non-null label values
             (default 2). The backend's contract is exactly 2; the
             parameter is exposed only for future stricter use cases.
+        schema: Optional column→SQL-type map. When the label column is a
+            schema column, it's read with the same NA / dtype rules
+            CSVIngestor and DataValidator apply, so the distinct-label
+            count matches what's actually ingested (bugbot #252).
     """
 
     def __init__(
         self,
         label_column: str = "label",
         min_distinct: int = 2,
+        schema: Optional[Dict[str, str]] = None,
         name: str = "Label Diversity Validator",
     ):
         super().__init__(name)
         self.label_column = label_column
         self.min_distinct = min_distinct
+        self.schema = schema or {}
 
     def validate(self, data: Any, **kwargs) -> ValidationResult:
         try:
@@ -173,11 +180,52 @@ class LabelDiversityValidator(BaseValidator):
                     return None
                 # Load only the label column — for a 50-feature wide CSV
                 # (or a multi-GB proteomics panel) we don't need the rest
-                # to count distinct labels.
-                return pd.read_csv(path, usecols=[actual], encoding="utf-8")
+                # to count distinct labels. Read it with the SAME NA / dtype
+                # rules CSVIngestor + DataValidator use so the distinct count
+                # agrees with what's ingested (bugbot #252).
+                return pd.read_csv(
+                    path,
+                    usecols=[actual],
+                    encoding="utf-8",
+                    **self._label_read_kwargs(actual),
+                )
             if path.suffix.lower() == ".json":
                 return pd.read_json(path, orient="records")
         return None
+
+    def _label_read_kwargs(self, actual: str) -> Dict[str, Any]:
+        """``pd.read_csv`` kwargs for the label column that mirror how
+        CSVIngestor / DataValidator read it, so the distinct-label count
+        matches what's actually ingested (bugbot #252).
+
+        - ``keep_default_na=False`` always: pandas' shifting global NA set
+          must not silently turn a literal ``"NA"``/``"null"`` label into a
+          missing value here when the ingestor keeps it as a real class.
+        - ``na_values``: the full :data:`coercion.NA_SENTINELS` set, but only
+          when the label is a *schema* column — the ingestor coerces only
+          schema columns; a non-schema classification label keeps
+          ``"NA"``/``"null"`` as a genuine class.
+        - ``dtype=str``: when the label is a string-family schema column,
+          matching the ingestor's string pin so numeric-looking labels
+          (``"007"``, ``"1.0"``) aren't collapsed by numeric inference and
+          under-counted.
+        """
+        kwargs: Dict[str, Any] = {"keep_default_na": False}
+        schema_type = self._schema_type_for(actual)
+        if schema_type is not None:
+            kwargs["na_values"] = {actual: list(coercion.NA_SENTINELS)}
+            base = str(schema_type).upper().split("(")[0].strip()
+            if base in ("VARCHAR", "CHAR", "TEXT", "STRING"):
+                kwargs["dtype"] = {actual: str}
+        return kwargs
+
+    def _schema_type_for(self, actual: str) -> Optional[str]:
+        """Case-insensitive lookup of the label column's declared SQL type,
+        or ``None`` when the label isn't a schema column."""
+        if actual in self.schema:
+            return self.schema[actual]
+        lowered = {k.lower(): v for k, v in self.schema.items()}
+        return lowered.get(actual.lower())
 
     @staticmethod
     def _resolve_column(df: pd.DataFrame, name: str) -> Optional[str]:

@@ -421,6 +421,13 @@ class APIClient:
         Returns:
             bool: True if successful, False otherwise
         """
+        # Clear any error stashed by a previous prepare_dataset call up front,
+        # so an early `return False` below (local mode, invalid category)
+        # can't leave a stale message that base.py then attaches to an
+        # unrelated failure (bugbot #252). Only the exception handler in THIS
+        # call should ever populate it.
+        self.last_prepare_error = None
+
         # Skip API calls in local mode
         if self.config.EDGE_ENV == "local":
             logger.info(f"Mock: Would prepare dataset {category}")
