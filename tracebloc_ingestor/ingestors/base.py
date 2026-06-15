@@ -211,8 +211,15 @@ class BaseIngestor(ABC):
             if self.category in _TABULAR_FAMILY_CATEGORIES:
                 self.file_options["number_of_columns"] = len(table_schema)
 
-        # Ensure table exists
-        self.table = self.database.create_table(table_name, table_schema)
+        # Defer table creation until after ``validate_data()`` passes so a
+        # validator-rejected ingest leaves no orphaned table behind (#260).
+        # Creating it in ``__init__`` meant a rejected ingest left a stale
+        # empty table that the next retry's stale-table guard tripped on,
+        # forcing the user to manually DROP before re-running. Stash the
+        # cleaned schema; ``_ingest_with_lock`` creates the table once
+        # validation succeeds.
+        self.table = None
+        self._table_schema = table_schema
 
     def _map_unique_id(
         self, record: Dict[str, Any], cleaned_record: Dict[str, Any]
@@ -277,6 +284,22 @@ class BaseIngestor(ABC):
                     label_val = label_val.item()
                 except (ValueError, AttributeError):
                     pass
+            # Strip surrounding whitespace from string label values before
+            # the policy runs — protects against silent label-set
+            # corruption (issue #261) where ``"  A  "`` and ``"A"`` would
+            # otherwise land as distinct classes in MySQL. A user
+            # copy-pasting from Excel / another tool routinely has
+            # whitespace they can't see; the framework's contract for
+            # the label column is "the class identifier", and class
+            # identifiers don't carry whitespace semantics. The strip
+            # mirrors what the framework already does for the
+            # ``data_id`` column (line below) and for column headers
+            # (``chunk.columns.str.strip()`` in csv_ingestor).
+            #
+            # Non-string labels (INT class IDs, BIOLabelValidator's
+            # space-separated tags, etc.) pass through unchanged.
+            if isinstance(label_val, str):
+                label_val = label_val.strip()
             cleaned_record["label"] = label_policy_module.apply(
                 label_val, self.label_policy
             )
@@ -641,7 +664,21 @@ class BaseIngestor(ABC):
         # mutating file_options / metadata) so label-aware validators like
         # BIOLabelValidator check the right column when a custom name is used.
         validators = map_validators(
-            self.category, {**self.file_options, "label_column": self.label_column}
+            self.category,
+            {
+                **self.file_options,
+                "label_column": self.label_column,
+                # file_options["schema"] has the label/annotation/id columns
+                # stripped (they're framework columns, not table columns), but
+                # CSVIngestor reads the file with NA/dtype rules from the FULL
+                # schema — so the label column DOES get NA-sentinel treatment at
+                # ingest. Pass the full schema so LabelDiversityValidator counts
+                # distinct labels the same way the data is actually ingested,
+                # rather than letting "null"/"NA" inflate the distinct count and
+                # sneak an effectively single-class dataset past the gate
+                # (bugbot #252).
+                "full_schema": self.schema,
+            },
         )
         logger.info(f"Running {len(validators)} validator(s) on data source")
         all_valid = True
@@ -767,6 +804,15 @@ class BaseIngestor(ABC):
             raise e
         except Exception as e:
             raise e
+
+        # Create the destination table now that validation has accepted the
+        # input (#260). Deferring to here ensures a validator-rejected ingest
+        # leaves no orphaned empty table behind that the next retry's
+        # stale-table guard would trip on.
+        if self.table is None:
+            self.table = self.database.create_table(
+                self.table_name, self._table_schema
+            )
 
         batch = []
         failed_records = []
@@ -930,10 +976,20 @@ class BaseIngestor(ABC):
                     self.data_format,
                     self.intent,
                 ):
+                    # Surface the BACKEND'S actual reason in the user-visible
+                    # error — not just "see the logged API error above" which
+                    # forces the user to grep the log for the real cause.
+                    # Issue #251: a misleading "Backend failed to prepare the
+                    # dataset" message buried the real reason (e.g. "Please
+                    # provide atleast 2 labels.") in a preceding ERROR line.
+                    detail = (
+                        getattr(self.api_client, "last_prepare_error", None)
+                        or "see the logged API error above"
+                    )
                     raise RuntimeError(
-                        "Backend failed to prepare the dataset; it was NOT "
-                        "registered (its rows are already in the database). See "
-                        "the logged API error above."
+                        f"Backend failed to prepare the dataset; it was NOT "
+                        f"registered (its rows are already in the database). "
+                        f"Backend response: {detail}"
                     )
 
                 self.api_client.create_dataset(
