@@ -86,8 +86,10 @@ def test_init_strips_label_annotation_unique_from_schema():
         label_column="lbl", annotation_column="ann", unique_id_column="uid",
         category=None,
     )
-    # The cleaned table schema passed to create_table excludes the special cols.
-    table_schema = ing.database.create_table.call_args[0][1]
+    # Table creation is deferred until validation passes (#260), so inspect
+    # the cleaned schema stashed for later create_table() instead of asserting
+    # against a call that hasn't happened yet.
+    table_schema = ing._table_schema
     assert "lbl" not in table_schema and "ann" not in table_schema and "uid" not in table_schema
     assert "a" in table_schema
 
@@ -384,6 +386,42 @@ def test_validate_data_validator_exception_raises():
 # ---------------------------------------------------------------------------
 # ingest (full flow, Session patched)
 # ---------------------------------------------------------------------------
+
+def test_init_does_not_create_table_until_validation_passes():
+    # REGRESSION GUARD (#260): create_table used to fire inside __init__, so a
+    # validator-rejected ingest left an empty orphaned table that the next run's
+    # stale-table guard tripped on, forcing the user to manually DROP. Table
+    # creation must be deferred until validation has accepted the input.
+    ing = make_ingestor(category=None)
+    ing.database.create_table.assert_not_called()
+    assert ing.table is None
+
+
+def test_validation_failure_leaves_no_table_created():
+    # REGRESSION GUARD (#260): when validate_data rejects the input, the
+    # ingestor must not have created the destination table — so a corrected
+    # re-run starts from a clean slate without manual DB intervention.
+    ing = make_ingestor(category=None)
+    bad = MagicMock()
+    bad.name = "Bad"
+    bad.validate.return_value = ValidationResult(False, ["nope"], [], {})
+    with patch.object(base_mod, "map_validators", return_value=[bad]):
+        with pytest.raises(ValueError):
+            ing.ingest("src", batch_size=10)
+    ing.database.create_table.assert_not_called()
+    assert ing.table is None
+
+
+def test_ingest_creates_table_after_validation_passes():
+    # The table is created exactly once, after validation accepts the input.
+    records = [{"a": "1", "filename": "f1"}]
+    ing = make_ingestor(records=records, category=None)
+    with patch.object(base_mod, "Session") as Sess:
+        Sess.return_value.__enter__.return_value = MagicMock()
+        ing.ingest("src", batch_size=10)
+    ing.database.create_table.assert_called_once_with("tbl", {"a": "INT"})
+    assert ing.table is not None
+
 
 def test_ingest_happy_path():
     records = [{"a": "1", "filename": "f1"}, {"a": "2", "filename": "f2"}]
