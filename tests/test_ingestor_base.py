@@ -64,6 +64,7 @@ def test_summary_clean_run_no_failures():
 @pytest.mark.parametrize("kwargs", [
     dict(failed_records=1),
     dict(file_transfer_failures=1),
+    dict(skipped_records=1),        # a record dropped during processing (#234)
     dict(inserted_records=9),       # < total
     dict(api_sent_records=9),       # < inserted
 ])
@@ -85,8 +86,10 @@ def test_init_strips_label_annotation_unique_from_schema():
         label_column="lbl", annotation_column="ann", unique_id_column="uid",
         category=None,
     )
-    # The cleaned table schema passed to create_table excludes the special cols.
-    table_schema = ing.database.create_table.call_args[0][1]
+    # Table creation is deferred until validation passes (#260), so inspect
+    # the cleaned schema stashed for later create_table() instead of asserting
+    # against a call that hasn't happened yet.
+    table_schema = ing._table_schema
     assert "lbl" not in table_schema and "ann" not in table_schema and "uid" not in table_schema
     assert "a" in table_schema
 
@@ -135,6 +138,40 @@ def test_process_record_applies_bucket_label_policy():
     rec = ing.process_record({"a": "12345", "filename": "f"})
     # bucket policy hashes the raw value -> not equal to the raw value
     assert rec["label"] != "12345"
+
+
+def test_process_record_strips_whitespace_from_string_label():
+    """Issue #261: a raw label value like ``"  A  "`` must be stripped
+    before the label policy runs, so MySQL stores ``"A"`` and a CSV
+    with ``"  A  "`` mixed with ``"A"`` doesn't land as two distinct
+    classes (silent label-set corruption).
+
+    The strip mirrors what the framework does for ``data_id`` (line
+    below in process_record) and for column headers (csv_ingestor).
+    """
+    ing = make_ingestor(label_column="lbl", category=None)
+    rec = ing.process_record({"lbl": "  A  ", "filename": "f"})
+    # PASSTHROUGH policy: label lands verbatim, but stripped.
+    assert rec["label"] == "A", f"expected stripped 'A', got {rec['label']!r}"
+
+
+def test_process_record_label_strip_makes_whitespace_variants_equivalent():
+    """End-to-end check that two records with ``"  A  "`` and ``"A"``
+    produce the SAME cleaned label — the contract the corruption fix
+    establishes."""
+    ing = make_ingestor(label_column="lbl", category=None)
+    rec1 = ing.process_record({"lbl": "  A  ", "filename": "f1"})
+    rec2 = ing.process_record({"lbl": "A", "filename": "f2"})
+    assert rec1["label"] == rec2["label"] == "A"
+
+
+def test_process_record_label_strip_preserves_non_string_labels():
+    """INT class IDs and other non-string labels (which have no
+    whitespace to strip) must pass through unchanged."""
+    ing = make_ingestor(label_column="lbl", category=None)
+    rec = ing.process_record({"lbl": 42, "filename": "f"})
+    # Numeric labels pass through the policy unchanged.
+    assert rec["label"] == 42
 
 
 def test_process_record_preserves_none_for_sql_null():
@@ -350,6 +387,42 @@ def test_validate_data_validator_exception_raises():
 # ingest (full flow, Session patched)
 # ---------------------------------------------------------------------------
 
+def test_init_does_not_create_table_until_validation_passes():
+    # REGRESSION GUARD (#260): create_table used to fire inside __init__, so a
+    # validator-rejected ingest left an empty orphaned table that the next run's
+    # stale-table guard tripped on, forcing the user to manually DROP. Table
+    # creation must be deferred until validation has accepted the input.
+    ing = make_ingestor(category=None)
+    ing.database.create_table.assert_not_called()
+    assert ing.table is None
+
+
+def test_validation_failure_leaves_no_table_created():
+    # REGRESSION GUARD (#260): when validate_data rejects the input, the
+    # ingestor must not have created the destination table — so a corrected
+    # re-run starts from a clean slate without manual DB intervention.
+    ing = make_ingestor(category=None)
+    bad = MagicMock()
+    bad.name = "Bad"
+    bad.validate.return_value = ValidationResult(False, ["nope"], [], {})
+    with patch.object(base_mod, "map_validators", return_value=[bad]):
+        with pytest.raises(ValueError):
+            ing.ingest("src", batch_size=10)
+    ing.database.create_table.assert_not_called()
+    assert ing.table is None
+
+
+def test_ingest_creates_table_after_validation_passes():
+    # The table is created exactly once, after validation accepts the input.
+    records = [{"a": "1", "filename": "f1"}]
+    ing = make_ingestor(records=records, category=None)
+    with patch.object(base_mod, "Session") as Sess:
+        Sess.return_value.__enter__.return_value = MagicMock()
+        ing.ingest("src", batch_size=10)
+    ing.database.create_table.assert_called_once_with("tbl", {"a": "INT"})
+    assert ing.table is not None
+
+
 def test_ingest_happy_path():
     records = [{"a": "1", "filename": "f1"}, {"a": "2", "filename": "f2"}]
     ing = make_ingestor(records=records, category=None)
@@ -428,15 +501,61 @@ def test_ingest_still_calls_edge_label_for_label_carrying_categories():
     ing.api_client.send_generate_edge_label_meta.assert_called_once()
 
 
-def test_ingest_skips_records_that_fail_processing():
-    # invalid intent -> process_record returns None -> counted as skipped
+def test_ingest_fails_fast_on_invalid_intent():
+    # A bad intent is a run-wide config error, not a per-row skip: it must
+    # abort loudly before any DB work (#234), not silently skip every record
+    # and exit 0 with an empty dataset and a Job marked Succeeded.
     records = [{"a": "1", "filename": "f1"}]
     ing = make_ingestor(records=records, category=None, intent="bogus")
+    with pytest.raises(ValueError, match="intent"):
+        ing.ingest("src", batch_size=10)
+    ing.database.insert_batch.assert_not_called()
+
+
+def test_ingest_counts_dropped_record_as_failure():
+    # A record dropped during processing (here: a missing unique_id when
+    # unique_id_column is set) must be surfaced as a failed record so the run
+    # exits non-zero — not silently skipped with a clean exit 0 (#234). The
+    # dropped record never reaches the DB.
+    records = [{"a": "1", "filename": "f1"}]  # no 'uid' -> _map_unique_id drops it
+    ing = make_ingestor(
+        records=records, category=None, intent="train", unique_id_column="uid"
+    )
     with patch.object(base_mod, "Session") as Sess:
         Sess.return_value.__enter__.return_value = MagicMock()
         failed = ing.ingest("src", batch_size=10)
-    assert failed == []
+    assert len(failed) == 1
+    assert failed[0]["error"] == "record_dropped_in_processing"
     ing.database.insert_batch.assert_not_called()
+
+
+def test_ingest_keeps_good_records_and_counts_dropped():
+    # The canonical #234 scenario: a mixed run. The good record ingests; the
+    # dropped one (blank unique_id) is surfaced as a failure, the summary
+    # records the drop and trips has_failures — so a partial run can NOT be
+    # reported as a clean success (the "0 failures / most records failed"
+    # contradiction).
+    records = [{"a": "1", "uid": "x1"}, {"a": "2", "uid": "  "}]  # 2nd: blank uid
+    ing = make_ingestor(
+        records=records, category=None, intent="train", unique_id_column="uid"
+    )
+    captured = {}
+    real_log = BaseIngestor._log_summary
+
+    def spy(self, summary):
+        captured["summary"] = summary
+        return real_log(self, summary)
+
+    with patch.object(base_mod, "Session") as Sess, \
+         patch.object(BaseIngestor, "_log_summary", spy):
+        Sess.return_value.__enter__.return_value = MagicMock()
+        failed = ing.ingest("src", batch_size=10)
+
+    summary = captured["summary"]
+    assert summary.skipped_records == 1
+    assert summary.has_failures is True
+    assert any(f["error"] == "record_dropped_in_processing" for f in failed)
+    ing.database.insert_batch.assert_called()  # the good record reached the DB
 
 
 def test_ingest_reraises_on_session_error():
@@ -483,6 +602,16 @@ def test_check_csv_encoding_skips_non_csv_sources(tmp_path):
     BaseIngestor._check_csv_encoding(str(tmp_path))                   # a directory
     BaseIngestor._check_csv_encoding(None)                            # not a path
     BaseIngestor._check_csv_encoding(str(tmp_path / "missing.csv"))   # nonexistent
+
+
+def test_check_csv_encoding_rejects_nul_byte(tmp_path):
+    # A NUL byte (0x00) is valid UTF-8 so it slips past the decode check, but
+    # pandas' C parser silently TRUNCATES the field at it ("a\x00b" -> "a").
+    # Reject it up front with a clear message (#238).
+    bad = tmp_path / "nul.csv"
+    bad.write_bytes(b"id,name\n1,a\x00b\n2,ok\n")
+    with pytest.raises(ValueError, match="NUL byte"):
+        BaseIngestor._check_csv_encoding(str(bad))
 
 
 # ---------------------------------------------------------------------------
@@ -704,14 +833,14 @@ def test_check_src_path_only_runs_for_file_bearing_categories():
     CSV path is checked separately). This keeps tabular-only ingests
     working even when SRC_PATH isn't set."""
     from tracebloc_ingestor.utils.constants import TaskCategory
-    from tracebloc_ingestor.ingestors.base import _SRC_PATH_REQUIRED_CATEGORIES
+    from tracebloc_ingestor.ingestors.base import _FILE_BEARING_CATEGORIES
     for cat in (
         TaskCategory.TABULAR_CLASSIFICATION,
         TaskCategory.TABULAR_REGRESSION,
         TaskCategory.TIME_SERIES_FORECASTING,
         TaskCategory.TIME_TO_EVENT_PREDICTION,
     ):
-        assert cat not in _SRC_PATH_REQUIRED_CATEGORIES
+        assert cat not in _FILE_BEARING_CATEGORIES
     # Image / text / segmentation / MLM all need a staged SRC_PATH.
     for cat in (
         TaskCategory.IMAGE_CLASSIFICATION,
@@ -721,7 +850,7 @@ def test_check_src_path_only_runs_for_file_bearing_categories():
         TaskCategory.TEXT_CLASSIFICATION,
         TaskCategory.MASKED_LANGUAGE_MODELING,
     ):
-        assert cat in _SRC_PATH_REQUIRED_CATEGORIES
+        assert cat in _FILE_BEARING_CATEGORIES
 
 
 def test_check_src_path_required_for_token_classification():
@@ -729,5 +858,5 @@ def test_check_src_path_required_for_token_classification():
     SRC_PATH (same layout as text_classification), so it must get the
     early staging preflight instead of N file-transfer 'not found' errors."""
     from tracebloc_ingestor.utils.constants import TaskCategory
-    from tracebloc_ingestor.ingestors.base import _SRC_PATH_REQUIRED_CATEGORIES
-    assert TaskCategory.TOKEN_CLASSIFICATION in _SRC_PATH_REQUIRED_CATEGORIES
+    from tracebloc_ingestor.ingestors.base import _FILE_BEARING_CATEGORIES
+    assert TaskCategory.TOKEN_CLASSIFICATION in _FILE_BEARING_CATEGORIES

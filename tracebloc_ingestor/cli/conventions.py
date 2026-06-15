@@ -40,7 +40,6 @@ IMAGE_CATEGORIES: FrozenSet[str] = frozenset({
     TaskCategory.OBJECT_DETECTION,
     TaskCategory.KEYPOINT_DETECTION,
     TaskCategory.SEMANTIC_SEGMENTATION,
-    TaskCategory.INSTANCE_SEGMENTATION,
 })
 
 TEXT_CATEGORIES: FrozenSet[str] = frozenset({
@@ -108,9 +107,6 @@ DEFAULT_IMAGE_FILE_OPTIONS_BY_CATEGORY: Dict[str, Dict[str, Any]] = {
     # keypoint_detection: no target_size default — the customer's pose model
     # dictates input resolution, so the schema requires it top-level.
     TaskCategory.KEYPOINT_DETECTION:      {"extension": ".jpg"},
-    # No template exists yet for instance_segmentation; mirror semantic for
-    # forward-compatibility, revisit when the template lands.
-    TaskCategory.INSTANCE_SEGMENTATION:   {"target_size": [512, 512], "extension": ".jpg"},
 }
 
 DEFAULT_TEXT_FILE_OPTIONS: Dict[str, Any] = {

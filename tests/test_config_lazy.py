@@ -157,3 +157,20 @@ def test_api_endpoint_follows_edge_env(clean_env, monkeypatch):
 
     monkeypatch.setenv("CLIENT_ENV", "local")
     assert config.API_ENDPOINT == "http://localhost:8000"
+
+
+@pytest.mark.parametrize("env,attr", [("MYSQL_PORT", "DB_PORT"), ("BATCH_SIZE", "BATCH_SIZE")])
+def test_non_numeric_int_field_raises_clear_error(clean_env, monkeypatch, env, attr):
+    # A non-numeric MYSQL_PORT / BATCH_SIZE must surface a clear config error
+    # naming the field, not a raw "invalid literal for int()" (#238).
+    monkeypatch.setenv(env, "abc")
+    with pytest.raises(ValueError, match="must be an integer"):
+        getattr(Config(), attr)
+
+
+def test_numeric_int_field_still_coerces(clean_env, monkeypatch):
+    monkeypatch.setenv("MYSQL_PORT", "3307")
+    monkeypatch.setenv("BATCH_SIZE", "500")
+    config = Config()
+    assert config.DB_PORT == 3307
+    assert config.BATCH_SIZE == 500

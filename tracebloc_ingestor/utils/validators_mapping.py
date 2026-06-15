@@ -24,7 +24,36 @@ from tracebloc_ingestor.validators.keypoint_visibility_validator import (
 from tracebloc_ingestor.validators.tokenizer_validator import TokenizerValidator
 from tracebloc_ingestor.validators.file_pairing_validator import FilePairingValidator
 from tracebloc_ingestor.validators.bio_label_validator import BIOLabelValidator
+from tracebloc_ingestor.validators.label_diversity_validator import (
+    LabelDiversityValidator,
+)
 from tracebloc_ingestor.utils.constants import TaskCategory, FileExtension
+
+
+def _label_diversity_validator(options: Dict[str, Any]) -> LabelDiversityValidator:
+    """Construct a LabelDiversityValidator using the user-configured
+    label column name (or the framework default ``label``). Centralised
+    so every classification-family branch wires the same instance shape.
+
+    Issue #251: a classification dataset with one distinct label value
+    is unlearnable and the backend rejects it at ``/global_meta/prepare/``
+    with ``HTTP 400: "Please provide atleast 2 labels."``. Catching it
+    at preflight surfaces the actual cause (and lists the offending
+    label value(s)) instead of cascading to a misleading
+    "Backend failed to prepare the dataset" message after the rows
+    have already landed in MySQL.
+    """
+    return LabelDiversityValidator(
+        label_column=options.get("label_column") or "label",
+        # Read the label column with the SAME NA / dtype rules CSVIngestor
+        # uses, or the distinct-label count disagrees with what's actually
+        # ingested (bugbot #252). Prefer ``full_schema`` (base.py passes the
+        # UNSTRIPPED schema here): ``schema``/``file_options["schema"]`` has
+        # the label column removed, so it can't carry the label's type — the
+        # very column this validator reads. Fall back to ``schema`` for
+        # direct callers / tests that pass an unstripped map.
+        schema=options.get("full_schema") or options.get("schema"),
+    )
 
 
 def map_validators(
@@ -34,6 +63,7 @@ def map_validators(
         return [
             FileTypeValidator(allowed_extension=options["extension"], path="images"),
             ImageResolutionValidator(expected_resolution=options["target_size"]),
+            _label_diversity_validator(options),
             TableNameValidator(),
             DuplicateValidator(),
         ]
@@ -48,6 +78,7 @@ def map_validators(
                 sidecar_label="annotation",
             ),
             ImageResolutionValidator(expected_resolution=options["target_size"]),
+            _label_diversity_validator(options),
             TableNameValidator(),
             DuplicateValidator(),
         ]
@@ -57,6 +88,7 @@ def map_validators(
         # Add data validator if schema is provided
         if options.get("schema"):
             validators.append(DataValidator(schema=options["schema"]))
+        validators.append(_label_diversity_validator(options))
         validators.append(TableNameValidator())
         validators.append(DuplicateValidator())
 
@@ -80,6 +112,7 @@ def map_validators(
         if options.get("schema"):
             validators.append(DataValidator(schema=options["schema"]))
 
+        validators.append(_label_diversity_validator(options))
         validators.append(TableNameValidator())
         validators.append(DuplicateValidator())
 
@@ -189,6 +222,7 @@ def map_validators(
                 sidecar_suffix="_mask",
             ),
             ImageResolutionValidator(expected_resolution=options["target_size"]),
+            _label_diversity_validator(options),
             TableNameValidator(),
             DuplicateValidator(),
         ]
@@ -206,6 +240,7 @@ def map_validators(
                 num_keypoints=options.get("number_of_keypoints")
             ),
             KeypointVisibilityValidator(),
+            _label_diversity_validator(options),
             TableNameValidator(),
             DuplicateValidator(),
         ]

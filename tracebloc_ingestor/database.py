@@ -4,6 +4,7 @@ from sqlalchemy import (
     Table,
     Column,
     BigInteger,
+    CHAR,
     DateTime,
     Date,
     Time,
@@ -23,7 +24,7 @@ from sqlalchemy.dialects.mysql import insert, LONGBLOB, BLOB
 from sqlalchemy.exc import OperationalError, InterfaceError, DBAPIError
 import logging
 from urllib.parse import quote
-from typing import List, Dict, Any, Optional
+from typing import Iterable, List, Dict, Any, Optional
 from datetime import datetime
 from tenacity import (
     retry,
@@ -98,6 +99,58 @@ def _execute_with_retry(connection, stmt):
         raise
 
 
+def _suggest_type(unknown: str, known: Iterable[str]) -> Optional[str]:
+    """Return the closest match from ``known`` to ``unknown`` if any
+    candidate is within edit distance 3 (Levenshtein), else None.
+
+    Used by ``_get_sqlalchemy_type`` to surface a "Did you mean BIGINT?"
+    hint when a customer types BIGINTEGER, BOOLEAN→BOOL, NUMRIC→NUMERIC,
+    etc. Distance 3 is the empirical sweet spot — close enough to catch
+    every realistic typo we've seen in the wild (single-letter swaps,
+    common prefix/suffix confusion like INT-vs-INTEGER, missing or
+    duplicated letters), wide enough to fail-silently on entries that
+    are genuinely different vocabulary (no false "Did you mean DATE?"
+    for a GEOMETRY).
+
+    Returns the FIRST best match at the minimum distance — type_mapping
+    has stable insertion order so the deterministic result is fine for
+    tests.
+    """
+    if not unknown:
+        return None
+
+    def _levenshtein(a: str, b: str) -> int:
+        if a == b:
+            return 0
+        if not a:
+            return len(b)
+        if not b:
+            return len(a)
+        # Two-row DP — O(len(a)*len(b)) time, O(min(a,b)) space.
+        prev = list(range(len(b) + 1))
+        for i, ca in enumerate(a, start=1):
+            curr = [i] + [0] * len(b)
+            for j, cb in enumerate(b, start=1):
+                cost = 0 if ca == cb else 1
+                curr[j] = min(
+                    prev[j] + 1,
+                    curr[j - 1] + 1,
+                    prev[j - 1] + cost,
+                )
+            prev = curr
+        return prev[-1]
+
+    target = unknown.upper()
+    best: Optional[str] = None
+    best_d = 99
+    for candidate in known:
+        d = _levenshtein(target, candidate)
+        if d < best_d:
+            best = candidate
+            best_d = d
+    return best if best_d <= 3 else None
+
+
 class Database:
     def __init__(self, config: Config):
         self.config = config
@@ -134,6 +187,7 @@ class Database:
         """
         type_mapping = {
             "VARCHAR": String,
+            "CHAR": CHAR,
             "TEXT": Text,
             "INT": Integer,
             "INTEGER": Integer,
@@ -179,7 +233,24 @@ class Database:
                     return alchemy_type(parts[0])
             return alchemy_type
 
-        raise ValueError(f"Unsupported MySQL type: {mysql_type}")
+        # Surface a "did you mean" hint when the typo is one edit away from
+        # a supported type — BIGINTEGER → BIGINT, BOOLEAN → BOOL, NUMRIC →
+        # NUMERIC, etc. A user-facing schema error that just says
+        # "Unsupported" leaves the customer guessing; a single short hint
+        # turns a 5-minute "what's the right spelling?" round trip into a
+        # zero-thought fix. Levenshtein distance ≤ 3 catches every realistic
+        # typo we've seen without false-flagging unrelated types.
+        suggestion = _suggest_type(base_type, type_mapping.keys())
+        if suggestion:
+            raise ValueError(
+                f"Unsupported MySQL type: {mysql_type}. Did you mean "
+                f"'{suggestion}'? Supported types: "
+                f"{sorted(type_mapping.keys())}"
+            )
+        raise ValueError(
+            f"Unsupported MySQL type: {mysql_type}. Supported types: "
+            f"{sorted(type_mapping.keys())}"
+        )
 
     def create_table(self, table_name: str, schema: Dict[str, str]):
         """
@@ -492,34 +563,48 @@ class Database:
         # Get all columns from the table
         columns = inspector.get_columns(table_name)
 
-        # Convert SQLAlchemy types back to MySQL types
+        # Reflection against a live MySQL returns DIALECT type classes whose
+        # names already ARE the MySQL keywords (VARCHAR, INTEGER, DECIMAL,
+        # TINYINT, ...), while in-process metadata uses the GENERIC classes
+        # (String, Integer, Numeric, ...). Upper-casing the class name unifies
+        # the two; this map only covers names that differ from the platform's
+        # MySQL vocabulary (the keywords _get_sqlalchemy_type accepts).
         type_mapping = {
-            "String": "VARCHAR",
-            "Text": "TEXT",
-            "Integer": "INT",
-            "BigInteger": "BIGINT",
-            "Float": "FLOAT",
-            "Double": "DOUBLE",
-            "Boolean": "BOOLEAN",
-            "Date": "DATE",
-            "DateTime": "DATETIME",
-            "Timestamp": "TIMESTAMP",
-            "Time": "TIME",
-            "BLOB": "BLOB",
-            "LONGBLOB": "LONGBLOB",
+            "STRING": "VARCHAR",
+            "INTEGER": "INT",
+            "BIGINTEGER": "BIGINT",
+            "SMALLINTEGER": "SMALLINT",
+            "NUMERIC": "DECIMAL",
+            "DOUBLE_PRECISION": "DOUBLE",
+            "LARGEBINARY": "BLOB",
         }
 
         schema = {}
         for column in columns:
-            # Get the type name
-            type_name = column["type"].__class__.__name__
+            col_type = column["type"]
+            type_name = col_type.__class__.__name__.upper()
 
-            # Convert SQLAlchemy type to MySQL type
-            mysql_type = type_mapping.get(type_name, "VARCHAR")
+            # MySQL has no native BOOLEAN type: BOOL columns are created — and
+            # therefore reflected — as TINYINT(1).
+            if (
+                type_name == "TINYINT"
+                and getattr(col_type, "display_width", None) == 1
+            ):
+                schema[column["name"]] = "BOOLEAN"
+                continue
 
-            # Add length for VARCHAR types
-            if mysql_type == "VARCHAR" and hasattr(column["type"], "length"):
-                mysql_type = f"{mysql_type}({column['type'].length})"
+            mysql_type = type_mapping.get(type_name, type_name)
+
+            # Re-attach the parametrisation MySQL carries in the DDL string.
+            if mysql_type in ("VARCHAR", "CHAR", "BINARY", "VARBINARY"):
+                length = getattr(col_type, "length", None)
+                if length:
+                    mysql_type = f"{mysql_type}({length})"
+            elif mysql_type == "DECIMAL":
+                precision = getattr(col_type, "precision", None)
+                if precision is not None:
+                    scale = getattr(col_type, "scale", None) or 0
+                    mysql_type = f"DECIMAL({precision},{scale})"
 
             schema[column["name"]] = mysql_type
 

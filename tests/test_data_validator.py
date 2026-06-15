@@ -131,6 +131,121 @@ def test_loads_from_json_empty_string_is_missing(tmp_path):
     assert result.is_valid, f"expected valid; errors={result.errors}"
 
 
+def test_loads_from_json_single_dict_normalised_to_one_record(tmp_path):
+    """A top-level JSON dict (one record, not wrapped in `[...]`) must validate
+    the same way `[{...}]` does — matching JSONIngestor.read_data's contract.
+
+    Regression: `JSONIngestor.read_data` is explicit:
+
+        # Handle both array and object formats
+        if isinstance(data, dict):
+            data = [data]
+        elif not isinstance(data, list):
+            raise ValueError("JSON data must be an object or array of objects")
+
+    And its docstring promises "handles both single-object and
+    array-of-objects formats". But `DataValidator._load_data`'s .json branch
+    used `pd.read_json(orient="records")`, which expects a list — a
+    top-level dict produced a DataFrame the validator then rejected with
+    "No data found to validate", before `read_data` ever ran. A user
+    submitting a single-record JSON file got the same "0 rows" treatment
+    as an empty file even though their data was perfectly well-formed.
+
+    Surfaced by adversarial testing against v0.3.9-rc1 (issue #232).
+    """
+    p = tmp_path / "single.json"
+    p.write_text('{"id": 1, "age": 30, "label": "A"}')
+    result = DataValidator(
+        schema={"id": "INT", "age": "INT", "label": "VARCHAR(8)"}
+    ).validate(str(p))
+    assert result.is_valid, f"expected valid; errors={result.errors}"
+
+
+def test_loads_from_json_non_object_top_level_still_fails(tmp_path):
+    """A top-level JSON value that's neither a dict nor a list (a bare
+    string, number, etc.) must still be rejected — the normalisation only
+    wraps dicts, not arbitrary scalars."""
+    p = tmp_path / "bare.json"
+    p.write_text('"just a string"')
+    result = DataValidator(schema={"a": "INT"}).validate(str(p))
+    assert not result.is_valid
+
+
+def test_loads_from_json_scalar_array_fails_not_silently_passes(tmp_path):
+    """A top-level JSON array of scalars (numbers/strings, no objects) must be
+    rejected, not pass validation against an unrelated schema.
+
+    Regression: after #232 switched `_load_data` from `pd.read_json` to
+    `json.load` + `pd.DataFrame(raw)`, a top-level scalar array like
+    `[1, 2, 3]` became a non-empty 1-column DataFrame, so schema validation
+    could pass even though `JSONIngestor._iter_validated_records` skips every
+    non-dict element and ingests *zero* records — a validate-pass →
+    ingest-nothing trap. `_load_data` now drops non-dict items to mirror the
+    ingestor, so an all-scalar array collapses to empty and is rejected with
+    "No data found to validate" (bugbot #233).
+    """
+    p = tmp_path / "scalars.json"
+    p.write_text("[1, 2, 3]")
+    result = DataValidator(schema={"id": "INT", "label": "VARCHAR(8)"}).validate(
+        str(p)
+    )
+    assert not result.is_valid
+    assert "No data found" in result.errors[0]
+
+
+def test_loads_from_json_mixed_array_keeps_only_objects(tmp_path):
+    """A top-level array mixing objects and scalars must validate only the
+    objects — matching `JSONIngestor`, which skips the scalars and ingests
+    the dict records (bugbot #233)."""
+    p = tmp_path / "mixed.json"
+    p.write_text('[{"id": 1, "label": "A"}, 42, {"id": 2, "label": "B"}]')
+    result = DataValidator(schema={"id": "INT", "label": "VARCHAR(8)"}).validate(
+        str(p)
+    )
+    assert result.is_valid, f"expected valid; errors={result.errors}"
+    assert result.metadata["rows_checked"] == 2
+
+
+def test_loads_from_json_jsonl_surfaces_clear_error(tmp_path):
+    """A newline-delimited JSON (JSONL) file — one JSON object per
+    line, no top-level array — must surface a CLEAR error pointing at
+    the JSONL pattern and the fix (combine into an array). The opaque
+    ``json.JSONDecodeError: Extra data`` / ``Trailing data`` message
+    isn't actionable for users who didn't write json.load themselves.
+
+    Surfaced by adversarial new-user testing (N12 — common export
+    format from log / event pipelines).
+    """
+    p = tmp_path / "events.json"
+    p.write_text(
+        '{"id":1,"label":"A"}\n'
+        '{"id":2,"label":"B"}\n'
+        '{"id":3,"label":"A"}\n'
+    )
+    result = DataValidator(schema={"id": "INT", "label": "VARCHAR(8)"}).validate(
+        str(p)
+    )
+    assert not result.is_valid
+    err = result.errors[0]
+    assert "JSONL" in err or "newline-delimited" in err
+    # Should point at the fix.
+    assert "array" in err.lower()
+
+
+def test_loads_from_json_malformed_not_misidentified_as_jsonl(tmp_path):
+    """A genuinely malformed JSON file (not JSONL) must NOT be
+    misidentified — the JSONL detection requires the file's first
+    non-empty line to itself parse as JSON. ``{trailing garbage``
+    doesn't parse → fall through to the original 'Data type
+    validation error' path."""
+    p = tmp_path / "broken.json"
+    p.write_text("{this is not valid json at all")
+    result = DataValidator(schema={"a": "INT"}).validate(str(p))
+    assert not result.is_valid
+    # Must NOT claim it's JSONL.
+    assert "JSONL" not in result.errors[0]
+
+
 def test_unknown_type_fails():
     df = pd.DataFrame({"a": [1]})
     result = DataValidator(schema={"a": "WEIRDTYPE"}).validate(df)

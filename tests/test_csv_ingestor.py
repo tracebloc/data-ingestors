@@ -42,6 +42,24 @@ def test_read_data_missing_file_raises():
         list(ing.read_data("/no/such/file.csv"))
 
 
+@pytest.mark.parametrize(
+    "sep,needle",
+    [(";", "semicolon"), ("\t", "tab"), ("|", "pipe")],
+)
+def test_wrong_delimiter_hints_at_delimiter(tmp_path, sep, needle):
+    # A ;/tab/pipe-delimited file read as CSV parses as a single column; the
+    # error should hint at the real delimiter instead of the misleading
+    # "every column missing" (#238).
+    p = tmp_path / "f.csv"
+    p.write_text(f"a{sep}b{sep}label\n1{sep}2{sep}x\n")
+    ing = make_csv_ingestor(
+        schema={"a": "INT", "b": "INT", "label": "VARCHAR(10)"},
+        category=TaskCategory.TABULAR_CLASSIFICATION,
+    )
+    with pytest.raises(ValueError, match=needle):
+        list(ing.read_data(str(p)))
+
+
 def test_read_data_strips_column_whitespace(tmp_path):
     p = tmp_path / "d.csv"
     p.write_text(" a , b \n1,2\n")
@@ -78,11 +96,24 @@ def test_read_data_unique_id_column_missing_raises(make_csv):
         list(ing.read_data(str(path)))
 
 
-def test_read_data_empty_file_returns_nothing(tmp_path):
+def test_read_data_empty_file_raises_with_clear_message(tmp_path):
+    """An empty (zero-byte) CSV is a hard input error, not a successful
+    '0 rows' run. The old code logged a WARNING and silently returned an
+    empty generator — the ingestor then created an empty MySQL table and
+    called `send_generate_edge_label_meta`, which 400'd with the misleading
+    'No data found for table X' message (same cascade #213 traced for
+    self-supervised + label mismatch). The user blamed the backend.
+
+    Fail fast at the read layer with a clear, source-truthful message
+    naming the path and pointing at staging as the likely cause —
+    DataValidator's existing 'No data found to validate' path catches it
+    before any backend round-trip.
+    """
     p = tmp_path / "empty.csv"
     p.write_text("")
     ing = make_csv_ingestor(schema={})
-    assert list(ing.read_data(str(p))) == []
+    with pytest.raises(ValueError, match="Empty CSV file"):
+        list(ing.read_data(str(p)))
 
 
 def test_validate_csv_type_coercion():

@@ -20,12 +20,12 @@ from ..utils.constants import (
     GREEN,
     RED,
     YELLOW,
-    BLUE,
     CYAN,
 )
 from ..utils import label_policy as label_policy_module
 from ..utils.validators_mapping import map_validators
 from ..file_transfer import map_file_transfer
+from ..reporting import ConsoleRenderer
 
 # Logger for this module. Level is set by `setup_logging()` on the root
 # logger when the user script calls it; child loggers inherit that level.
@@ -45,20 +45,29 @@ _TABULAR_FAMILY_CATEGORIES = frozenset({
     TaskCategory.TIME_TO_EVENT_PREDICTION,
 })
 
-# File-bearing categories resolve every per-row sidecar against
-# ``config.SRC_PATH``. If that path is empty/unset/missing, every file
-# lookup silently falls through to a relative path (``"" + "images/x.jpg"``
-# -> ``"images/x.jpg"``), file_transfer skips every record, and the user
-# sees N copies of "Source image not found: images/x.jpg" — blaming the
-# data when the real cause is "SRC_PATH was never staged on the PVC".
+# File-bearing categories: every record references sidecar files (images,
+# annotations, masks, texts, sequences) that live under ``config.SRC_PATH``
+# and must be copied to DEST_PATH by ``map_file_transfer``. This single set
+# drives BOTH uses:
+#   1. the SRC_PATH preflight in ``validate_data`` — if SRC_PATH is
+#      empty/unset/missing, every file lookup silently falls through to a
+#      relative path and the user sees N copies of "Source image not
+#      found: images/x.jpg", blaming the data when the real cause is
+#      "SRC_PATH was never staged on the PVC";
+#   2. the per-record ``map_file_transfer`` gate in ``_ingest_with_lock``.
+# Keeping these two on one set is deliberate: when they were separate
+# lists, instance_segmentation sat in one but not the other and shipped
+# half-wired — rows reached MySQL and the backend API with zero files
+# staged (the silent-half-ingest pattern from #99).
+# ``tests/test_category_congruence.py`` anchors this set to the schema
+# enum's file-bearing categories.
 # Tabular / time-series have no sidecar dirs under SRC_PATH, so they're
-# excluded from the guard (the CSV path itself is checked elsewhere).
-_SRC_PATH_REQUIRED_CATEGORIES = frozenset({
+# excluded (the CSV path itself is checked elsewhere).
+_FILE_BEARING_CATEGORIES = frozenset({
     TaskCategory.IMAGE_CLASSIFICATION,
     TaskCategory.OBJECT_DETECTION,
     TaskCategory.KEYPOINT_DETECTION,
     TaskCategory.SEMANTIC_SEGMENTATION,
-    TaskCategory.INSTANCE_SEGMENTATION,
     TaskCategory.TEXT_CLASSIFICATION,
     TaskCategory.TOKEN_CLASSIFICATION,
     TaskCategory.MASKED_LANGUAGE_MODELING,
@@ -110,12 +119,14 @@ class IngestionSummary(NamedTuple):
     def has_failures(self) -> bool:
         """True if any non-trivial failure occurred — DB insert short of
         total, API short of inserted, file-transfer skipped any record,
-        or processing errored. Used to gate the "completed successfully"
+        a record was dropped during processing (skipped_records), or
+        processing errored. Used to gate the "completed successfully"
         banner so customers can't mistake a partial run for a clean one.
         """
         return (
             self.failed_records > 0
             or self.file_transfer_failures > 0
+            or self.skipped_records > 0
             or self.inserted_records < self.total_records
             or self.api_sent_records < self.inserted_records
         )
@@ -236,8 +247,15 @@ class BaseIngestor(ABC):
             if self.category in _TABULAR_FAMILY_CATEGORIES:
                 self.file_options["number_of_columns"] = len(table_schema)
 
-        # Ensure table exists
-        self.table = self.database.create_table(table_name, table_schema)
+        # Defer table creation until after ``validate_data()`` passes so a
+        # validator-rejected ingest leaves no orphaned table behind (#260).
+        # Creating it in ``__init__`` meant a rejected ingest left a stale
+        # empty table that the next retry's stale-table guard tripped on,
+        # forcing the user to manually DROP before re-running. Stash the
+        # cleaned schema; ``_ingest_with_lock`` creates the table once
+        # validation succeeds.
+        self.table = None
+        self._table_schema = table_schema
 
     def _map_unique_id(
         self, record: Dict[str, Any], cleaned_record: Dict[str, Any]
@@ -302,6 +320,22 @@ class BaseIngestor(ABC):
                     label_val = label_val.item()
                 except (ValueError, AttributeError):
                     pass
+            # Strip surrounding whitespace from string label values before
+            # the policy runs — protects against silent label-set
+            # corruption (issue #261) where ``"  A  "`` and ``"A"`` would
+            # otherwise land as distinct classes in MySQL. A user
+            # copy-pasting from Excel / another tool routinely has
+            # whitespace they can't see; the framework's contract for
+            # the label column is "the class identifier", and class
+            # identifiers don't carry whitespace semantics. The strip
+            # mirrors what the framework already does for the
+            # ``data_id`` column (line below) and for column headers
+            # (``chunk.columns.str.strip()`` in csv_ingestor).
+            #
+            # Non-string labels (INT class IDs, BIOLabelValidator's
+            # space-separated tags, etc.) pass through unchanged.
+            if isinstance(label_val, str):
+                label_val = label_val.strip()
             cleaned_record["label"] = label_policy_module.apply(
                 label_val, self.label_policy
             )
@@ -457,21 +491,39 @@ class BaseIngestor(ABC):
 
     @staticmethod
     def _check_csv_encoding(source: Any) -> None:
-        """Fail fast with a clear message if a CSV source is not valid UTF-8.
+        """Fail fast with a clear message on a CSV that isn't valid UTF-8 or
+        that contains a NUL byte.
 
         Every validator reads CSVs as UTF-8 and swallows decode errors into a
         misleading "No data found"; a non-UTF-8 export (e.g. a Latin-1/Windows
-        CSV with umlauts) would otherwise crash or mislead. Probe once, up front.
+        CSV with umlauts) would otherwise crash or mislead. A NUL byte (0x00)
+        is sneakier: it IS valid UTF-8 (U+0000) so it slips past the decode
+        check, but pandas' C parser silently TRUNCATES the field at the NUL
+        (``"a\\x00b"`` -> ``"a"``) — silent corruption (#238). Probe once, up
+        front, and reject both.
         """
         if not isinstance(source, (str, Path)):
             return
         path = Path(source)
         if path.suffix.lower() != ".csv" or not path.exists():
             return
+        offset = 0
         try:
             with open(path, "r", encoding="utf-8") as fh:
-                while fh.read(1 << 20):  # decode in 1 MB chunks; raises on a bad byte
-                    pass
+                while True:
+                    chunk = fh.read(1 << 20)  # 1 MB; decode raises on a bad byte
+                    if not chunk:
+                        break
+                    nul = chunk.find("\x00")
+                    if nul != -1:
+                        raise ValueError(
+                            f"{RED}'{path.name}' contains a NUL byte (0x00) at "
+                            f"character {offset + nul}. This is not valid CSV text "
+                            f"— the file is likely binary or a corrupt export, and "
+                            f"pandas would silently truncate the field at the NUL. "
+                            f"Remove the NUL byte(s) and re-ingest.{RESET}"
+                        )
+                    offset += len(chunk)
         except UnicodeDecodeError as exc:
             raise ValueError(
                 f"{RED}'{path.name}' is not valid UTF-8 — a non-UTF-8 byte was found at "
@@ -636,7 +688,7 @@ class BaseIngestor(ABC):
         # "Source image not found: images/x.jpg" — blames the data when
         # the real cause is "SRC_PATH was never staged / set" (#772 P2).
         # File-bearing categories only (tabular has nothing under SRC_PATH).
-        if self.category in _SRC_PATH_REQUIRED_CATEGORIES:
+        if self.category in _FILE_BEARING_CATEGORIES:
             self._check_src_path()
 
         # Pre-flight: a non-UTF-8 CSV otherwise surfaces as a misleading
@@ -648,7 +700,21 @@ class BaseIngestor(ABC):
         # mutating file_options / metadata) so label-aware validators like
         # BIOLabelValidator check the right column when a custom name is used.
         validators = map_validators(
-            self.category, {**self.file_options, "label_column": self.label_column}
+            self.category,
+            {
+                **self.file_options,
+                "label_column": self.label_column,
+                # file_options["schema"] has the label/annotation/id columns
+                # stripped (they're framework columns, not table columns), but
+                # CSVIngestor reads the file with NA/dtype rules from the FULL
+                # schema — so the label column DOES get NA-sentinel treatment at
+                # ingest. Pass the full schema so LabelDiversityValidator counts
+                # distinct labels the same way the data is actually ingested,
+                # rather than letting "null"/"NA" inflate the distinct count and
+                # sneak an effectively single-class dataset past the gate
+                # (bugbot #252).
+                "full_schema": self.schema,
+            },
         )
         logger.info(f"Running {len(validators)} validator(s) on data source")
         all_valid = True
@@ -710,6 +776,24 @@ class BaseIngestor(ABC):
             logger.debug(f"Unable to count records: {str(e)}")
             return None
 
+    def _check_intent(self) -> None:
+        """Fail fast on a missing/invalid ``intent`` before any lock, DB, or
+        row work (#234).
+
+        ``intent`` is a single run-wide config value, not per-row data. When
+        it was wrong (e.g. a ``"trian"`` typo), ``_map_unique_id`` returned
+        None for EVERY record, so every row was silently skipped and — before
+        #234 — the run still exited 0 with an empty dataset and a Job marked
+        Succeeded. A config error must abort loudly, not masquerade as N
+        per-row skips.
+        """
+        if not self.intent or self.intent not in Intent.get_all_intents():
+            raise ValueError(
+                f"{RED}Invalid intent {self.intent!r}. Must be one of "
+                f"{Intent.get_all_intents()}. This is a configuration error — "
+                f"set 'intent: train' or 'intent: test' in your config.{RESET}"
+            )
+
     def ingest(self, source: Any, batch_size: int = 50) -> List[Dict[str, Any]]:
         """
         Ingest data from the source with progress tracking
@@ -732,6 +816,9 @@ class BaseIngestor(ABC):
         # including ones the inner ``except Exception`` doesn't catch
         # (Session() construction failure, _count_records exceptions,
         # KeyboardInterrupt, etc.).
+        # Fail fast on a config error (bad intent) before acquiring a table
+        # lock or touching the DB — it would otherwise skip every row (#234).
+        self._check_intent()
         _lock_path = self._acquire_table_lock()
         try:
             return self._ingest_with_lock(source, batch_size)
@@ -753,6 +840,15 @@ class BaseIngestor(ABC):
             raise e
         except Exception as e:
             raise e
+
+        # Create the destination table now that validation has accepted the
+        # input (#260). Deferring to here ensures a validator-rejected ingest
+        # leaves no orphaned empty table behind that the next retry's
+        # stale-table guard would trip on.
+        if self.table is None:
+            self.table = self.database.create_table(
+                self.table_name, self._table_schema
+            )
 
         batch = []
         failed_records = []
@@ -785,15 +881,7 @@ class BaseIngestor(ABC):
                         if processed_record:
                             stats["processed_records"] += 1
 
-                            if self.category in [
-                                TaskCategory.IMAGE_CLASSIFICATION,
-                                TaskCategory.OBJECT_DETECTION,
-                                TaskCategory.TEXT_CLASSIFICATION,
-                                TaskCategory.TOKEN_CLASSIFICATION,
-                                TaskCategory.SEMANTIC_SEGMENTATION,
-                                TaskCategory.KEYPOINT_DETECTION,
-                                TaskCategory.MASKED_LANGUAGE_MODELING,
-                            ]:
+                            if self.category in _FILE_BEARING_CATEGORIES:
                                 processed_record = map_file_transfer(
                                     self.category, processed_record, self.file_options
                                 )
@@ -840,7 +928,24 @@ class BaseIngestor(ABC):
                                     pbar.update(len(batch))
                                     batch = []
                         else:
+                            # process_record returned None: the record was
+                            # dropped (blank/invalid unique_id, or an error
+                            # inside process_record). Count it AND surface it
+                            # as a failed record so the run exits non-zero —
+                            # a dropped record is silent data loss, not a
+                            # clean skip. Before #234 these reached only
+                            # skipped_records, never failed_records, so
+                            # run_ingestion returned [] and the K8s Job was
+                            # marked Succeeded despite losing rows. The
+                            # specific reason was already logged by
+                            # process_record / _map_unique_id.
                             stats["skipped_records"] += 1
+                            failed_records.append(
+                                {
+                                    "record": record,
+                                    "error": "record_dropped_in_processing",
+                                }
+                            )
                             pbar.update(1)  # Update progress bar for skipped records
                     except Exception as e:
                         # Count processing errors (including missing columns) as failed records
@@ -907,10 +1012,20 @@ class BaseIngestor(ABC):
                     self.data_format,
                     self.intent,
                 ):
+                    # Surface the BACKEND'S actual reason in the user-visible
+                    # error — not just "see the logged API error above" which
+                    # forces the user to grep the log for the real cause.
+                    # Issue #251: a misleading "Backend failed to prepare the
+                    # dataset" message buried the real reason (e.g. "Please
+                    # provide atleast 2 labels.") in a preceding ERROR line.
+                    detail = (
+                        getattr(self.api_client, "last_prepare_error", None)
+                        or "see the logged API error above"
+                    )
                     raise RuntimeError(
-                        "Backend failed to prepare the dataset; it was NOT "
-                        "registered (its rows are already in the database). See "
-                        "the logged API error above."
+                        f"Backend failed to prepare the dataset; it was NOT "
+                        f"registered (its rows are already in the database). "
+                        f"Backend response: {detail}"
                     )
 
                 self.api_client.create_dataset(
@@ -1037,8 +1152,27 @@ class BaseIngestor(ABC):
             api_success = False
             # Send to API with ingestor_id
             if ids:  # Only send to API if we have valid IDs
+                # Send only the records that actually inserted.
+                # ``zip(ids, batch)`` pairs positionally and truncates to
+                # ``len(ids)``; after a MID-batch DB failure (insert_batch's
+                # per-record fallback appends successes in scan order) that
+                # would send the DB-failed record to the API and drop the
+                # last inserted one — a phantom backend record pointing at
+                # no MySQL row, plus a committed row the platform never
+                # sees. Match by data_id, same as _flush_batch.
+                if db_failures:
+                    db_failed_data_ids = {
+                        f.get("record", {}).get("data_id") for f in db_failures
+                    }
+                    records_to_send = [
+                        record
+                        for record in batch
+                        if record.get("data_id") not in db_failed_data_ids
+                    ]
+                else:
+                    records_to_send = batch
                 api_success = self.api_client.send_batch(
-                    [(id, record) for id, record in zip(ids, batch)],
+                    [(id, record) for id, record in zip(ids, records_to_send)],
                     self.table_name,
                     ingestor_id=self.ingestor_id,  # Include ingestor_id in API requests
                 )
@@ -1061,117 +1195,13 @@ class BaseIngestor(ABC):
             raise
 
     def _log_summary(self, summary: IngestionSummary):
-        """Log ingestion summary in a clear, formatted way with enhanced visual appeal.
+        """Render the ingestion summary box.
 
-        A "success" here means the record was inserted to the DB, sent to
-        the API, AND its sidecar file (image / annotation / mask / text)
-        was copied to the destination. Records whose source file was
-        missing are subtracted from the success count even if the DB
-        row landed — see issue #99 for the silent-data-loss pattern that
-        motivated this.
+        Delegates to :class:`tracebloc_ingestor.reporting.ConsoleRenderer` so the
+        presentation (ANSI colours, emoji, the box layout) lives in one place,
+        out of the ingestion logic (structural refactor — backend#796, P2).
+        Kept as a method (rather than calling the renderer at the call site) so
+        existing callers and tests that reference ``BaseIngestor._log_summary``
+        keep working unchanged; the rendered output is byte-for-byte identical.
         """
-
-        # A successful record requires DB insert AND API send AND, where
-        # applicable, a successful file transfer. File-transfer failures
-        # short-circuit before the DB write (they're skipped from the
-        # batch), so subtracting them from total_records gives the
-        # denominator's effective ceiling. Use inserted_records (the
-        # actual durable outcome) as the numerator.
-        success_rate = 0
-        if summary.total_records > 0:
-            success_rate = (summary.inserted_records / summary.total_records) * 100
-
-        # Determine overall status color
-        status_color = (
-            GREEN if success_rate >= 90 and not summary.has_failures
-            else YELLOW if success_rate >= 70
-            else RED
-        )
-
-        print(f"\n{CYAN}{'═'*60}{RESET}")
-        print(f"{BOLD}{CYAN}📊 INGESTION SUMMARY 📊{RESET}")
-        print(f"{CYAN}{'═'*60}{RESET}")
-        print(
-            f"{BOLD}Ingestor ID:{RESET}                {BLUE}{summary.ingestor_id}{RESET}"
-        )
-        # Main statistics with icons and colors
-        print(
-            f"{BOLD}📈 Total Records Found:{RESET}     {BLUE}{summary.total_records:,}{RESET}"
-        )
-        print(
-            f"{BOLD}✅ Successfully Processed:{RESET}  {GREEN}{summary.processed_records:,}{RESET}"
-        )
-        print(
-            f"{BOLD}💾 Inserted to Database:{RESET}    {GREEN}{summary.inserted_records:,}{RESET}"
-        )
-        print(
-            f"{BOLD}🚀 Sent to API:{RESET}             {GREEN}{summary.api_sent_records:,}{RESET}"
-        )
-        print(
-            f"{BOLD}⏭️  Skipped Records:{RESET}        {YELLOW}{summary.skipped_records:,}{RESET}"
-        )
-        file_transfer_color = (
-            RED if summary.file_transfer_failures > 0 else GREEN
-        )
-        print(
-            f"{BOLD}📁 File Transfer Failures:{RESET}  {file_transfer_color}{summary.file_transfer_failures:,}{RESET}"
-        )
-        print(
-            f"{BOLD}❌ Failed DB Insertion:{RESET}     {RED}{summary.failed_records:,}{RESET}"
-        )
-        # Only count records that made it to a DB insert but didn't ship
-        # to the API. Using `total_records - api_sent_records` would also
-        # include file-transfer failures and DB failures (which never had
-        # a chance to ship), giving an inflated, double-counted total.
-        api_only_failures = max(
-            0, summary.inserted_records - summary.api_sent_records
-        )
-        print(
-            f"{BOLD}❌ Failed to Send to API:{RESET}   {RED}{api_only_failures:,}{RESET}"
-        )
-        print(f"{CYAN}{'─'*60}{RESET}")
-
-        # Success rate with visual indicator
-        if summary.total_records > 0:
-            # Progress bar
-            bar_length = 30
-            filled_length = int(bar_length * success_rate / 100)
-            bar = "█" * filled_length + "░" * (bar_length - filled_length)
-            print(
-                f"{BOLD}📊 Success Rate:{RESET} [{status_color}{bar}{RESET}] {status_color}{success_rate:.1f}%{RESET}"
-            )
-
-        # Status banner. Any non-trivial failure (DB, API, or file-transfer)
-        # disqualifies the "completed successfully" message — a customer
-        # seeing 🎉 should be able to trust that no record was silently
-        # dropped. The three failure channels are mutually exclusive per
-        # record (file-transfer failures never reach DB; DB failures never
-        # reach API; api_only_failures are records that hit DB but didn't
-        # ship), so summing them gives a clean unique count instead of
-        # the double-count `total_records - api_sent_records` would produce.
-        total_failures = (
-            summary.failed_records
-            + summary.file_transfer_failures
-            + api_only_failures
-        )
-        if not summary.has_failures:
-            status_msg = "🎉 Ingestion completed successfully!"
-        elif success_rate >= 80:
-            status_msg = (
-                f"⚠️  Ingestion completed with {total_failures:,} failure(s), "
-                "see logs."
-            )
-        elif success_rate >= 60:
-            status_msg = (
-                f"⚠️  Ingestion completed with {total_failures:,} failure(s); "
-                "many records failed to process — see logs."
-            )
-        else:
-            status_msg = (
-                f"❌ Critical! Ingestion completed with {total_failures:,} "
-                "failure(s); most records failed — see logs."
-            )
-
-        print(f"{CYAN}{'─'*60}{RESET}")
-        print(f"{BOLD}{status_color}{status_msg}{RESET}")
-        print(f"{CYAN}{'═'*60}{RESET}\n")
+        ConsoleRenderer().render_summary(summary)

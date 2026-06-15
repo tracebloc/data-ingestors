@@ -30,7 +30,6 @@
         "object_detection",
         "keypoint_detection",
         "semantic_segmentation",
-        "instance_segmentation",
         "text_classification",
         "token_classification",
         "tabular_classification",
@@ -289,8 +288,7 @@
               "image_classification",
               "object_detection",
               "keypoint_detection",
-              "semantic_segmentation",
-              "instance_segmentation"
+              "semantic_segmentation"
             ]
           }
         },
@@ -397,7 +395,6 @@
               "object_detection",
               "keypoint_detection",
               "semantic_segmentation",
-              "instance_segmentation",
               "text_classification",
               "token_classification",
               "tabular_classification"

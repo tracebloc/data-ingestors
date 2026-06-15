@@ -1,3 +1,10 @@
+# Runtime dependencies for the tracebloc_ingestor package.
+#
+# Dev / test / lint / release tooling lives in requirements-dev.txt so it is
+# NOT pulled into `pip install tracebloc_ingestor` or baked into the signed
+# Docker image. setup.py reads THIS file for install_requires (comment and
+# -r/-c lines are filtered out there).
+
 # Database
 sqlalchemy>=2.0.0
 mysql-connector-python>=8.0.0
@@ -9,37 +16,25 @@ urllib3
 # Retry mechanism
 tenacity>=8.0.1
 
-# Image processing (for image processor)
+# Image processing (image validators / file transfer)
 Pillow>=10.0.0
 
-# CSV/JSON handling
+# CSV / JSON handling
 pandas>=2.0.0
+# numpy is imported DIRECTLY by csv_ingestor / data_validator (not only via
+# pandas), so declare it explicitly instead of relying on it transitively.
+numpy>=1.23
 
-# Streaming JSON parser (used by JSONIngestor.read_data so multi-GB JSON
-# datasets ingest without materialising the whole file — backend/#772 P2).
+# Streaming JSON parser — JSONIngestor.read_data streams multi-GB JSON without
+# materialising the whole file (backend/#772 P2).
 ijson>=3.2.0
 
-# YAML config + JSON Schema validation (for the declarative ingest.yaml flow)
+# YAML config + JSON Schema validation (declarative ingest.yaml flow)
 PyYAML>=6.0
 jsonschema>=4.0.0
 
-# Logging and monitoring
+# Structured logging
 python-json-logger>=2.0.0
 
-# Type checking
-mypy>=1.0.0
-types-requests
-types-urllib3
-
-# Testing
-pytest>=7.0.0
-pytest-cov>=4.1.0
-
-# Development tools
-black>=23.0.0
-isort>=5.12.0
-flake8>=6.0.0
-twine
-
 # Progress bar
-tqdm>=4.65.0 
+tqdm>=4.65.0

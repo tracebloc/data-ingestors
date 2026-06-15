@@ -277,18 +277,23 @@ _TEMPLATES = sorted(Path(__file__).parent.parent.glob("templates/*/*.py"))
 
 @pytest.mark.parametrize("template", _TEMPLATES, ids=lambda p: p.parent.name)
 def test_template_exits_nonzero_on_failed_records(template):
-    """Each template's failed-records branch must end in sys.exit(1) —
-    BEFORE the else that logs "All records processed successfully" — so a
-    run with failures can't leave the K8s Job marked Succeeded."""
+    """Each template must route its run through the shared
+    ``run_ingestion`` helper, which owns the exit contract this test used
+    to pin per-template: log every failed record, ``sys.exit(1)`` on
+    failed records, re-raise hard errors. The eleven inlined copies of
+    that block drifted (five swallowed exceptions and exited 0 — #230),
+    so the duplication was extracted; the behavioral guarantees are now
+    covered directly in tests/test_template_runner.py and this check pins
+    the call-site instead of the inlined pattern."""
     src = template.read_text(encoding="utf-8")
-    assert re.search(r"^import sys$", src, re.M), f"{template} missing 'import sys'"
+    # Imported from the package root (not a local re-implementation) …
     m = re.search(
-        r"if failed_records:(?P<branch>.*?)\n\s*else:\s*\n\s*"
-        r"logger\.info\(\"All records processed successfully\"\)",
-        src,
-        re.S,
+        r"^from tracebloc_ingestor import \((?P<names>[^)]*)\)", src, re.M | re.S
     )
-    assert m, f"{template}: failed_records/else block not found"
-    assert "sys.exit(1)" in m.group("branch"), (
-        f"{template}: failed_records branch does not sys.exit(1)"
+    assert m and "run_ingestion" in m.group("names"), (
+        f"{template}: does not import run_ingestion from tracebloc_ingestor"
+    )
+    # … and actually called with the constructed ingestor.
+    assert re.search(r"run_ingestion\(\s*ingestor,", src), (
+        f"{template}: main() does not call run_ingestion(ingestor, ...)"
     )

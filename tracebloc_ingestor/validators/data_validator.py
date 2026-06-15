@@ -6,6 +6,7 @@ in the schema and provides clear errors when mismatches are found.
 """
 
 import csv as _csv
+import json
 import logging
 import re
 from pathlib import Path
@@ -17,12 +18,41 @@ import pandas as pd
 
 from .base import BaseValidator, ValidationResult
 from ..config import Config
+from ..utils import coercion
 from ..utils.logging import setup_logging
 
 config = Config()
 setup_logging(config)
 logger = logging.getLogger(__name__)
 logger.setLevel(config.LOG_LEVEL)
+
+
+def _looks_like_jsonl(path: Path, decode_exc: json.JSONDecodeError) -> bool:
+    """Heuristic: is this file newline-delimited JSON (JSONL) rather
+    than malformed JSON?
+
+    Triggers on the specific ``json.load`` error class that JSONL
+    produces ("Extra data" / "Trailing data" — there's a valid JSON
+    value followed by more content) AND requires the file's first
+    non-empty line to itself parse as JSON. The second check rules
+    out genuinely malformed input that happens to share the error
+    string.
+
+    Issue #261 secondary finding (N12).
+    """
+    if "Extra data" not in str(decode_exc) and "Trailing data" not in str(decode_exc):
+        return False
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                json.loads(line)
+                return True
+            return False
+    except (json.JSONDecodeError, OSError):
+        return False
 
 
 class DataValidator(BaseValidator):
@@ -181,7 +211,18 @@ class DataValidator(BaseValidator):
 
         try:
             reader = pd.read_csv(
-                path, chunksize=chunk_size, encoding="utf-8", on_bad_lines="error"
+                path,
+                chunksize=chunk_size,
+                encoding="utf-8",
+                on_bad_lines="error",
+                # Read NA exactly as CSVIngestor will (per-column: typed
+                # columns treat NA/null/None as missing, string/structural
+                # columns only ""). Without this the gate read with pandas'
+                # global default set and a non-tabular numeric column with an
+                # "NA" token passed validation, then crashed the ingestor's
+                # cast — the validate-pass -> ingest-crash of #237.
+                na_values=coercion.build_csv_na_values(self.schema),
+                keep_default_na=False,
             )
         except pd.errors.EmptyDataError:
             return self._create_result(
@@ -232,18 +273,65 @@ class DataValidator(BaseValidator):
                 suffix = path.suffix.lower()
                 if suffix == ".csv":
                     df = pd.read_csv(
-                        path, nrows=sample_size, encoding="utf-8", on_bad_lines="warn"
+                        path,
+                        nrows=sample_size,
+                        encoding="utf-8",
+                        on_bad_lines="warn",
+                        # Same per-column NA policy as the streaming path and
+                        # CSVIngestor, so a sampled validation agrees with the
+                        # full ingest read (#237).
+                        na_values=coercion.build_csv_na_values(self.schema),
+                        keep_default_na=False,
                     )
                     return df
                 elif suffix == ".json":
-                    # Mirror JSONIngestor.read_data: file is a top-level JSON
-                    # array of records. Without this branch DataValidator
-                    # returned None for every JSON input, the caller raised
-                    # "No data found to validate", and JSON ingestion was
-                    # impossible end-to-end — the recent per-record
-                    # null-tolerance fix (#170) lived behind an unreachable
-                    # gate.
-                    df = pd.read_json(path, orient="records").head(sample_size)
+                    # Mirror JSONIngestor.read_data, which accepts BOTH a
+                    # top-level array of records AND a top-level single dict
+                    # (one record). Its docstring is explicit: "handles both
+                    # single-object and array-of-objects formats", and the
+                    # implementation wraps a dict as `[data]` before iterating.
+                    # Read raw + normalise here so a single-dict JSON file
+                    # doesn't get rejected at the preflight gate with
+                    # "No data found to validate" while the ingestor itself
+                    # would have happily processed it — surfaced by #232.
+                    with open(path, "r", encoding="utf-8") as f:
+                        try:
+                            raw = json.load(f)
+                        except json.JSONDecodeError as exc:
+                            # JSONL (newline-delimited JSON) is a common
+                            # export format from log / event pipelines
+                            # and trips ``json.load`` with "Extra data" /
+                            # "Trailing data" — opaque to users who
+                            # didn't write json.load themselves. Detect
+                            # the JSONL shape and surface a clear fix
+                            # message. Issue #261 secondary finding (N12).
+                            if _looks_like_jsonl(path, exc):
+                                raise ValueError(
+                                    f"{path} looks like newline-delimited "
+                                    f"JSON (JSONL) — one JSON object per "
+                                    f"line. JSONL isn't supported as an "
+                                    f"input format; the ingestor expects "
+                                    f"a top-level JSON array of records or "
+                                    f"a single object. Combine the records "
+                                    f"into an array (wrap with ``[...]`` "
+                                    f"and join with ``,``) and re-ingest."
+                                ) from exc
+                            raise
+                    if isinstance(raw, dict):
+                        raw = [raw]
+                    # Mirror JSONIngestor._iter_validated_records, which skips
+                    # every non-dict element (`if not isinstance(record, dict)`).
+                    # A top-level scalar array like [1, 2, 3] or ["a", "b"]
+                    # would otherwise become a non-empty 1-column DataFrame via
+                    # pd.DataFrame(raw), so schema validation could pass while
+                    # the ingestor skips all rows and ingests nothing
+                    # (validate-pass → ingest-nothing). Drop non-dict items here
+                    # so the resulting frame matches what actually gets ingested;
+                    # an all-scalar array collapses to empty → "No data found to
+                    # validate" at the gate (bugbot #233).
+                    if isinstance(raw, list):
+                        raw = [item for item in raw if isinstance(item, dict)]
+                    df = pd.DataFrame(raw).head(sample_size)
                     # pd.read_json (unlike pd.read_csv with keep_default_na=True)
                     # preserves "" as the literal empty string. Normalise to NaN
                     # so per-type validators below treat "" identically to JSON
@@ -260,6 +348,14 @@ class DataValidator(BaseValidator):
                 logger.warning(f"Unsupported data type: {type(data)}")
                 return None
 
+        except ValueError:
+            # Surfaceable user-facing error (e.g. the JSONL detection
+            # raises ValueError with a clear fix message). Let it
+            # propagate to validate()'s except-Exception handler, which
+            # threads ``str(e)`` into the user-visible
+            # ``"Data type validation error: ..."`` result — don't
+            # swallow it into a "No data found to validate" generic.
+            raise
         except Exception as e:
             logger.error(f"Error loading data: {str(e)}")
             return None
@@ -539,6 +635,15 @@ class DataValidator(BaseValidator):
         non_finite = self._non_finite_error(series, numeric_series, column_name)
         if non_finite:
             errors.append(non_finite)
+
+        # Reject values beyond signed 64-bit range with the SAME check the
+        # ingestor runs, so preflight and ingest agree (#236). Without it a
+        # 26-digit value coerced to a finite, integer-valued float here and
+        # passed validation, then crashed the cast with a cryptic numpy /
+        # "Integer out of range" error.
+        overflow = coercion.int_range_error(series, column_name, expected_type)
+        if overflow:
+            errors.append(overflow)
 
         # Check for integer values among the parsed, finite, non-null numbers only
         # (NaN/inf would otherwise be miscounted as "non-integer" via NaN % 1).

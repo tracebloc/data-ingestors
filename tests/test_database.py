@@ -10,7 +10,18 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 import pytest
-from sqlalchemy import Integer, String, BigInteger, Column, Table
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    Column,
+    DateTime,
+    Float,
+    Integer,
+    Numeric,
+    String,
+    Table,
+)
+from sqlalchemy.dialects import mysql
 
 from tracebloc_ingestor import database as db_mod
 from tracebloc_ingestor.database import Database
@@ -86,6 +97,59 @@ def test_get_sqlalchemy_type_unsupported_raises(db):
         db._get_sqlalchemy_type("GEOMETRY")
 
 
+def test_get_sqlalchemy_type_typo_suggests_correction(db):
+    """A close-typo unknown type must surface a 'Did you mean X?' hint.
+
+    A new user typing ``BIGINTEGER`` (mixing up MySQL's ``BIGINT`` with
+    Python's ``int`` keyword) used to get a bare ``Unsupported MySQL
+    type: BIGINTEGER`` — correct but unhelpful. With the suggestion
+    layer the error guides them toward a related supported type and
+    lists the full vocabulary alongside, turning a 'wait, what's the
+    right spelling?' round-trip into a zero-thought fix. Surfaced by
+    adversarial new-user testing N3 (parent #261).
+
+    ``BIGINTEGER``'s nearest by Levenshtein distance is ``INTEGER``
+    (d=3 — drop the BIG prefix); ``BIGINT`` is d=4 (drop the EGER
+    suffix). Both are valid supported types, INTEGER wins by a single
+    edit. The full supported-types list (which the error also prints)
+    surfaces ``BIGINT`` for the user who actually wanted the 64-bit
+    range.
+    """
+    with pytest.raises(ValueError, match="Did you mean 'INTEGER'") as excinfo:
+        db._get_sqlalchemy_type("BIGINTEGER")
+    # The full supported-types listing must also be present so the user
+    # discovers BIGINT (the better fit by intent) even though the
+    # suggestion is INTEGER by edit distance.
+    assert "Supported types" in str(excinfo.value)
+    assert "BIGINT" in str(excinfo.value)
+
+
+def test_get_sqlalchemy_type_typo_no_suggestion_for_distant_input(db):
+    """A type name that's NOT close to any supported entry must NOT
+    misleadingly suggest one — ``GEOMETRY`` is a real MySQL type but
+    semantically unrelated to anything we map; suggesting ``DATETIME``
+    for it would be worse than no suggestion."""
+    with pytest.raises(ValueError, match="Unsupported MySQL type") as excinfo:
+        db._get_sqlalchemy_type("GEOMETRY")
+    assert "Did you mean" not in str(excinfo.value)
+
+
+@pytest.mark.parametrize("typo,suggestion", [
+    ("INTGER", "INTEGER"),
+    ("NUMRIC", "NUMERIC"),
+    ("BOLEAN", "BOOLEAN"),
+    ("VARCAHR", "VARCHAR"),
+])
+def test_get_sqlalchemy_type_typo_suggestions_cover_common_mistakes(
+    db, typo, suggestion
+):
+    """Several real-world typos a new user might make. Each is within
+    edit distance 2 of the suggested correction and far enough from
+    other candidates that the suggestion is unambiguous."""
+    with pytest.raises(ValueError, match=f"Did you mean '{suggestion}'"):
+        db._get_sqlalchemy_type(typo)
+
+
 def test_get_sqlalchemy_type_decimal_precision_scale(db):
     # Regression (#190 bugbot): DECIMAL(10,2) used to fail int("10,2") and
     # fall back to a bare Numeric() — declared precision and scale silently
@@ -102,6 +166,35 @@ def test_get_sqlalchemy_type_numeric_precision_scale(db):
     assert isinstance(result, db_mod.Numeric)
     assert result.precision == 8
     assert result.scale == 3
+
+
+def test_get_sqlalchemy_type_char_with_length(db):
+    """Regression: CHAR(N) was absent from `type_mapping`. The DataValidator
+    accepts CHAR(N) (see `_validate_char` in data_validator.py), so a user
+    could declare e.g. `code: CHAR(1)` in their schema, pass preflight, then
+    hit `ValueError: Unsupported MySQL type: CHAR(1)` at table creation —
+    the validator and DDL layers had divergent vocabularies. CHAR is a
+    valid MySQL type (fixed-width, padded), distinct from VARCHAR but same
+    SQLAlchemy semantics; add it to the mapping so the two layers agree.
+
+    Surfaced by an adversarial 'all-types' tabular schema run against
+    v0.3.10-rc1: a CSV declaring `code: CHAR(1)` failed at table creation
+    even though every column type the schema lists is documented as
+    supported.
+    """
+    result = db._get_sqlalchemy_type("CHAR(1)")
+    assert isinstance(result, db_mod.CHAR)
+    assert result.length == 1
+
+
+def test_get_sqlalchemy_type_char_bare(db):
+    """Bare ``CHAR`` (no length) is still valid SQL — MySQL defaults to
+    CHAR(1). Don't raise; map to the SQLAlchemy class so the column gets
+    created with the dialect default."""
+    result = db._get_sqlalchemy_type("CHAR")
+    # May be the class or an instance — either is acceptable as long as
+    # the dialect picks up the right default at DDL time.
+    assert isinstance(result, db_mod.CHAR) or result is db_mod.CHAR
 
 
 # ---------------------------------------------------------------------------
@@ -424,22 +517,82 @@ def test_insert_batch_rolls_back_between_transient_retries(db, mock_engine_facto
 # get_table_schema
 # ---------------------------------------------------------------------------
 
-def test_get_table_schema(db):
+def test_get_table_schema_reflected_dialect_types(db):
+    """Regression: ``inspector.get_columns()`` against a real MySQL returns
+    DIALECT type classes (INTEGER, FLOAT, DATETIME, ...), not the generic
+    SQLAlchemy ones (Integer, Float, ...). The old mapping was keyed by the
+    generic class names, so every non-VARCHAR column fell through to the
+    VARCHAR default — the backend was told INT/FLOAT/DATETIME columns were
+    VARCHAR. (VARCHAR columns only came out right because the fallback
+    happened to be VARCHAR.)"""
+    inspector = MagicMock()
+    inspector.get_columns.return_value = [
+        {"name": "id", "type": mysql.BIGINT(display_width=20)},
+        {"name": "f_int", "type": mysql.INTEGER()},
+        {"name": "f_float", "type": mysql.FLOAT()},
+        {"name": "f_double", "type": mysql.DOUBLE()},
+        {"name": "f_dec", "type": mysql.DECIMAL(precision=10, scale=2)},
+        {"name": "f_bool", "type": mysql.TINYINT(display_width=1)},  # BOOL
+        {"name": "f_tiny", "type": mysql.TINYINT(display_width=4)},
+        {"name": "f_vc", "type": mysql.VARCHAR(length=255)},
+        {"name": "f_text", "type": mysql.TEXT()},
+        {"name": "f_date", "type": mysql.DATE()},
+        {"name": "f_dt", "type": mysql.DATETIME()},
+        {"name": "f_ts", "type": mysql.TIMESTAMP()},
+        {"name": "f_time", "type": mysql.TIME()},
+        {"name": "f_blob", "type": mysql.LONGBLOB()},
+    ]
+    with patch.object(db_mod, "inspect", return_value=inspector):
+        schema = db.get_table_schema("tbl")
+    assert schema == {
+        "id": "BIGINT",
+        "f_int": "INT",
+        "f_float": "FLOAT",
+        "f_double": "DOUBLE",
+        "f_dec": "DECIMAL(10,2)",
+        "f_bool": "BOOLEAN",  # MySQL reflects BOOL as TINYINT(1)
+        "f_tiny": "TINYINT",
+        "f_vc": "VARCHAR(255)",
+        "f_text": "TEXT",
+        "f_date": "DATE",
+        "f_dt": "DATETIME",
+        "f_ts": "TIMESTAMP",
+        "f_time": "TIME",
+        "f_blob": "LONGBLOB",
+    }
+
+
+def test_get_table_schema_generic_types(db):
+    """Generic (in-process) SQLAlchemy types map to the same MySQL vocabulary
+    as their reflected dialect counterparts."""
     inspector = MagicMock()
     class Weird:  # unknown SQLAlchemy type, no 'length' attribute
         pass
 
     inspector.get_columns.return_value = [
         {"name": "id", "type": Integer()},
+        {"name": "big", "type": BigInteger()},
         {"name": "name", "type": String(255)},
+        {"name": "bare_str", "type": String()},  # no length declared
+        {"name": "ratio", "type": Float()},
+        {"name": "price", "type": Numeric(8, 3)},
+        {"name": "flag", "type": Boolean()},
+        {"name": "seen", "type": DateTime()},
         {"name": "weird", "type": Weird()},
     ]
     with patch.object(db_mod, "inspect", return_value=inspector):
         schema = db.get_table_schema("tbl")
     assert schema["id"] == "INT"
+    assert schema["big"] == "BIGINT"
     assert schema["name"] == "VARCHAR(255)"
-    # unknown SQLAlchemy type falls back to VARCHAR
-    assert schema["weird"] == "VARCHAR"
+    assert schema["bare_str"] == "VARCHAR"  # no "VARCHAR(None)"
+    assert schema["ratio"] == "FLOAT"
+    assert schema["price"] == "DECIMAL(8,3)"
+    assert schema["flag"] == "BOOLEAN"
+    assert schema["seen"] == "DATETIME"
+    # Unknown types pass through as their (upper-cased) class name instead of
+    # being mislabelled VARCHAR.
+    assert schema["weird"] == "WEIRD"
 
 
 def test_create_table_rejects_reserved_column():
