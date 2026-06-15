@@ -24,6 +24,9 @@ from tracebloc_ingestor.validators.keypoint_visibility_validator import (
     KeypointVisibilityValidator,
 )
 from tracebloc_ingestor.validators.tokenizer_validator import TokenizerValidator
+from tracebloc_ingestor.validators.label_diversity_validator import (
+    LabelDiversityValidator,
+)
 
 
 IMAGE_OPTS = {"extension": FileExtension.JPG, "target_size": [224, 224]}
@@ -38,9 +41,38 @@ def test_image_classification():
     assert _types(v) == [
         FileTypeValidator,
         ImageResolutionValidator,
+        LabelDiversityValidator,
         TableNameValidator,
         DuplicateValidator,
     ]
+
+
+def test_classification_categories_include_label_diversity():
+    """Single-label classification is caught at preflight across every
+    classification-family category — image/object/semantic/keypoint/
+    tabular/text — but NOT token_classification (its label is a per-token
+    BIO sequence, not a single class) or the regression / self-supervised
+    families (issue #251)."""
+    for cat in (
+        TaskCategory.IMAGE_CLASSIFICATION,
+        TaskCategory.OBJECT_DETECTION,
+        TaskCategory.SEMANTIC_SEGMENTATION,
+        TaskCategory.KEYPOINT_DETECTION,
+        TaskCategory.TABULAR_CLASSIFICATION,
+        TaskCategory.TEXT_CLASSIFICATION,
+    ):
+        assert LabelDiversityValidator in _types(map_validators(cat, IMAGE_OPTS)), cat
+
+    for cat in (
+        TaskCategory.TOKEN_CLASSIFICATION,
+        TaskCategory.TABULAR_REGRESSION,
+        TaskCategory.TIME_SERIES_FORECASTING,
+        TaskCategory.TIME_TO_EVENT_PREDICTION,
+        TaskCategory.MASKED_LANGUAGE_MODELING,
+    ):
+        assert LabelDiversityValidator not in _types(
+            map_validators(cat, {"schema": {"a": "INT"}})
+        ), cat
 
 
 def test_object_detection_includes_xml_validator():

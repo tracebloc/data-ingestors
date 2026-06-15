@@ -139,38 +139,45 @@ class LabelDiversityValidator(BaseValidator):
     def _load_data(self, data: Any) -> Optional[pd.DataFrame]:
         """Load just the label column from CSV (memory-efficient) or pass
         through a DataFrame as-is. Mirrors DataValidator's loader shape but
-        only reads the one column it needs."""
-        try:
-            if isinstance(data, pd.DataFrame):
-                return data
-            if isinstance(data, (str, Path)):
-                path = Path(data)
-                if not path.exists():
+        only reads the one column it needs.
+
+        Read errors are deliberately NOT swallowed — they propagate to
+        ``validate``'s handler, which fails the check. A CSV that can't be
+        read must not silently skip the single-label gate this validator
+        exists to enforce (bugbot #252, high severity). Only the genuinely
+        not-applicable cases — missing file, unsupported suffix, label
+        column absent — return ``None``, which ``validate`` treats as a
+        benign skip that sibling validators surface.
+        """
+        if isinstance(data, pd.DataFrame):
+            return data
+        if isinstance(data, (str, Path)):
+            path = Path(data)
+            if not path.exists():
+                return None
+            if path.suffix.lower() == ".csv":
+                # Resolve the label column against pandas' OWN header
+                # parsing (nrows=0 reads only the header row, cheaply),
+                # not a naive ``split(",")``. The old hand-rolled split
+                # diverged from pandas on quoted headers / alternate
+                # delimiters: it could (a) miss a column pandas does
+                # expose, then fall back to a 1-row read and miscount
+                # distinct labels — rejecting a diverse dataset (bugbot
+                # #252, medium) — or (b) build a ``usecols`` spelling
+                # pandas then rejected, erroring the read.
+                header_df = pd.read_csv(path, nrows=0, encoding="utf-8")
+                actual = self._resolve_column(header_df, self.label_column)
+                if actual is None:
+                    # Label column genuinely absent — benign skip; the
+                    # ingestor / DataValidator report the missing column.
                     return None
-                if path.suffix.lower() == ".csv":
-                    # Load only the label column — for a 50-feature wide
-                    # CSV (or a multi-GB proteomics panel) we don't need
-                    # the other columns to count distinct labels. usecols
-                    # is resolved case-insensitively against the actual
-                    # header by reading the header row first.
-                    with open(path, "r", encoding="utf-8") as fh:
-                        header_line = fh.readline().rstrip("\n\r")
-                    headers = [h.strip() for h in header_line.split(",")]
-                    actual = next(
-                        (h for h in headers if h.lower() == self.label_column.lower()),
-                        None,
-                    )
-                    if actual is None:
-                        return pd.read_csv(path, nrows=1, encoding="utf-8")
-                    return pd.read_csv(
-                        path, usecols=[actual], encoding="utf-8"
-                    )
-                if path.suffix.lower() == ".json":
-                    return pd.read_json(path, orient="records")
-            return None
-        except Exception as e:
-            logger.error(f"Error loading data for label-diversity check: {e}")
-            return None
+                # Load only the label column — for a 50-feature wide CSV
+                # (or a multi-GB proteomics panel) we don't need the rest
+                # to count distinct labels.
+                return pd.read_csv(path, usecols=[actual], encoding="utf-8")
+            if path.suffix.lower() == ".json":
+                return pd.read_json(path, orient="records")
+        return None
 
     @staticmethod
     def _resolve_column(df: pd.DataFrame, name: str) -> Optional[str]:

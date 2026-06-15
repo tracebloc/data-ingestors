@@ -146,6 +146,57 @@ def test_csv_path_rejects_single_label(tmp_path):
     assert "'X'" in result.errors[0] or "'X'" in str(result.metadata.get("value_counts", {}))
 
 
+def test_csv_quoted_header_does_not_skew_multilabel(tmp_path):
+    """A quoted/comma-bearing header must not trip the column resolution.
+
+    Regression (bugbot #252, medium): the old loader resolved the label
+    column with a naive ``header_line.split(",")``, which splits inside
+    quoted headers and diverges from pandas. When it failed to find the
+    column it fell back to ``nrows=1`` and counted distinct labels on that
+    single row — rejecting a perfectly diverse dataset. Resolving against
+    pandas' own header parse (nrows=0) fixes it, so a header like
+    ``"feature,with,commas"`` alongside ``label`` reads the full column.
+    """
+    p = tmp_path / "quoted.csv"
+    # The first column's header literally contains commas (quoted).
+    p.write_text(
+        '"feature,with,commas",label\n'
+        + "\n".join(f"{i},{'A' if i % 2 else 'B'}" for i in range(20))
+        + "\n"
+    )
+    result = LabelDiversityValidator().validate(str(p))
+    assert result.is_valid, f"expected valid; errors={result.errors}"
+    assert result.metadata["distinct_count"] == 2
+
+
+def test_csv_read_error_fails_closed_not_skipped(tmp_path, monkeypatch):
+    """A read failure must FAIL the check, not silently pass.
+
+    Regression (bugbot #252, high): ``_load_data`` previously swallowed any
+    read exception and returned ``None``, which ``validate`` treats as an
+    empty/benign dataset → valid. A single-label CSV whose targeted read
+    errored could sail through preflight and hit the backend rejection this
+    validator exists to prevent. Read errors now propagate to ``validate``'s
+    handler and fail the check.
+    """
+    p = tmp_path / "boom.csv"
+    p.write_text("id,label\n1,X\n2,X\n")
+
+    real_read_csv = pd.read_csv
+
+    def _boom(path, *args, **kwargs):
+        # Let the cheap header probe (nrows=0) succeed, then blow up on the
+        # actual data read — mimics a usecols/encoding failure mid-load.
+        if kwargs.get("nrows") == 0:
+            return real_read_csv(path, *args, **kwargs)
+        raise ValueError("simulated CSV read failure")
+
+    monkeypatch.setattr(pd, "read_csv", _boom)
+    result = LabelDiversityValidator().validate(str(p))
+    assert not result.is_valid
+    assert "validation error" in result.errors[0].lower()
+
+
 # ---------------------------------------------------------------------------
 # Custom column name
 # ---------------------------------------------------------------------------
