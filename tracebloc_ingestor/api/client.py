@@ -41,6 +41,13 @@ class APIClient:
         self.config = config
         self.session = self._create_session()
 
+        # Last `prepare_dataset` HTTP-error body, retained so callers
+        # can include the actual backend reason in the user-visible
+        # RuntimeError instead of just pointing at "the logged API
+        # error above" (issue #251). Set by `prepare_dataset`'s error
+        # handler; remains None on a clean run.
+        self.last_prepare_error: Optional[str] = None
+
         # Auth resolution order:
         #   1. local mode  → mock token, no network call
         #   2. BACKEND_TOKEN set → use it directly (preferred; mirrors the
@@ -454,8 +461,18 @@ class APIClient:
                     f"{RED}Error preparing data: "
                     f"HTTP {e.response.status_code}: {body}{RESET}"
                 )
+                # Stash the backend's response so callers can surface the
+                # actual reason (e.g. "Please provide atleast 2 labels.")
+                # in the user-visible error — instead of pointing at "the
+                # logged API error above" which the user has to grep for.
+                # Issue #251: misleading "Backend failed to prepare the
+                # dataset" message that buried a clear backend reason.
+                self.last_prepare_error = (
+                    f"HTTP {e.response.status_code}: {body}"
+                )
             else:
                 logger.error(f"{RED}Error preparing data: {str(e)[:500]}{RESET}")
+                self.last_prepare_error = str(e)[:500]
             return False
 
     def create_dataset(

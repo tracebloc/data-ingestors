@@ -966,10 +966,20 @@ class BaseIngestor(ABC):
                     self.data_format,
                     self.intent,
                 ):
+                    # Surface the BACKEND'S actual reason in the user-visible
+                    # error — not just "see the logged API error above" which
+                    # forces the user to grep the log for the real cause.
+                    # Issue #251: a misleading "Backend failed to prepare the
+                    # dataset" message buried the real reason (e.g. "Please
+                    # provide atleast 2 labels.") in a preceding ERROR line.
+                    detail = (
+                        getattr(self.api_client, "last_prepare_error", None)
+                        or "see the logged API error above"
+                    )
                     raise RuntimeError(
-                        "Backend failed to prepare the dataset; it was NOT "
-                        "registered (its rows are already in the database). See "
-                        "the logged API error above."
+                        f"Backend failed to prepare the dataset; it was NOT "
+                        f"registered (its rows are already in the database). "
+                        f"Backend response: {detail}"
                     )
 
                 self.api_client.create_dataset(
