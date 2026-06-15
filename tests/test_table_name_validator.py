@@ -35,7 +35,6 @@ def test_missing_table_name_fails(clean_env, validator):
         "my-table",       # hyphen
         "my table",       # space
         "table$",         # symbol
-        "_leading",       # underscore start (pattern requires a letter)
     ],
 )
 def test_invalid_characters_fail(clean_env, validator, bad_name):
@@ -44,6 +43,17 @@ def test_invalid_characters_fail(clean_env, validator, bad_name):
     assert not result.is_valid
     assert any("invalid characters" in e for e in result.errors)
     assert result.metadata["invalid_names"]
+
+
+@pytest.mark.parametrize("name", ["_tmp", "_leading", "_"])
+def test_leading_underscore_is_valid(clean_env, validator, name):
+    # The regex used to forbid a leading underscore while the error message +
+    # `valid_pattern` metadata both said it was allowed (#238). MySQL permits a
+    # leading underscore, so such names are now accepted — matching what the
+    # validator already advertised.
+    clean_env.setenv("TABLE_NAME", name)
+    result = validator.validate(None)
+    assert result.is_valid, result.errors
 
 
 def test_reserved_keyword_warns_but_passes(clean_env, validator):

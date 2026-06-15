@@ -42,6 +42,24 @@ def test_read_data_missing_file_raises():
         list(ing.read_data("/no/such/file.csv"))
 
 
+@pytest.mark.parametrize(
+    "sep,needle",
+    [(";", "semicolon"), ("\t", "tab"), ("|", "pipe")],
+)
+def test_wrong_delimiter_hints_at_delimiter(tmp_path, sep, needle):
+    # A ;/tab/pipe-delimited file read as CSV parses as a single column; the
+    # error should hint at the real delimiter instead of the misleading
+    # "every column missing" (#238).
+    p = tmp_path / "f.csv"
+    p.write_text(f"a{sep}b{sep}label\n1{sep}2{sep}x\n")
+    ing = make_csv_ingestor(
+        schema={"a": "INT", "b": "INT", "label": "VARCHAR(10)"},
+        category=TaskCategory.TABULAR_CLASSIFICATION,
+    )
+    with pytest.raises(ValueError, match=needle):
+        list(ing.read_data(str(p)))
+
+
 def test_read_data_strips_column_whitespace(tmp_path):
     p = tmp_path / "d.csv"
     p.write_text(" a , b \n1,2\n")

@@ -37,9 +37,14 @@ class TableNameValidator(BaseValidator):
             name: Human-readable name of the validator
         """
         super().__init__(name)
-        # Pattern: only alphanumeric characters and underscores
-        # Must start with a letter
-        self.pattern = re.compile(r"^[a-zA-Z][a-zA-Z0-9_]*$")
+        # Pattern: only alphanumeric characters and underscores; must start
+        # with a letter or underscore. The compiled regex used to forbid a
+        # leading underscore while the error message AND the advertised
+        # `valid_pattern` metadata both said it was allowed — so a name like
+        # `_tmp` was rejected with a message claiming it was valid (#238).
+        # MySQL identifiers may begin with an underscore, so the regex is
+        # relaxed to agree with the (already-correct) message/metadata.
+        self.pattern = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 
     def validate(self, data: Any, **kwargs) -> ValidationResult:
         """Validate table names from config.
