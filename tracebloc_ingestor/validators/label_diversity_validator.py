@@ -220,17 +220,30 @@ class LabelDiversityValidator(BaseValidator):
         return kwargs
 
     def _schema_type_for(self, actual: str) -> Optional[str]:
-        """Case-insensitive lookup of the label column's declared SQL type,
-        or ``None`` when the label isn't a schema column."""
+        """Look up the label column's declared SQL type, or ``None`` when the
+        label isn't a schema column. Matched case- AND whitespace-insensitively
+        so a CSV header like ``" label "`` (which CSVIngestor strips to
+        ``label`` on read) still finds its schema entry (bugbot #252)."""
         if actual in self.schema:
             return self.schema[actual]
-        lowered = {k.lower(): v for k, v in self.schema.items()}
-        return lowered.get(actual.lower())
+        target = str(actual).strip().lower()
+        normalised = {str(k).strip().lower(): v for k, v in self.schema.items()}
+        return normalised.get(target)
 
     @staticmethod
     def _resolve_column(df: pd.DataFrame, name: str) -> Optional[str]:
-        """Return the actual column name matching ``name`` case-insensitively."""
+        """Return the actual column name matching ``name`` case- AND
+        whitespace-insensitively.
+
+        CSVIngestor strips column-name whitespace on read
+        (``chunk.columns.str.strip()``), so a header like ``" label "`` is
+        ingested as ``label``. Resolving against the raw header without the
+        same strip treated the column as missing, skipped the diversity check
+        with a warning, and let a single-class CSV pass preflight (bugbot
+        #252). Match the strip here so the gate sees the same column the
+        ingestor does."""
         if name in df.columns:
             return name
-        lowered = {c.lower(): c for c in df.columns}
-        return lowered.get(name.lower())
+        target = str(name).strip().lower()
+        normalised = {str(c).strip().lower(): c for c in df.columns}
+        return normalised.get(target)

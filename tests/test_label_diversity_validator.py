@@ -146,6 +146,37 @@ def test_csv_path_rejects_single_label(tmp_path):
     assert "'X'" in result.errors[0] or "'X'" in str(result.metadata.get("value_counts", {}))
 
 
+def test_csv_whitespace_header_still_checked(tmp_path):
+    """A label header with surrounding whitespace (" label ") must still be
+    found and checked, not skipped.
+
+    Regression (bugbot #252): CSVIngestor strips column-name whitespace on
+    read, so " label " is ingested as `label`. The validator resolved against
+    the raw header, treated the column as missing, skipped the diversity check
+    with a warning, and a single-class CSV sailed through preflight to fail at
+    backend prepare. _resolve_column now strips, matching the ingestor.
+    """
+    p = tmp_path / "ws_header.csv"
+    p.write_text("id, label \n1,X\n2,X\n3,X\n")
+    result = LabelDiversityValidator().validate(str(p))
+    assert not result.is_valid
+    assert "1 distinct" in result.errors[0]
+
+
+def test_csv_whitespace_header_schema_na_rules_apply(tmp_path):
+    """A whitespace label header that IS a schema column must still get the
+    schema NA rules — " label " strips to `label`, matches the schema entry,
+    so "null" reads as missing and a single-class dataset is flagged
+    (bugbot #252)."""
+    p = tmp_path / "ws_schema.csv"
+    p.write_text("id, label \n1,X\n2,null\n3,X\n")
+    result = LabelDiversityValidator(
+        label_column="label", schema={"id": "INT", "label": "VARCHAR(8)"}
+    ).validate(str(p))
+    assert not result.is_valid
+    assert "1 distinct" in result.errors[0]
+
+
 def test_csv_quoted_header_does_not_skew_multilabel(tmp_path):
     """A quoted/comma-bearing header must not trip the column resolution.
 
