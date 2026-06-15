@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Dict
 
-from ..utils.constants import TaskCategory
+from ..utils.constants import DataFormat, TaskCategory
 from . import transfer as t
 from . import validators as v
 from .spec import ModalitySpec
@@ -20,7 +20,8 @@ from .spec import ModalitySpec
 # One entry per supported category — the single source of truth. P3a: the three
 # behavior flags (was three frozensets in ingestors/base.py). P3b: the
 # validator factory (was the map_validators if/elif arm). P3c: the sidecar
-# transfer factory (was the map_file_transfer if/elif arm).
+# transfer factory (was the map_file_transfer if/elif arm). P3d: data_format
+# (was the 6-frozenset ladder in conventions._data_format_for).
 _SPECS = (
     # File-bearing categories (per-row sidecar files under SRC_PATH).
     ModalitySpec(
@@ -28,6 +29,7 @@ _SPECS = (
         is_file_bearing=True,
         is_tabular_family=False,
         is_self_supervised=False,
+        data_format=DataFormat.IMAGE,
         build_validators=v.image_classification,
         transfer=t.image_classification,
     ),
@@ -36,6 +38,7 @@ _SPECS = (
         is_file_bearing=True,
         is_tabular_family=False,
         is_self_supervised=False,
+        data_format=DataFormat.IMAGE,
         build_validators=v.object_detection,
         transfer=t.object_detection,
     ),
@@ -44,6 +47,7 @@ _SPECS = (
         is_file_bearing=True,
         is_tabular_family=False,
         is_self_supervised=False,
+        data_format=DataFormat.IMAGE,
         build_validators=v.keypoint_detection,
         transfer=t.keypoint_detection,
     ),
@@ -52,6 +56,7 @@ _SPECS = (
         is_file_bearing=True,
         is_tabular_family=False,
         is_self_supervised=False,
+        data_format=DataFormat.IMAGE,
         build_validators=v.semantic_segmentation,
         transfer=t.semantic_segmentation,
     ),
@@ -60,6 +65,7 @@ _SPECS = (
         is_file_bearing=True,
         is_tabular_family=False,
         is_self_supervised=False,
+        data_format=DataFormat.TEXT,
         build_validators=v.text_classification,
         transfer=t.text_classification,
     ),
@@ -68,6 +74,7 @@ _SPECS = (
         is_file_bearing=True,
         is_tabular_family=False,
         is_self_supervised=False,
+        data_format=DataFormat.TEXT,
         build_validators=v.token_classification,
         transfer=t.token_classification,
     ),
@@ -77,6 +84,7 @@ _SPECS = (
         is_file_bearing=True,
         is_tabular_family=False,
         is_self_supervised=True,
+        data_format=DataFormat.TEXT,
         build_validators=v.masked_language_modeling,
         transfer=t.masked_language_modeling,
     ),
@@ -86,6 +94,7 @@ _SPECS = (
         is_file_bearing=False,
         is_tabular_family=True,
         is_self_supervised=False,
+        data_format=DataFormat.TABULAR,
         build_validators=v.tabular_classification,
     ),
     ModalitySpec(
@@ -93,6 +102,7 @@ _SPECS = (
         is_file_bearing=False,
         is_tabular_family=True,
         is_self_supervised=False,
+        data_format=DataFormat.TABULAR,
         build_validators=v.tabular_regression,
     ),
     ModalitySpec(
@@ -100,6 +110,7 @@ _SPECS = (
         is_file_bearing=False,
         is_tabular_family=True,
         is_self_supervised=False,
+        data_format=DataFormat.TABULAR,
         build_validators=v.time_series_forecasting,
     ),
     ModalitySpec(
@@ -107,6 +118,7 @@ _SPECS = (
         is_file_bearing=False,
         is_tabular_family=True,
         is_self_supervised=False,
+        data_format=DataFormat.TABULAR,
         build_validators=v.time_to_event_prediction,
     ),
 )

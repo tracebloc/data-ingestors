@@ -85,3 +85,24 @@ def test_base_py_imports_the_registry_derived_sets():
     assert base._FILE_BEARING_CATEGORIES is registry.FILE_BEARING_CATEGORIES
     assert base._TABULAR_FAMILY_CATEGORIES is registry.TABULAR_FAMILY_CATEGORIES
     assert base._SELF_SUPERVISED_CATEGORIES is registry.SELF_SUPERVISED_CATEGORIES
+
+
+def test_data_format_valid_and_matches_conventions():
+    """Every spec carries a valid DataFormat (P3d), and conventions'
+    _data_format_for reads it from the registry (single source)."""
+    from tracebloc_ingestor.cli.conventions import _data_format_for
+    from tracebloc_ingestor.utils.constants import DataFormat
+
+    valid = set(DataFormat.get_all_formats())
+    for category, spec in REGISTRY.items():
+        assert (
+            spec.data_format in valid
+        ), f"{category}: bad data_format {spec.data_format!r}"
+        assert _data_format_for(category) == spec.data_format
+
+
+def test_transfer_present_iff_file_bearing():
+    """The sidecar transfer factory is set exactly for file-bearing categories
+    (P3c invariant)."""
+    for category, spec in REGISTRY.items():
+        assert spec.is_file_bearing == (spec.transfer is not None)

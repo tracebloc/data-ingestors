@@ -34,6 +34,9 @@ class ModalitySpec:
 
     Attributes:
         category: the ``TaskCategory`` value this spec describes.
+        data_format: the ``DataFormat`` the framework expects for this category
+            (P3d). Read by ``conventions._data_format_for`` (was a 6-frozenset
+            ladder there).
         build_validators: ``(file_options) -> [validators]`` — the validator
             set this category runs (P3b). Replaces the corresponding
             ``map_validators`` if/elif arm; the factory bodies live in
@@ -61,6 +64,7 @@ class ModalitySpec:
     is_file_bearing: bool
     is_tabular_family: bool
     is_self_supervised: bool
+    data_format: str
     build_validators: Callable[[Dict[str, Any]], List]
     transfer: Optional[
         Callable[[Dict[str, Any], Dict[str, Any]], Optional[Dict[str, Any]]]
