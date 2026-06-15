@@ -677,7 +677,21 @@ class BaseIngestor(ABC):
         # mutating file_options / metadata) so label-aware validators like
         # BIOLabelValidator check the right column when a custom name is used.
         validators = map_validators(
-            self.category, {**self.file_options, "label_column": self.label_column}
+            self.category,
+            {
+                **self.file_options,
+                "label_column": self.label_column,
+                # file_options["schema"] has the label/annotation/id columns
+                # stripped (they're framework columns, not table columns), but
+                # CSVIngestor reads the file with NA/dtype rules from the FULL
+                # schema — so the label column DOES get NA-sentinel treatment at
+                # ingest. Pass the full schema so LabelDiversityValidator counts
+                # distinct labels the same way the data is actually ingested,
+                # rather than letting "null"/"NA" inflate the distinct count and
+                # sneak an effectively single-class dataset past the gate
+                # (bugbot #252).
+                "full_schema": self.schema,
+            },
         )
         logger.info(f"Running {len(validators)} validator(s) on data source")
         all_valid = True

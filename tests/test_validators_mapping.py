@@ -75,6 +75,30 @@ def test_classification_categories_include_label_diversity():
         ), cat
 
 
+def test_label_diversity_uses_full_schema_for_label_type():
+    """base.py strips the label column out of file_options["schema"] (it's a
+    framework column, not a table column) but passes the UNSTRIPPED schema as
+    `full_schema`. The label-diversity validator must read the label's type
+    from `full_schema`, else it never applies the ingestor's NA/dtype rules to
+    the label column (bugbot #252)."""
+    ldv = next(
+        v
+        for v in map_validators(
+            TaskCategory.TABULAR_CLASSIFICATION,
+            {
+                # file_options["schema"] — label already stripped by base.py.
+                "schema": {"age": "INT"},
+                "label_column": "churned",
+                # full, unstripped schema base.py also passes.
+                "full_schema": {"age": "INT", "churned": "VARCHAR(8)"},
+            },
+        )
+        if isinstance(v, LabelDiversityValidator)
+    )
+    # The validator must see the label column's type via the full schema.
+    assert ldv._schema_type_for("churned") == "VARCHAR(8)"
+
+
 def test_object_detection_includes_xml_validator():
     v = map_validators(TaskCategory.OBJECT_DETECTION, IMAGE_OPTS)
     types = _types(v)

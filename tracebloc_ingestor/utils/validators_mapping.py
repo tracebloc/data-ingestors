@@ -45,11 +45,14 @@ def _label_diversity_validator(options: Dict[str, Any]) -> LabelDiversityValidat
     """
     return LabelDiversityValidator(
         label_column=options.get("label_column") or "label",
-        # Pass the schema so the label column is read with the SAME NA /
-        # dtype rules CSVIngestor and DataValidator use — otherwise the
-        # distinct-label count can disagree with what's actually ingested
-        # (bugbot #252).
-        schema=options.get("schema"),
+        # Read the label column with the SAME NA / dtype rules CSVIngestor
+        # uses, or the distinct-label count disagrees with what's actually
+        # ingested (bugbot #252). Prefer ``full_schema`` (base.py passes the
+        # UNSTRIPPED schema here): ``schema``/``file_options["schema"]`` has
+        # the label column removed, so it can't carry the label's type — the
+        # very column this validator reads. Fall back to ``schema`` for
+        # direct callers / tests that pass an unstripped map.
+        schema=options.get("full_schema") or options.get("schema"),
     )
 
 
