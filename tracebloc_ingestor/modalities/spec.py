@@ -25,7 +25,7 @@ So the spec is intentionally small here and grows over P3b–P3d.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, List, Optional
 
 
 @dataclass(frozen=True)
@@ -38,6 +38,12 @@ class ModalitySpec:
             set this category runs (P3b). Replaces the corresponding
             ``map_validators`` if/elif arm; the factory bodies live in
             ``modalities/validators.py``.
+        transfer: ``(record, file_options) -> record | None`` — stages this
+            category's per-row sidecar file(s); ``None`` for non-file-bearing
+            (tabular / time-series) categories (P3c). Replaces the
+            ``map_file_transfer`` if/elif arm; bodies in
+            ``modalities/transfer.py``. Invariant: ``transfer is not None``
+            iff ``is_file_bearing`` (pinned by tests).
         is_file_bearing: every record references sidecar files (images,
             annotations, masks, texts, sequences) under ``SRC_PATH`` that must
             be copied to ``DEST_PATH``. Drives both the SRC_PATH preflight and
@@ -56,3 +62,6 @@ class ModalitySpec:
     is_tabular_family: bool
     is_self_supervised: bool
     build_validators: Callable[[Dict[str, Any]], List]
+    transfer: Optional[
+        Callable[[Dict[str, Any], Dict[str, Any]], Optional[Dict[str, Any]]]
+    ] = None

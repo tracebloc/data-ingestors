@@ -23,20 +23,18 @@ The enum ↔ ``TaskCategory`` equality itself is pinned separately by
 
 from __future__ import annotations
 
-import inspect
 import json
-import re
 from pathlib import Path
 
 import pytest
 
-from tracebloc_ingestor import file_transfer
 from tracebloc_ingestor.cli.conventions import (
     DEFAULT_IMAGE_FILE_OPTIONS_BY_CATEGORY,
     IMAGE_CATEGORIES,
     _data_format_for,
 )
 from tracebloc_ingestor.ingestors.base import _FILE_BEARING_CATEGORIES
+from tracebloc_ingestor.modalities import spec_for
 from tracebloc_ingestor.utils.constants import DataFormat, TaskCategory
 from tracebloc_ingestor.utils.validators_mapping import map_validators
 
@@ -103,29 +101,23 @@ def test_file_bearing_categories_match_file_transfer_gate():
     )
 
 
-def test_every_file_bearing_category_has_file_transfer_branch():
-    """Site 4: ``map_file_transfer`` falls through to ``None`` for
-    categories it doesn't know; the ingest loop counts that as a
-    file-transfer failure for EVERY record. Inspect the dispatch source
-    for an explicit ``TaskCategory.X`` branch per file-bearing category.
-
-    (Source inspection because calling the real branches touches the
-    filesystem, and the unwired fall-through returns the same ``None`` as
-    a wired branch handling a missing file — behaviorally ambiguous. If
-    map_file_transfer is ever refactored away from explicit TaskCategory
-    comparisons, update this test alongside it.)
-    """
-    source = inspect.getsource(file_transfer.map_file_transfer)
-    mentioned_names = set(re.findall(r"TaskCategory\.([A-Z_][A-Z0-9_]*)", source))
-    mentioned = {getattr(TaskCategory, name) for name in mentioned_names}
-
-    missing = {c for c in SCHEMA_CATEGORIES if _file_bearing(c)} - mentioned
-    assert not missing, (
-        f"map_file_transfer has no branch for file-bearing categories "
-        f"{sorted(missing)} — every record would be dropped as a "
-        f"file-transfer failure. Add a branch in file_transfer.py or "
-        f"remove the category from the schema enum."
-    )
+def test_every_file_bearing_category_has_transfer():
+    """Site 4 (post-P3c): ``map_file_transfer`` is now a registry lookup —
+    a file-bearing category must carry a ``transfer`` factory on its spec, or
+    the lookup returns ``None`` and the ingest loop drops EVERY record as a
+    file-transfer failure. The invariant is now structural, not a
+    source-inspection: ``is_file_bearing`` iff ``transfer is not None``."""
+    for category in SCHEMA_CATEGORIES:
+        spec = spec_for(category)
+        assert spec.is_file_bearing == (spec.transfer is not None), (
+            f"{category}: is_file_bearing={spec.is_file_bearing} but transfer is "
+            f"{'set' if spec.transfer else 'None'} — these must agree."
+        )
+        if _file_bearing(category):
+            assert spec.transfer is not None, (
+                f"file-bearing category {category} has no transfer factory; "
+                f"map_file_transfer would drop every record."
+            )
 
 
 def test_every_image_category_has_file_options_defaults():
