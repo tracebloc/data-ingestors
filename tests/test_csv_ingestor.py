@@ -96,11 +96,24 @@ def test_read_data_unique_id_column_missing_raises(make_csv):
         list(ing.read_data(str(path)))
 
 
-def test_read_data_empty_file_returns_nothing(tmp_path):
+def test_read_data_empty_file_raises_with_clear_message(tmp_path):
+    """An empty (zero-byte) CSV is a hard input error, not a successful
+    '0 rows' run. The old code logged a WARNING and silently returned an
+    empty generator — the ingestor then created an empty MySQL table and
+    called `send_generate_edge_label_meta`, which 400'd with the misleading
+    'No data found for table X' message (same cascade #213 traced for
+    self-supervised + label mismatch). The user blamed the backend.
+
+    Fail fast at the read layer with a clear, source-truthful message
+    naming the path and pointing at staging as the likely cause —
+    DataValidator's existing 'No data found to validate' path catches it
+    before any backend round-trip.
+    """
     p = tmp_path / "empty.csv"
     p.write_text("")
     ing = make_csv_ingestor(schema={})
-    assert list(ing.read_data(str(p))) == []
+    with pytest.raises(ValueError, match="Empty CSV file"):
+        list(ing.read_data(str(p)))
 
 
 def test_validate_csv_type_coercion():
