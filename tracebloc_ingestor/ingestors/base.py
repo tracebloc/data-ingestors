@@ -247,8 +247,15 @@ class BaseIngestor(ABC):
             if self.category in _TABULAR_FAMILY_CATEGORIES:
                 self.file_options["number_of_columns"] = len(table_schema)
 
-        # Ensure table exists
-        self.table = self.database.create_table(table_name, table_schema)
+        # Defer table creation until after ``validate_data()`` passes so a
+        # validator-rejected ingest leaves no orphaned table behind (#260).
+        # Creating it in ``__init__`` meant a rejected ingest left a stale
+        # empty table that the next retry's stale-table guard tripped on,
+        # forcing the user to manually DROP before re-running. Stash the
+        # cleaned schema; ``_ingest_with_lock`` creates the table once
+        # validation succeeds.
+        self.table = None
+        self._table_schema = table_schema
 
     def _map_unique_id(
         self, record: Dict[str, Any], cleaned_record: Dict[str, Any]
@@ -817,6 +824,15 @@ class BaseIngestor(ABC):
             raise e
         except Exception as e:
             raise e
+
+        # Create the destination table now that validation has accepted the
+        # input (#260). Deferring to here ensures a validator-rejected ingest
+        # leaves no orphaned empty table behind that the next retry's
+        # stale-table guard would trip on.
+        if self.table is None:
+            self.table = self.database.create_table(
+                self.table_name, self._table_schema
+            )
 
         batch = []
         failed_records = []
