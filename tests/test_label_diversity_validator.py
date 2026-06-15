@@ -197,6 +197,46 @@ def test_csv_read_error_fails_closed_not_skipped(tmp_path, monkeypatch):
     assert "validation error" in result.errors[0].lower()
 
 
+def test_schema_label_sentinel_tokens_count_as_missing(tmp_path):
+    """When the label IS a schema column, NA sentinels ("null", "NA", …) must
+    be read as missing — matching CSVIngestor/DataValidator — so a CSV whose
+    only real class is "X" plus sentinel rows is correctly flagged
+    single-label (bugbot #252)."""
+    p = tmp_path / "schema_label.csv"
+    p.write_text("id,label\n1,X\n2,null\n3,NA\n4,X\n")
+    result = LabelDiversityValidator(
+        label_column="label", schema={"id": "INT", "label": "VARCHAR(8)"}
+    ).validate(str(p))
+    assert not result.is_valid
+    assert "1 distinct" in result.errors[0]
+
+
+def test_non_schema_label_keeps_sentinel_as_real_class(tmp_path):
+    """When the label is NOT a schema column (image/text classification),
+    the ingestor keeps "NA"/"null" as literal class values — so the validator
+    must too, or it would miss / mis-count classes (bugbot #252). Here "X"
+    and "NA" are two genuine classes; the dataset must pass."""
+    p = tmp_path / "non_schema_label.csv"
+    p.write_text("filename,label\na.jpg,X\nb.jpg,NA\nc.jpg,X\nd.jpg,NA\n")
+    result = LabelDiversityValidator(label_column="label").validate(str(p))
+    assert result.is_valid, f"expected valid; errors={result.errors}"
+    assert result.metadata["distinct_count"] == 2
+
+
+def test_string_schema_label_no_numeric_collapse(tmp_path):
+    """A VARCHAR label column with numeric-looking values ("1.0", "1.00",
+    "01") must keep them distinct as strings — matching the ingestor's
+    string-dtype pin — rather than collapsing to a single float class and
+    wrongly rejecting a diverse dataset (bugbot #252)."""
+    p = tmp_path / "numeric_strings.csv"
+    p.write_text("id,label\n1,01\n2,1\n3,1.0\n4,02\n")
+    result = LabelDiversityValidator(
+        label_column="label", schema={"id": "INT", "label": "VARCHAR(8)"}
+    ).validate(str(p))
+    assert result.is_valid, f"expected valid; errors={result.errors}"
+    assert result.metadata["distinct_count"] == 4
+
+
 # ---------------------------------------------------------------------------
 # Custom column name
 # ---------------------------------------------------------------------------
