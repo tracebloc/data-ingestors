@@ -24,6 +24,9 @@ from tracebloc_ingestor.validators.keypoint_visibility_validator import (
     KeypointVisibilityValidator,
 )
 from tracebloc_ingestor.validators.tokenizer_validator import TokenizerValidator
+from tracebloc_ingestor.validators.label_diversity_validator import (
+    LabelDiversityValidator,
+)
 
 
 IMAGE_OPTS = {"extension": FileExtension.JPG, "target_size": [224, 224]}
@@ -38,9 +41,62 @@ def test_image_classification():
     assert _types(v) == [
         FileTypeValidator,
         ImageResolutionValidator,
+        LabelDiversityValidator,
         TableNameValidator,
         DuplicateValidator,
     ]
+
+
+def test_classification_categories_include_label_diversity():
+    """Single-label classification is caught at preflight across every
+    classification-family category — image/object/semantic/keypoint/
+    tabular/text — but NOT token_classification (its label is a per-token
+    BIO sequence, not a single class) or the regression / self-supervised
+    families (issue #251)."""
+    for cat in (
+        TaskCategory.IMAGE_CLASSIFICATION,
+        TaskCategory.OBJECT_DETECTION,
+        TaskCategory.SEMANTIC_SEGMENTATION,
+        TaskCategory.KEYPOINT_DETECTION,
+        TaskCategory.TABULAR_CLASSIFICATION,
+        TaskCategory.TEXT_CLASSIFICATION,
+    ):
+        assert LabelDiversityValidator in _types(map_validators(cat, IMAGE_OPTS)), cat
+
+    for cat in (
+        TaskCategory.TOKEN_CLASSIFICATION,
+        TaskCategory.TABULAR_REGRESSION,
+        TaskCategory.TIME_SERIES_FORECASTING,
+        TaskCategory.TIME_TO_EVENT_PREDICTION,
+        TaskCategory.MASKED_LANGUAGE_MODELING,
+    ):
+        assert LabelDiversityValidator not in _types(
+            map_validators(cat, {"schema": {"a": "INT"}})
+        ), cat
+
+
+def test_label_diversity_uses_full_schema_for_label_type():
+    """base.py strips the label column out of file_options["schema"] (it's a
+    framework column, not a table column) but passes the UNSTRIPPED schema as
+    `full_schema`. The label-diversity validator must read the label's type
+    from `full_schema`, else it never applies the ingestor's NA/dtype rules to
+    the label column (bugbot #252)."""
+    ldv = next(
+        v
+        for v in map_validators(
+            TaskCategory.TABULAR_CLASSIFICATION,
+            {
+                # file_options["schema"] — label already stripped by base.py.
+                "schema": {"age": "INT"},
+                "label_column": "churned",
+                # full, unstripped schema base.py also passes.
+                "full_schema": {"age": "INT", "churned": "VARCHAR(8)"},
+            },
+        )
+        if isinstance(v, LabelDiversityValidator)
+    )
+    # The validator must see the label column's type via the full schema.
+    assert ldv._schema_type_for("churned") == "VARCHAR(8)"
 
 
 def test_object_detection_includes_xml_validator():

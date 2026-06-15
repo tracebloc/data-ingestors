@@ -677,7 +677,21 @@ class BaseIngestor(ABC):
         # mutating file_options / metadata) so label-aware validators like
         # BIOLabelValidator check the right column when a custom name is used.
         validators = map_validators(
-            self.category, {**self.file_options, "label_column": self.label_column}
+            self.category,
+            {
+                **self.file_options,
+                "label_column": self.label_column,
+                # file_options["schema"] has the label/annotation/id columns
+                # stripped (they're framework columns, not table columns), but
+                # CSVIngestor reads the file with NA/dtype rules from the FULL
+                # schema — so the label column DOES get NA-sentinel treatment at
+                # ingest. Pass the full schema so LabelDiversityValidator counts
+                # distinct labels the same way the data is actually ingested,
+                # rather than letting "null"/"NA" inflate the distinct count and
+                # sneak an effectively single-class dataset past the gate
+                # (bugbot #252).
+                "full_schema": self.schema,
+            },
         )
         logger.info(f"Running {len(validators)} validator(s) on data source")
         all_valid = True
@@ -966,10 +980,20 @@ class BaseIngestor(ABC):
                     self.data_format,
                     self.intent,
                 ):
+                    # Surface the BACKEND'S actual reason in the user-visible
+                    # error — not just "see the logged API error above" which
+                    # forces the user to grep the log for the real cause.
+                    # Issue #251: a misleading "Backend failed to prepare the
+                    # dataset" message buried the real reason (e.g. "Please
+                    # provide atleast 2 labels.") in a preceding ERROR line.
+                    detail = (
+                        getattr(self.api_client, "last_prepare_error", None)
+                        or "see the logged API error above"
+                    )
                     raise RuntimeError(
-                        "Backend failed to prepare the dataset; it was NOT "
-                        "registered (its rows are already in the database). See "
-                        "the logged API error above."
+                        f"Backend failed to prepare the dataset; it was NOT "
+                        f"registered (its rows are already in the database). "
+                        f"Backend response: {detail}"
                     )
 
                 self.api_client.create_dataset(
