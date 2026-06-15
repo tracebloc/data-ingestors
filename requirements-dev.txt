@@ -1,0 +1,24 @@
+# Development / CI dependencies: everything needed to test, lint, type-check,
+# and publish the package — but NOT required at runtime. Kept out of
+# requirements.txt so `pip install tracebloc_ingestor` and the signed Docker
+# image stay lean.
+#
+# Local dev / CI install:  pip install -r requirements-dev.txt
+-r requirements.txt
+
+# Testing
+pytest>=7.0.0
+pytest-cov>=4.1.0
+
+# Type checking
+mypy>=1.0.0
+types-requests
+types-urllib3
+
+# Linting / formatting
+black>=23.0.0
+isort>=5.12.0
+flake8>=6.0.0
+
+# Release / publishing
+twine
