@@ -85,3 +85,34 @@ def test_non_ascii_data_roundtrip(db, table):
     db.create_table(table, {"name": "VARCHAR(64)"})
     db.insert_batch(table, [_rec("u", name="Größe-Meßwert")])
     assert _query(f"SELECT name FROM `{table}` WHERE data_id='u'")[0][0] == "Größe-Meßwert"
+
+
+def test_get_table_schema_reports_real_mysql_types(db, table):
+    """The schema sent to the backend must carry the REAL column types.
+
+    Reflection against a live MySQL returns dialect type classes (INTEGER,
+    FLOAT, DATETIME, ...). A mapping keyed by generic SQLAlchemy class names
+    (Integer, Float, ...) matched none of them, so every non-VARCHAR column
+    was reported to the backend as VARCHAR. The mocked unit test couldn't
+    catch that — it fed generic types into a fake inspector. This is the
+    test shape that does: declared type in, real CREATE TABLE, real
+    reflection out."""
+    db.create_table(table, {
+        "f_int": "INT",
+        "f_float": "FLOAT",
+        "f_dec": "DECIMAL(10,2)",
+        "f_bool": "BOOLEAN",
+        "f_dt": "DATETIME",
+        "f_name": "VARCHAR(64)",
+    })
+    schema = db.get_table_schema(table)
+    assert schema["f_int"] == "INT"
+    assert schema["f_float"] == "FLOAT"
+    assert schema["f_dec"] == "DECIMAL(10,2)"
+    assert schema["f_bool"] == "BOOLEAN"  # MySQL stores BOOL as TINYINT(1)
+    assert schema["f_dt"] == "DATETIME"
+    assert schema["f_name"] == "VARCHAR(64)"
+    # The framework's standard columns get their real types too.
+    assert schema["id"] == "BIGINT"
+    assert schema["created_at"] == "DATETIME"
+    assert schema["annotation"] == "TEXT"

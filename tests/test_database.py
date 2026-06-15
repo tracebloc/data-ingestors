@@ -10,7 +10,18 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 import pytest
-from sqlalchemy import Integer, String, BigInteger, Column, Table
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    Column,
+    DateTime,
+    Float,
+    Integer,
+    Numeric,
+    String,
+    Table,
+)
+from sqlalchemy.dialects import mysql
 
 from tracebloc_ingestor import database as db_mod
 from tracebloc_ingestor.database import Database
@@ -424,22 +435,82 @@ def test_insert_batch_rolls_back_between_transient_retries(db, mock_engine_facto
 # get_table_schema
 # ---------------------------------------------------------------------------
 
-def test_get_table_schema(db):
+def test_get_table_schema_reflected_dialect_types(db):
+    """Regression: ``inspector.get_columns()`` against a real MySQL returns
+    DIALECT type classes (INTEGER, FLOAT, DATETIME, ...), not the generic
+    SQLAlchemy ones (Integer, Float, ...). The old mapping was keyed by the
+    generic class names, so every non-VARCHAR column fell through to the
+    VARCHAR default — the backend was told INT/FLOAT/DATETIME columns were
+    VARCHAR. (VARCHAR columns only came out right because the fallback
+    happened to be VARCHAR.)"""
+    inspector = MagicMock()
+    inspector.get_columns.return_value = [
+        {"name": "id", "type": mysql.BIGINT(display_width=20)},
+        {"name": "f_int", "type": mysql.INTEGER()},
+        {"name": "f_float", "type": mysql.FLOAT()},
+        {"name": "f_double", "type": mysql.DOUBLE()},
+        {"name": "f_dec", "type": mysql.DECIMAL(precision=10, scale=2)},
+        {"name": "f_bool", "type": mysql.TINYINT(display_width=1)},  # BOOL
+        {"name": "f_tiny", "type": mysql.TINYINT(display_width=4)},
+        {"name": "f_vc", "type": mysql.VARCHAR(length=255)},
+        {"name": "f_text", "type": mysql.TEXT()},
+        {"name": "f_date", "type": mysql.DATE()},
+        {"name": "f_dt", "type": mysql.DATETIME()},
+        {"name": "f_ts", "type": mysql.TIMESTAMP()},
+        {"name": "f_time", "type": mysql.TIME()},
+        {"name": "f_blob", "type": mysql.LONGBLOB()},
+    ]
+    with patch.object(db_mod, "inspect", return_value=inspector):
+        schema = db.get_table_schema("tbl")
+    assert schema == {
+        "id": "BIGINT",
+        "f_int": "INT",
+        "f_float": "FLOAT",
+        "f_double": "DOUBLE",
+        "f_dec": "DECIMAL(10,2)",
+        "f_bool": "BOOLEAN",  # MySQL reflects BOOL as TINYINT(1)
+        "f_tiny": "TINYINT",
+        "f_vc": "VARCHAR(255)",
+        "f_text": "TEXT",
+        "f_date": "DATE",
+        "f_dt": "DATETIME",
+        "f_ts": "TIMESTAMP",
+        "f_time": "TIME",
+        "f_blob": "LONGBLOB",
+    }
+
+
+def test_get_table_schema_generic_types(db):
+    """Generic (in-process) SQLAlchemy types map to the same MySQL vocabulary
+    as their reflected dialect counterparts."""
     inspector = MagicMock()
     class Weird:  # unknown SQLAlchemy type, no 'length' attribute
         pass
 
     inspector.get_columns.return_value = [
         {"name": "id", "type": Integer()},
+        {"name": "big", "type": BigInteger()},
         {"name": "name", "type": String(255)},
+        {"name": "bare_str", "type": String()},  # no length declared
+        {"name": "ratio", "type": Float()},
+        {"name": "price", "type": Numeric(8, 3)},
+        {"name": "flag", "type": Boolean()},
+        {"name": "seen", "type": DateTime()},
         {"name": "weird", "type": Weird()},
     ]
     with patch.object(db_mod, "inspect", return_value=inspector):
         schema = db.get_table_schema("tbl")
     assert schema["id"] == "INT"
+    assert schema["big"] == "BIGINT"
     assert schema["name"] == "VARCHAR(255)"
-    # unknown SQLAlchemy type falls back to VARCHAR
-    assert schema["weird"] == "VARCHAR"
+    assert schema["bare_str"] == "VARCHAR"  # no "VARCHAR(None)"
+    assert schema["ratio"] == "FLOAT"
+    assert schema["price"] == "DECIMAL(8,3)"
+    assert schema["flag"] == "BOOLEAN"
+    assert schema["seen"] == "DATETIME"
+    # Unknown types pass through as their (upper-cased) class name instead of
+    # being mislabelled VARCHAR.
+    assert schema["weird"] == "WEIRD"
 
 
 def test_create_table_rejects_reserved_column():
