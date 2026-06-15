@@ -80,8 +80,14 @@ def test_image_classification_is_eight_lines():
 
 
 def test_all_task_categories_covered():
-    """Every value in the schema's category enum has a corresponding example,
-    except instance_segmentation which has no template/validator support yet."""
+    """Every value in the schema's category enum has a corresponding example.
+
+    No carve-outs: a category the schema accepts must be fully supported,
+    example included. instance_segmentation used to be exempted here while
+    sitting in the enum with no validators and no file transfer — configs
+    half-ingested (rows + API records, zero files staged). It was removed
+    from the enum instead; see tests/test_category_congruence.py for the
+    guard that keeps every enum value fully wired."""
     schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
     enum_values = set(schema["properties"]["category"]["enum"])
 
@@ -91,10 +97,7 @@ def test_all_task_categories_covered():
         if name != "custom_processor.yaml"  # uses tabular_classification, already covered
     }
 
-    # instance_segmentation is in the enum but has no map_validators branch
-    # yet (no template either) — tracked separately.
-    expected = enum_values - {"instance_segmentation"}
-    missing = expected - covered
+    missing = enum_values - covered
     assert not missing, f"No example for categories: {missing}"
 
 
