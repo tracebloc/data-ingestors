@@ -25,14 +25,19 @@ So the spec is intentionally small here and grows over P3b–P3d.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any, Callable, Dict, List
 
 
 @dataclass(frozen=True)
 class ModalitySpec:
-    """Per-category behavior flags (P3a). More fields land in P3b–P3d.
+    """Per-category behavior (built up over P3a–P3d). More fields land in P3c/P3d.
 
     Attributes:
         category: the ``TaskCategory`` value this spec describes.
+        build_validators: ``(file_options) -> [validators]`` — the validator
+            set this category runs (P3b). Replaces the corresponding
+            ``map_validators`` if/elif arm; the factory bodies live in
+            ``modalities/validators.py``.
         is_file_bearing: every record references sidecar files (images,
             annotations, masks, texts, sequences) under ``SRC_PATH`` that must
             be copied to ``DEST_PATH``. Drives both the SRC_PATH preflight and
@@ -50,3 +55,4 @@ class ModalitySpec:
     is_file_bearing: bool
     is_tabular_family: bool
     is_self_supervised: bool
+    build_validators: Callable[[Dict[str, Any]], List]

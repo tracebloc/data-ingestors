@@ -13,10 +13,12 @@ from __future__ import annotations
 from typing import Dict
 
 from ..utils.constants import TaskCategory
+from . import validators as v
 from .spec import ModalitySpec
 
-# One entry per supported category. P3a populates the three behavior flags
-# that were hand-maintained frozensets in ingestors/base.py.
+# One entry per supported category — the single source of truth. P3a: the three
+# behavior flags (was three frozensets in ingestors/base.py). P3b: the
+# validator factory (was the map_validators if/elif arm).
 _SPECS = (
     # File-bearing categories (per-row sidecar files under SRC_PATH).
     ModalitySpec(
@@ -24,36 +26,42 @@ _SPECS = (
         is_file_bearing=True,
         is_tabular_family=False,
         is_self_supervised=False,
+        build_validators=v.image_classification,
     ),
     ModalitySpec(
         TaskCategory.OBJECT_DETECTION,
         is_file_bearing=True,
         is_tabular_family=False,
         is_self_supervised=False,
+        build_validators=v.object_detection,
     ),
     ModalitySpec(
         TaskCategory.KEYPOINT_DETECTION,
         is_file_bearing=True,
         is_tabular_family=False,
         is_self_supervised=False,
+        build_validators=v.keypoint_detection,
     ),
     ModalitySpec(
         TaskCategory.SEMANTIC_SEGMENTATION,
         is_file_bearing=True,
         is_tabular_family=False,
         is_self_supervised=False,
+        build_validators=v.semantic_segmentation,
     ),
     ModalitySpec(
         TaskCategory.TEXT_CLASSIFICATION,
         is_file_bearing=True,
         is_tabular_family=False,
         is_self_supervised=False,
+        build_validators=v.text_classification,
     ),
     ModalitySpec(
         TaskCategory.TOKEN_CLASSIFICATION,
         is_file_bearing=True,
         is_tabular_family=False,
         is_self_supervised=False,
+        build_validators=v.token_classification,
     ),
     # masked_language_modeling is file-bearing AND self-supervised (no label).
     ModalitySpec(
@@ -61,6 +69,7 @@ _SPECS = (
         is_file_bearing=True,
         is_tabular_family=False,
         is_self_supervised=True,
+        build_validators=v.masked_language_modeling,
     ),
     # Tabular family (structured feature tables; no sidecar files).
     ModalitySpec(
@@ -68,24 +77,28 @@ _SPECS = (
         is_file_bearing=False,
         is_tabular_family=True,
         is_self_supervised=False,
+        build_validators=v.tabular_classification,
     ),
     ModalitySpec(
         TaskCategory.TABULAR_REGRESSION,
         is_file_bearing=False,
         is_tabular_family=True,
         is_self_supervised=False,
+        build_validators=v.tabular_regression,
     ),
     ModalitySpec(
         TaskCategory.TIME_SERIES_FORECASTING,
         is_file_bearing=False,
         is_tabular_family=True,
         is_self_supervised=False,
+        build_validators=v.time_series_forecasting,
     ),
     ModalitySpec(
         TaskCategory.TIME_TO_EVENT_PREDICTION,
         is_file_bearing=False,
         is_tabular_family=True,
         is_self_supervised=False,
+        build_validators=v.time_to_event_prediction,
     ),
 )
 
