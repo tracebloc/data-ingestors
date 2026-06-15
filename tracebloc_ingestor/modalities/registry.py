@@ -13,12 +13,14 @@ from __future__ import annotations
 from typing import Dict
 
 from ..utils.constants import TaskCategory
+from . import transfer as t
 from . import validators as v
 from .spec import ModalitySpec
 
 # One entry per supported category — the single source of truth. P3a: the three
 # behavior flags (was three frozensets in ingestors/base.py). P3b: the
-# validator factory (was the map_validators if/elif arm).
+# validator factory (was the map_validators if/elif arm). P3c: the sidecar
+# transfer factory (was the map_file_transfer if/elif arm).
 _SPECS = (
     # File-bearing categories (per-row sidecar files under SRC_PATH).
     ModalitySpec(
@@ -27,6 +29,7 @@ _SPECS = (
         is_tabular_family=False,
         is_self_supervised=False,
         build_validators=v.image_classification,
+        transfer=t.image_classification,
     ),
     ModalitySpec(
         TaskCategory.OBJECT_DETECTION,
@@ -34,6 +37,7 @@ _SPECS = (
         is_tabular_family=False,
         is_self_supervised=False,
         build_validators=v.object_detection,
+        transfer=t.object_detection,
     ),
     ModalitySpec(
         TaskCategory.KEYPOINT_DETECTION,
@@ -41,6 +45,7 @@ _SPECS = (
         is_tabular_family=False,
         is_self_supervised=False,
         build_validators=v.keypoint_detection,
+        transfer=t.keypoint_detection,
     ),
     ModalitySpec(
         TaskCategory.SEMANTIC_SEGMENTATION,
@@ -48,6 +53,7 @@ _SPECS = (
         is_tabular_family=False,
         is_self_supervised=False,
         build_validators=v.semantic_segmentation,
+        transfer=t.semantic_segmentation,
     ),
     ModalitySpec(
         TaskCategory.TEXT_CLASSIFICATION,
@@ -55,6 +61,7 @@ _SPECS = (
         is_tabular_family=False,
         is_self_supervised=False,
         build_validators=v.text_classification,
+        transfer=t.text_classification,
     ),
     ModalitySpec(
         TaskCategory.TOKEN_CLASSIFICATION,
@@ -62,6 +69,7 @@ _SPECS = (
         is_tabular_family=False,
         is_self_supervised=False,
         build_validators=v.token_classification,
+        transfer=t.token_classification,
     ),
     # masked_language_modeling is file-bearing AND self-supervised (no label).
     ModalitySpec(
@@ -70,8 +78,9 @@ _SPECS = (
         is_tabular_family=False,
         is_self_supervised=True,
         build_validators=v.masked_language_modeling,
+        transfer=t.masked_language_modeling,
     ),
-    # Tabular family (structured feature tables; no sidecar files).
+    # Tabular family (structured feature tables; no sidecar files -> no transfer).
     ModalitySpec(
         TaskCategory.TABULAR_CLASSIFICATION,
         is_file_bearing=False,

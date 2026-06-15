@@ -7,28 +7,30 @@ supporting both binary data and file-based image processing.
 
 import logging
 import os
-from typing import Dict, Any, Optional
 import shutil
-import time
+from typing import Any, Dict, Optional
 
 from tenacity import (
+    before_sleep_log,
     retry,
+    retry_if_exception_type,
     stop_after_attempt,
     wait_exponential,
-    retry_if_exception_type,
-    before_sleep_log,
 )
+
 from tracebloc_ingestor import Config
-from tracebloc_ingestor.utils.logging import setup_logging
 from tracebloc_ingestor.utils.constants import (
+    GREEN,
+    RED,
+    RESET,
     RETRY_MAX_ATTEMPTS,
-    RETRY_WAIT_MULTIPLIER,
-    RETRY_WAIT_MIN,
     RETRY_WAIT_MAX,
-    TaskCategory,
+    RETRY_WAIT_MIN,
+    RETRY_WAIT_MULTIPLIER,
     FileExtension,
+    TaskCategory,
 )
-from tracebloc_ingestor.utils.constants import RESET, GREEN, RED
+from tracebloc_ingestor.utils.logging import setup_logging
 
 # Initialize config and configure logging
 config = Config()
@@ -362,108 +364,30 @@ def _copy_tokenizer_if_present() -> None:
 
 def map_file_transfer(
     task_category: TaskCategory, record: Dict[str, Any], options: Dict[str, Any]
-) -> Dict[str, Any]:
-    """Map file transfer function based on task category.
+) -> Optional[Dict[str, Any]]:
+    """Stage a record's per-row sidecar file(s), dispatched by category.
+
+    Thin lookup over the ModalityRegistry: each file-bearing category's spec
+    carries a ``transfer`` factory (the per-category bodies — atomic
+    image+annotation / image+mask pre-checks and all — now live in
+    ``modalities/transfer.py``; structural refactor backend#796, P3c). A
+    non-file-bearing or unknown category has ``transfer is None`` and returns
+    None (no sidecars to stage), exactly as the prior ``else`` branch did.
+
+    The registry import is lazy to avoid an import cycle at module load
+    (registry -> modalities.transfer -> this module).
 
     Args:
-        task_category: The type of task (IMAGE_CLASSIFICATION, OBJECT_DETECTION, TEXT_CLASSIFICATION, etc.)
-        record: Dictionary containing filename, data_id, and other record data
-        options: Dictionary containing transfer options
+        task_category: the task category.
+        record: the record (filename / data_id / …).
+        options: transfer options (extension, …).
 
     Returns:
-        Updated record dictionary or tuple of results for multi-file tasks
+        The (possibly mutated) record, or None if a required sidecar is missing.
     """
-    if task_category == TaskCategory.IMAGE_CLASSIFICATION:
-        result = image_transfer(record, options)
-        return result
-    elif task_category == TaskCategory.OBJECT_DETECTION:
-        # Atomic: only copy image+annotation together. Pre-verify both
-        # sources so a missing image (image_transfer returns the record,
-        # not None, on missing source) doesn't let annotation_transfer
-        # leave an orphan annotation on disk — and vice versa.
-        filename = record.get("filename")
-        if not filename:
-            logger.error(f"{RED}No filename found in record{RESET}")
-            return None
-        image_src_path, image_filename = _find_src(
-            "images", filename, options.get("extension")
-        )
-        if image_src_path is None:
-            logger.error(
-                f"{RED}Source image not found: {os.path.join(config.SRC_PATH, 'images', image_filename)} — skipping record{RESET}"
-            )
-            return None
-        annotation_src_path, annotation_filename = _find_src(
-            "annotations", filename, ".xml"
-        )
-        if annotation_src_path is None:
-            logger.error(
-                f"{RED}Source annotation not found: {os.path.join(config.SRC_PATH, 'annotations', annotation_filename)} — skipping record{RESET}"
-            )
-            return None
-        record = image_transfer(record, options, image_src_path, image_filename)
-        result = annotation_transfer(
-            record, options, ".xml", annotation_src_path, annotation_filename
-        )
-        return result
-    elif task_category == TaskCategory.TEXT_CLASSIFICATION:
-        result = text_transfer(record, options)
-        # Optional: ship a custom tokenizer.json so the client uses it instead
-        # of the HF default; absent is fine (handled by the optional validator).
-        _copy_tokenizer_if_present()
-        return result
-    elif task_category == TaskCategory.TOKEN_CLASSIFICATION:
-        # Same on-disk layout as text classification: one .txt per sample in
-        # the ``texts`` subdir. BIO tags travel in the labels CSV, not on disk.
-        result = text_transfer(record, options)
-        # Optional custom tokenizer.json (same as text classification).
-        _copy_tokenizer_if_present()
-        return result
-    elif task_category == TaskCategory.MASKED_LANGUAGE_MODELING:
-        result = text_transfer(record, options, src_subdir="sequences")
-        # Copy the user's tokenizer.json so the MLM client uses it instead of
-        # falling back to bert-base-uncased (a vocab_size mismatch with the
-        # model's nn.Embedding would cause a CUDA device-side assert at
-        # training). For MLM the tokenizer is mandatory — its presence and
-        # [MASK]/[PAD] tokens are enforced by TokenizerValidator at validation.
-        _copy_tokenizer_if_present()
-        return result
-    elif task_category == TaskCategory.SEMANTIC_SEGMENTATION:
-        # Atomic: only copy image+mask together. Pre-verify both sources
-        # before either copy, since image_transfer returns the record (not
-        # None) when the source image is missing — without this pre-check
-        # a missing image would still let mask_transfer leave an orphan
-        # mask on disk. Both sides resolve their source via shared
-        # helpers (`_find_src` / `_find_mask_src`) so the pre-check stays
-        # in lockstep with what the copy functions actually look for.
-        filename = record.get("filename")
-        if not filename:
-            logger.error(f"{RED}No filename found in record{RESET}")
-            return None
-        image_src_path, image_filename = _find_src(
-            "images", filename, options.get("extension")
-        )
-        if image_src_path is None:
-            logger.error(
-                f"{RED}Source image not found: {os.path.join(config.SRC_PATH, 'images', image_filename)} — skipping record{RESET}"
-            )
-            return None
+    from .modalities.registry import REGISTRY
 
-        mask_id = record.get("mask_id")
-        if not mask_id:
-            logger.error(f"{RED}No mask_id found in record{RESET}")
-            return None
-        mask_src_path, mask_ext, mask_name = _find_mask_src(mask_id)
-        if mask_src_path is None:
-            logger.error(
-                f"{RED}Source mask not found: {mask_name} in {config.SRC_PATH}/masks/ — skipping record{RESET}"
-            )
-            return None
-        record = image_transfer(record, options, image_src_path, image_filename)
-        record = mask_transfer(record, mask_src_path, mask_ext, mask_name)
-        return record
-    elif task_category == TaskCategory.KEYPOINT_DETECTION:
-        result = image_transfer(record, options)
-        return result
-    else:
+    spec = REGISTRY.get(task_category)
+    if spec is None or spec.transfer is None:
         return None
+    return spec.transfer(record, options)
