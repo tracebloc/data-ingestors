@@ -64,6 +64,7 @@ def test_summary_clean_run_no_failures():
 @pytest.mark.parametrize("kwargs", [
     dict(failed_records=1),
     dict(file_transfer_failures=1),
+    dict(skipped_records=1),        # a record dropped during processing (#234)
     dict(inserted_records=9),       # < total
     dict(api_sent_records=9),       # < inserted
 ])
@@ -428,15 +429,61 @@ def test_ingest_still_calls_edge_label_for_label_carrying_categories():
     ing.api_client.send_generate_edge_label_meta.assert_called_once()
 
 
-def test_ingest_skips_records_that_fail_processing():
-    # invalid intent -> process_record returns None -> counted as skipped
+def test_ingest_fails_fast_on_invalid_intent():
+    # A bad intent is a run-wide config error, not a per-row skip: it must
+    # abort loudly before any DB work (#234), not silently skip every record
+    # and exit 0 with an empty dataset and a Job marked Succeeded.
     records = [{"a": "1", "filename": "f1"}]
     ing = make_ingestor(records=records, category=None, intent="bogus")
+    with pytest.raises(ValueError, match="intent"):
+        ing.ingest("src", batch_size=10)
+    ing.database.insert_batch.assert_not_called()
+
+
+def test_ingest_counts_dropped_record_as_failure():
+    # A record dropped during processing (here: a missing unique_id when
+    # unique_id_column is set) must be surfaced as a failed record so the run
+    # exits non-zero — not silently skipped with a clean exit 0 (#234). The
+    # dropped record never reaches the DB.
+    records = [{"a": "1", "filename": "f1"}]  # no 'uid' -> _map_unique_id drops it
+    ing = make_ingestor(
+        records=records, category=None, intent="train", unique_id_column="uid"
+    )
     with patch.object(base_mod, "Session") as Sess:
         Sess.return_value.__enter__.return_value = MagicMock()
         failed = ing.ingest("src", batch_size=10)
-    assert failed == []
+    assert len(failed) == 1
+    assert failed[0]["error"] == "record_dropped_in_processing"
     ing.database.insert_batch.assert_not_called()
+
+
+def test_ingest_keeps_good_records_and_counts_dropped():
+    # The canonical #234 scenario: a mixed run. The good record ingests; the
+    # dropped one (blank unique_id) is surfaced as a failure, the summary
+    # records the drop and trips has_failures — so a partial run can NOT be
+    # reported as a clean success (the "0 failures / most records failed"
+    # contradiction).
+    records = [{"a": "1", "uid": "x1"}, {"a": "2", "uid": "  "}]  # 2nd: blank uid
+    ing = make_ingestor(
+        records=records, category=None, intent="train", unique_id_column="uid"
+    )
+    captured = {}
+    real_log = BaseIngestor._log_summary
+
+    def spy(self, summary):
+        captured["summary"] = summary
+        return real_log(self, summary)
+
+    with patch.object(base_mod, "Session") as Sess, \
+         patch.object(BaseIngestor, "_log_summary", spy):
+        Sess.return_value.__enter__.return_value = MagicMock()
+        failed = ing.ingest("src", batch_size=10)
+
+    summary = captured["summary"]
+    assert summary.skipped_records == 1
+    assert summary.has_failures is True
+    assert any(f["error"] == "record_dropped_in_processing" for f in failed)
+    ing.database.insert_batch.assert_called()  # the good record reached the DB
 
 
 def test_ingest_reraises_on_session_error():
