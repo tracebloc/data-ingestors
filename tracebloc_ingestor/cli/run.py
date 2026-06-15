@@ -207,20 +207,24 @@ def _describe_from_schema_path(
     (``'label' is a required property``, ``'foo' is not one of [...]``)
     still surface their existing clear messages.
     """
+    # Walk step-by-step, only capturing descriptions on nodes we DESCEND
+    # INTO — never the root's. The root description in ingest.v1.json is a
+    # generic blurb ("Declarative configuration for the tracebloc data
+    # ingestor…") that's correct for the schema as a whole but would
+    # blanket-attach to every primitive error, overwriting jsonschema's
+    # clear `'X' is a required property` messages with the generic prose
+    # (bugbot #254). Only INNER descriptions — the ones authored on
+    # `allOf` branches, sub-property definitions, etc. — are rule-specific
+    # enough to be worth surfacing.
     description = None
     node: Any = schema
     for step in schema_path:
-        # The CURRENT node's description applies to its sub-tree, so
-        # capture before descending.
-        if isinstance(node, dict) and isinstance(node.get("description"), str):
-            description = node["description"]
         try:
             node = node[step]
         except (KeyError, IndexError, TypeError):
             return description
-    # Capture the leaf's description too (deepest wins).
-    if isinstance(node, dict) and isinstance(node.get("description"), str):
-        description = node["description"]
+        if isinstance(node, dict) and isinstance(node.get("description"), str):
+            description = node["description"]
     return description
 
 
