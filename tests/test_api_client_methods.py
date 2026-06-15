@@ -157,6 +157,53 @@ def test_prepare_dataset_local_mode():
     get.assert_not_called()
 
 
+def test_prepare_dataset_error_captures_response_body():
+    """On HTTP error, `prepare_dataset` must stash the backend response body
+    on `self.last_prepare_error` so callers can surface the actual reason
+    in their user-visible error — instead of pointing at "the logged API
+    error above". Issue #251.
+
+    The body retained must include the status code and the response text
+    (capped) so a downstream RuntimeError can include both.
+    """
+    client = _client()
+    body = '{"message":"Please provide atleast 2 labels."}'
+    with patch.object(client.session, "get", return_value=_resp(400, text=body)):
+        ok = client.prepare_dataset(
+            TaskCategory.TABULAR_CLASSIFICATION, "ing", "tabular", "train"
+        )
+    assert ok is False
+    assert client.last_prepare_error is not None
+    # Status code + body both surface so the user sees the backend reason.
+    assert "HTTP 400" in client.last_prepare_error
+    assert "Please provide" in client.last_prepare_error
+
+
+def test_prepare_dataset_last_error_starts_unset():
+    """On a clean ingestor with no prior failure, `last_prepare_error`
+    is None — base.py falls back to its generic 'see logged API error
+    above' message only when this attribute is truly absent."""
+    client = _client()
+    assert client.last_prepare_error is None
+
+
+def test_prepare_dataset_network_error_captures_string():
+    """When `e.response` is None (DNS / connection refused / timeout),
+    last_prepare_error should still be populated with the stringified
+    exception — never silently fall through to None."""
+    import requests as _req
+
+    client = _client()
+    err = _req.exceptions.ConnectionError("name resolution failed")
+    with patch.object(client.session, "get", side_effect=err):
+        ok = client.prepare_dataset(
+            TaskCategory.TABULAR_CLASSIFICATION, "ing", "tabular", "train"
+        )
+    assert ok is False
+    assert client.last_prepare_error is not None
+    assert "name resolution failed" in client.last_prepare_error
+
+
 # ---------------------------------------------------------------------------
 # create_dataset
 # ---------------------------------------------------------------------------
