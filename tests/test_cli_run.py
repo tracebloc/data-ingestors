@@ -143,6 +143,56 @@ def test_schema_violation_fails_fast(clean_env, mock_runtime, monkeypatch, capsy
     mock_runtime["APIClient"].assert_not_called()
 
 
+def test_schema_violation_surfaces_description_not_raw_mechanic(
+    clean_env, mock_runtime, monkeypatch, capsys, tmp_path
+):
+    """Setting ``label:`` for masked_language_modeling violates the
+    schema's allOf rule. The user-visible error must surface the rule
+    AUTHOR'S description (which names the self-supervised category, the
+    fix, and #213's history) — NOT just the raw JSON-schema mechanic
+    "<{full yaml dump}> should not be valid under {'required':
+    ['label']}", which is technically correct but unreadable: it dumps
+    the entire submission as a Python dict and uses JSON-schema
+    vocabulary the customer didn't write.
+
+    Verified end-to-end against v0.3.10-rc1: a user who copy-pasted
+    `label: label` from another category's yaml saw only the raw
+    mechanic and had no way to know that MLM is self-supervised.
+    """
+    bad = tmp_path / "mlm_with_label.yaml"
+    bad.write_text(
+        "apiVersion: tracebloc.io/v1\n"
+        "kind: IngestConfig\n"
+        "category: masked_language_modeling\n"
+        "table: ssh_test\n"
+        "intent: test\n"
+        "csv: /tmp/ignored.csv\n"
+        "sequences: /tmp/ignored/\n"
+        "label: label\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("INGEST_CONFIG", str(bad))
+
+    from tracebloc_ingestor.cli.run import main
+    rc = main()
+
+    err = capsys.readouterr().err
+    assert rc == 2
+    # The schema's description is what the user needs to see — it names
+    # the actual rationale and the fix.
+    assert "Self-supervised" in err
+    assert "MUST NOT set `label`" in err
+    # Don't drop the mechanic entirely — it's still on a follow-up line
+    # for power-user debugging.
+    assert "rule:" in err
+    # Should NOT dump the entire YAML body as a Python dict in the
+    # headline (the old behavior).
+    headline = err.split("\n", 1)[0]
+    assert "{'apiVersion'" not in headline  # raw dict dump suppressed
+    mock_runtime["Database"].assert_not_called()
+    mock_runtime["APIClient"].assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # Happy path — CSV
 # ---------------------------------------------------------------------------

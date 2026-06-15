@@ -44,7 +44,7 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, NoReturn
+from typing import Any, Dict, Iterable, List, NoReturn, Optional
 
 import yaml
 from jsonschema import Draft7Validator, ValidationError
@@ -184,17 +184,74 @@ def _validate(raw_config: Dict[str, Any]) -> Iterable[ValidationError]:
     return sorted(validator.iter_errors(raw_config), key=lambda e: list(e.absolute_path))
 
 
-def _format_errors(errors: List[ValidationError]) -> str:
-    """Format errors as ``<json-pointer>: <message>``, one per line.
+def _describe_from_schema_path(
+    schema: Dict[str, Any], schema_path: List[Any]
+) -> Optional[str]:
+    """Walk the schema from root toward the failing rule, returning the
+    deepest ``description`` field encountered along the way.
 
-    Real line numbers (per the ticket) require a YAML loader that preserves
-    position info. v1.1 follow-up — for now, the JSON-pointer path is
-    enough to grep the customer's YAML.
+    JSON Schema ``allOf`` rules in ``schema/ingest.v1.json`` carry rich
+    ``description`` fields explaining each branch (e.g. "Self-supervised
+    categories MUST NOT set `label`. The shipped CSV has no label column,
+    and the framework registers no edge-label metadata for them…"), but
+    ``ValidationError.message`` only surfaces the mechanic
+    ("``{full yaml dump}`` should not be valid under ``{'required':
+    ['label']}``"). That raw message is correct but practically
+    unreadable: it dumps the entire submission as a Python dict and uses
+    JSON-schema vocabulary that the customer didn't write.
+
+    Walking from root captures the description nearest the failing rule,
+    so the user sees the rule author's intent (and the suggested fix)
+    instead of the mechanic. Returns ``None`` when no description applies
+    — the caller falls back to ``e.message`` so primitive checks
+    (``'label' is a required property``, ``'foo' is not one of [...]``)
+    still surface their existing clear messages.
     """
+    description = None
+    node: Any = schema
+    for step in schema_path:
+        # The CURRENT node's description applies to its sub-tree, so
+        # capture before descending.
+        if isinstance(node, dict) and isinstance(node.get("description"), str):
+            description = node["description"]
+        try:
+            node = node[step]
+        except (KeyError, IndexError, TypeError):
+            return description
+    # Capture the leaf's description too (deepest wins).
+    if isinstance(node, dict) and isinstance(node.get("description"), str):
+        description = node["description"]
+    return description
+
+
+def _format_errors(errors: List[ValidationError]) -> str:
+    """Format errors as ``<json-pointer>: <description-or-message>``,
+    one per line. When a failing rule has a ``description`` field in the
+    schema, surface THAT (with the underlying mechanic on a follow-up
+    line) — the descriptions in ``schema/ingest.v1.json`` are
+    customer-facing prose with rationale and fix hints, and the mechanic
+    is JSON-schema vocabulary the customer didn't write.
+
+    Real line numbers (per the ticket) require a YAML loader that
+    preserves position info. v1.1 follow-up — for now, the JSON-pointer
+    path is enough to grep the customer's YAML.
+    """
+    schema = _load_schema()
     lines = []
     for e in errors:
         path = ".".join(str(p) for p in e.absolute_path) or "<root>"
-        lines.append(f"  {path}: {e.message}")
+        description = _describe_from_schema_path(
+            schema, list(e.absolute_schema_path)
+        )
+        if description:
+            lines.append(f"  {path}: {description}")
+            # Keep the mechanic on a follow-up line for power-user
+            # debugging without burying it in the headline.
+            lines.append(
+                f"      (rule: {e.validator}={e.validator_value!r})"
+            )
+        else:
+            lines.append(f"  {path}: {e.message}")
     return "\n".join(lines)
 
 
