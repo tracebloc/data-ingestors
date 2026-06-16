@@ -418,12 +418,14 @@ def map_file_transfer(
             they read SRC_PATH / DEST_PATH from it instead of a module-global
             Config() that reads os.environ (P4c). None falls back to that
             global for direct callers / tests.
-        source_record: the RAW source record (pre-cleaning). Carries the per-row
-            sidecar pointers (``mask_id``) that are NOT table columns, so they
-            never live on the cleaned ``record``. They're lent to the transfer
-            for the copy and stripped before return, so a runtime-only pointer
-            can't reach the DB insert (#212, P5). None: the transfer reads any
-            sidecar pointer off ``record`` itself (direct callers / tests).
+        source_record: the RAW source record (pre-cleaning). Used to LEND a
+            per-row sidecar pointer (``mask_id``) to the transfer when it is NOT
+            a declared schema column — so the copy can locate the mask file even
+            though the cleaned ``record`` doesn't carry it; the lent value is
+            stripped before return (not stored). When ``mask_id`` IS a declared
+            column it's already on ``record`` (kept by RecordProcessor and
+            stored for the client — backend#816), so no lend happens. None: the
+            transfer reads any sidecar pointer off ``record`` itself.
 
     Returns:
         The (possibly mutated) record, or None if a required sidecar is missing.
@@ -434,10 +436,12 @@ def map_file_transfer(
     if spec is None or spec.transfer is None:
         return None
 
-    # Lend the raw record's sidecar pointers to the transfer, then strip them
-    # in `finally` so they can't reach the DB insert — even if the transfer
-    # raises or drops the record. The cleaned `record` carries only table +
-    # framework columns (RecordProcessor, P5).
+    # Lend the raw record's sidecar pointers to the transfer ONLY when they're
+    # not already on the cleaned record (`key not in record` = not a declared
+    # schema column), then strip exactly what we lent in `finally` so a
+    # transfer-only pointer can't reach the DB insert — even if the transfer
+    # raises or drops the record. A DECLARED mask_id column stays on `record`
+    # and is stored (the client reads it to locate masks; backend#816).
     lent = []
     if source_record is not None:
         for key in _SIDECAR_KEYS:

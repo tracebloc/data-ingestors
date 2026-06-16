@@ -1,10 +1,9 @@
 """Batch write path — DB insert + API publish + failure accounting
 (structural refactor — backend#796, P5d).
 
-Owns what happens to one batch of cleaned records: strip framework-internal
-indirections, insert to MySQL, publish the inserted rows to the backend, and
-fold the outcome (inserted / api-sent / failed) into the run's ``stats`` and
-``failed_records``. Extracted verbatim from ``BaseIngestor._flush_batch`` /
+Owns what happens to one batch of cleaned records: insert to MySQL, publish the
+inserted rows to the backend, and fold the outcome (inserted / api-sent /
+failed) into the run's ``stats`` and ``failed_records``. Extracted verbatim from ``BaseIngestor._flush_batch`` /
 ``_process_batch`` — the subtle mid-batch-DB-failure accounting (match by
 ``data_id``, not position) and the #99 / api_send_failed surfacing are
 byte-for-byte unchanged. ``BaseIngestor`` composes it via the ``_batch_writer``
@@ -119,11 +118,13 @@ class BatchWriter:
             Exception: If batch processing fails
         """
         try:
-            # The batch carries only DB columns: RecordProcessor never writes
-            # runtime-only sidecar pointers (mask_id) onto the cleaned record,
-            # and map_file_transfer lends + strips them for the copy (P5). So
-            # there's nothing framework-internal to drop before binding — the
-            # former per-record ``mask_id`` pop (#212) is gone with its cause.
+            # The batch carries the schema-declared columns + framework columns.
+            # mask_id, when the schema declares it (the semseg template), is a
+            # real column and is inserted — the training client reads it from
+            # MySQL to locate masks (backend#816). When NOT declared it never
+            # reaches here (RecordProcessor drops it; map_file_transfer strips
+            # its lend). So the former blanket ``mask_id`` pop (#212) is gone
+            # with its cause; there's nothing framework-internal to drop.
             # Insert batch and get IDs
             ids, db_failures = self.database.insert_batch(self.table_name, batch)
             api_success = False

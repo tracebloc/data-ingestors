@@ -11,12 +11,16 @@ Extracted verbatim from ``BaseIngestor.process_record`` / ``_map_unique_id``;
 public ``process_record`` delegates here. The attribute names match the
 ingestor's so the bodies are byte-for-byte unchanged.
 
-The cleaned record holds ONLY DB + framework columns. A per-row sidecar pointer
-like ``semantic_segmentation``'s ``mask_id`` (a pointer to a mask FILE, not a
-table column) is NOT written here — it stays on the raw source record and is
-lent to the transfer by ``map_file_transfer`` (P5). That removes the former
-cross-layer leak where ``mask_id`` rode the DB-bound record through
-process -> transfer -> batch and ``_process_batch`` had to pop it (#212).
+The cleaned record holds the schema-declared DB columns + framework columns.
+``semantic_segmentation``'s ``mask_id`` points at a per-row mask FILE: when the
+template DECLARES it in the schema (``schema={"mask_id": "VARCHAR(255)"}``) it
+is a real column and is KEPT here and stored — the training client reads it
+from MySQL to locate masks (backend#816), so dropping it breaks semseg
+training. When ``mask_id`` is NOT declared it is not a DB column;
+``map_file_transfer`` lends it from the raw source record for the copy and
+strips it (not stored). Either way ``_process_batch`` no longer needs the
+former blanket ``mask_id`` pop (#212) — the cleaned record carries only the
+columns the schema declares.
 """
 
 import logging

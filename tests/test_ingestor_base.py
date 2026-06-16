@@ -285,14 +285,14 @@ def test_process_record_treats_empty_string_as_null():
     assert rec["b"] is None
 
 
-def test_process_record_does_not_carry_mask_id_on_cleaned_record():
-    """P5: ``mask_id`` is a per-row pointer to a mask FILE, not a table column
-    (there's no mask_id column on the standard table — #212). So process_record
-    must NOT put it on the cleaned, DB-bound record — not even for
-    SEMANTIC_SEGMENTATION. The schema filter drops it and the old semseg re-add
-    is gone; ``map_file_transfer`` now lends mask_id from the RAW source record
-    for the copy (see test_map_file_transfer_lends_then_strips_mask_id), so it
-    never rides the DB record through process -> transfer -> batch.
+def test_process_record_does_not_carry_mask_id_when_not_in_schema():
+    """When ``mask_id`` is NOT a declared schema column it is not a DB column,
+    so process_record keeps it off the cleaned record (the schema filter drops
+    it; the old semseg re-add is gone). ``map_file_transfer`` then lends it from
+    the RAW source record for the copy (see
+    test_map_file_transfer_lends_then_strips_mask_id). The complementary case —
+    ``mask_id`` DECLARED in the schema (the semseg template) → kept + stored —
+    is test_process_record_stores_mask_id_when_declared_in_schema.
     """
     from tracebloc_ingestor.utils.constants import TaskCategory
 
@@ -304,7 +304,30 @@ def test_process_record_does_not_carry_mask_id_on_cleaned_record():
     )
     assert rec is not None
     assert rec["filename"] == "image_001"
-    assert "mask_id" not in rec, f"mask_id must not ride the cleaned record; got {rec}"
+    assert "mask_id" not in rec, f"mask_id (not in schema) must not be a column; got {rec}"
+
+
+def test_process_record_stores_mask_id_when_declared_in_schema():
+    """Contract with the training client (backend#816): for semantic_segmentation
+    the client SELECTs the dataset row and does ``str(row["mask_id"])`` to locate
+    each mask file — it raises FileNotFoundError if mask_id is missing/NULL. So
+    when the semseg TEMPLATE declares ``mask_id`` in its schema, the ingestor
+    MUST keep it on the cleaned record so it lands in MySQL. (develop popped it →
+    NULL → semseg training crashed; this pins the stored contract that the P5
+    mask_id work restores.)"""
+    from tracebloc_ingestor.utils.constants import TaskCategory
+
+    ing = make_ingestor(
+        schema={"mask_id": "VARCHAR(255)"},
+        category=TaskCategory.SEMANTIC_SEGMENTATION,
+        label_column=None,
+    )
+    rec = ing.process_record({"mask_id": "image_001_mask", "filename": "image_001"})
+    assert rec is not None
+    assert rec["mask_id"] == "image_001_mask", (
+        "mask_id declared in schema must be kept on the cleaned record so it "
+        f"reaches MySQL (the client reads it to locate masks, backend#816); got {rec}"
+    )
 
 
 def test_process_record_omits_mask_id_for_non_semseg_categories():
