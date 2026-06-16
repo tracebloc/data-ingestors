@@ -116,7 +116,7 @@ def test_ingest_image_category_batches_in_loop():
     with patch.object(base_mod, "Session") as Sess, patch.object(
         base_mod, "map_file_transfer", side_effect=lambda c, r, o, cfg=None: r
     ), patch.object(base_mod, "map_validators", return_value=[]), patch.object(
-        base_mod.BaseIngestor, "_check_src_path", return_value=None
+        base_mod.preflight, "check_src_path", return_value=None
     ):
         Sess.return_value.__enter__.return_value = MagicMock()
         failed = ing.ingest("src", batch_size=1)
