@@ -11,17 +11,6 @@ RETRY_WAIT_MULTIPLIER = 1.0
 RETRY_WAIT_MIN = 1.0
 RETRY_WAIT_MAX = 10.0
 
-# Per-row sidecar pointers: schema/record keys that name a SIDECAR FILE, not
-# table data. semantic_segmentation's ``mask_id`` points at a per-row mask file
-# — used at transfer time to locate the file, but it must never be written to
-# the dataset table (there is no such DB column; #212). RecordProcessor
-# excludes these from the cleaned DB-bound record EVEN when a template lists one
-# in its schema (e.g. the semantic_segmentation template's
-# ``schema={"mask_id": "VARCHAR(255)"}``), and file_transfer.map_file_transfer
-# lends them from the RAW record for the copy and strips them. Add future
-# runtime-only sidecar pointers here.
-SIDECAR_KEYS = ("mask_id",)
-
 
 # Intent Constants
 class Intent:

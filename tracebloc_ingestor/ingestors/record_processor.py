@@ -13,10 +13,8 @@ ingestor's so the bodies are byte-for-byte unchanged.
 
 The cleaned record holds ONLY DB + framework columns. A per-row sidecar pointer
 like ``semantic_segmentation``'s ``mask_id`` (a pointer to a mask FILE, not a
-table column) is excluded here — via ``SIDECAR_KEYS``, EVEN when a template
-lists one in its schema (the semantic_segmentation template's
-``schema={"mask_id": "VARCHAR(255)"}``). It stays on the raw source record and
-is lent to the transfer by ``map_file_transfer`` (P5). That removes the former
+table column) is NOT written here — it stays on the raw source record and is
+lent to the transfer by ``map_file_transfer`` (P5). That removes the former
 cross-layer leak where ``mask_id`` rode the DB-bound record through
 process -> transfer -> batch and ``_process_batch`` had to pop it (#212).
 """
@@ -28,7 +26,7 @@ from typing import Any, Dict, Optional
 import pandas as pd
 
 from ..utils import label_policy as label_policy_module
-from ..utils.constants import Intent, SIDECAR_KEYS
+from ..utils.constants import Intent
 
 logger = logging.getLogger(__name__)
 
@@ -170,12 +168,6 @@ class RecordProcessor:
                 columns_to_exclude.add(self.annotation_column)
             if self.unique_id_column:
                 columns_to_exclude.add(self.unique_id_column)
-            # Per-row sidecar pointers (mask_id) are NOT table columns even when
-            # a template lists one in its schema (the semantic_segmentation
-            # template's ``schema={"mask_id": "VARCHAR(255)"}``). Exclude them so
-            # the cleaned, DB-bound record never carries one to the insert (#212)
-            # — map_file_transfer lends them from the RAW record for the copy.
-            columns_to_exclude.update(SIDECAR_KEYS)
             # Preserve missing-data semantics: any null-like value becomes
             # Python None so the DB binder writes SQL NULL. Treats four
             # representations uniformly:

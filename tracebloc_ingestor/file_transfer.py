@@ -27,7 +27,6 @@ from tracebloc_ingestor.utils.constants import (
     RETRY_WAIT_MAX,
     RETRY_WAIT_MIN,
     RETRY_WAIT_MULTIPLIER,
-    SIDECAR_KEYS,
     FileExtension,
     TaskCategory,
 )
@@ -383,6 +382,14 @@ def _copy_tokenizer_if_present(cfg: Optional[Config] = None) -> None:
         logger.info(f"{GREEN}Copied tokenizer.json to {cfg.DEST_PATH}{RESET}")
 
 
+# Per-row sidecar pointers that live on the RAW source record (not table
+# columns, so never on the cleaned DB-bound record). map_file_transfer lends
+# them to the transfer for the copy, then strips them (#212, P5). Currently
+# just ``mask_id`` (semantic_segmentation); add future runtime-only pointers
+# here.
+_SIDECAR_KEYS = ("mask_id",)
+
+
 def map_file_transfer(
     task_category: TaskCategory,
     record: Dict[str, Any],
@@ -427,21 +434,18 @@ def map_file_transfer(
     if spec is None or spec.transfer is None:
         return None
 
-    # Lend the raw record's sidecar pointers (e.g. mask_id) to the transfer so
-    # it can locate the sidecar file, then strip EVERY sidecar key in `finally`
-    # so none reaches the DB insert — even if the transfer raises or drops the
-    # record. RecordProcessor already excludes sidecar keys from the cleaned
-    # record (so normally only the just-lent key is present); stripping the full
-    # SIDECAR_KEYS set here is the defense-in-depth boundary that guarantees a
-    # sidecar pointer can never be bound as a DB column, regardless of how it
-    # reached the record (#212 — this is what the semseg-template schema
-    # ``{"mask_id": ...}`` would otherwise smuggle through).
+    # Lend the raw record's sidecar pointers to the transfer, then strip them
+    # in `finally` so they can't reach the DB insert — even if the transfer
+    # raises or drops the record. The cleaned `record` carries only table +
+    # framework columns (RecordProcessor, P5).
+    lent = []
     if source_record is not None:
-        for key in SIDECAR_KEYS:
+        for key in _SIDECAR_KEYS:
             if key in source_record and key not in record:
                 record[key] = source_record[key]
+                lent.append(key)
     try:
         return spec.transfer(record, options, cfg)
     finally:
-        for key in SIDECAR_KEYS:
+        for key in lent:
             record.pop(key, None)

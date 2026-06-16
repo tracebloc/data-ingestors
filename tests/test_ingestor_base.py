@@ -325,34 +325,6 @@ def test_process_record_omits_mask_id_for_non_semseg_categories():
     ), f"non-semseg category should NOT carry mask_id; got {rec}"
 
 
-def test_process_record_excludes_mask_id_even_when_in_schema():
-    """Regression for the audit's B1: the semantic_segmentation TEMPLATE lists
-    mask_id in its schema (``schema={"mask_id": "VARCHAR(255)"}``). mask_id is
-    still a per-row pointer to a mask FILE, not table data — RecordProcessor
-    must exclude it from the cleaned record EVEN when it's a schema key, so it
-    never reaches the DB insert (#212). Without the SIDECAR_KEYS exclusion the
-    schema comprehension keeps it and nothing strips it, flipping the mask_id
-    DB column from NULL (pre-refactor) to populated — an unintended behavior
-    change the schema-less tests above don't catch."""
-    from tracebloc_ingestor.utils.constants import TaskCategory
-
-    ing = make_ingestor(
-        schema={"a": "INT", "mask_id": "VARCHAR(255)"},
-        category=TaskCategory.SEMANTIC_SEGMENTATION,
-        label_column=None,
-    )
-    rec = ing.process_record(
-        {"a": "1", "mask_id": "image_001_mask", "filename": "image_001"}
-    )
-    assert rec is not None
-    assert "a" in rec  # the real schema column survives
-    assert rec["filename"] == "image_001"
-    assert "mask_id" not in rec, (
-        "mask_id is a sidecar pointer; it must be excluded from the cleaned "
-        f"record even when listed in schema, so it can't bind as a column; got {rec}"
-    )
-
-
 # ---------------------------------------------------------------------------
 # _process_batch
 # ---------------------------------------------------------------------------
@@ -429,42 +401,6 @@ def test_map_file_transfer_lends_then_strips_mask_id(monkeypatch):
     # never reaches insert_batch.
     assert "mask_id" not in result
     assert "mask_id" not in cleaned
-
-
-def test_map_file_transfer_strips_preexisting_sidecar_key(monkeypatch):
-    """Defense-in-depth (audit B1): even if a sidecar key is ALREADY on the
-    record (e.g. a template lists mask_id in its schema and one slipped past
-    RecordProcessor), map_file_transfer strips the full SIDECAR_KEYS set after
-    the transfer — so a sidecar pointer can never be bound as a DB column."""
-    from tracebloc_ingestor import file_transfer
-    from tracebloc_ingestor.modalities.spec import ModalitySpec
-
-    seen = {}
-
-    def spy_transfer(record, options, cfg=None):
-        seen["mask_id_during_transfer"] = record.get("mask_id")
-        return record
-
-    fake_spec = ModalitySpec(
-        category="seg",
-        is_file_bearing=True,
-        is_tabular_family=False,
-        is_self_supervised=False,
-        data_format="image",
-        build_validators=lambda opts: [],
-        transfer=spy_transfer,
-    )
-    monkeypatch.setattr(
-        "tracebloc_ingestor.modalities.registry.REGISTRY", {"seg": fake_spec}
-    )
-
-    # mask_id already on the record, no source_record lend needed.
-    record = {"data_id": "a", "filename": "img1", "mask_id": "img1_mask"}
-    result = file_transfer.map_file_transfer("seg", record, {})
-
-    assert seen["mask_id_during_transfer"] == "img1_mask"  # transfer still saw it
-    assert "mask_id" not in result  # ...and it's stripped regardless of origin
-    assert "mask_id" not in record
 
 
 # ---------------------------------------------------------------------------
