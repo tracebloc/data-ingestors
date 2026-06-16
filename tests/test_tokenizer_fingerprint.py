@@ -137,6 +137,16 @@ def test_special_token_id_falls_back_to_vocab():
     assert _special_token_id(data, "[PAD]") == 3
 
 
+def test_special_token_id_idless_added_token_falls_back_to_vocab():
+    """A malformed added_tokens entry with no ``id`` must not shadow the
+    model.vocab mapping that does hold the id (bugbot)."""
+    data = {
+        "model": {"vocab": {"[PAD]": 5}},
+        "added_tokens": [{"content": "[PAD]"}],  # no "id"
+    }
+    assert _special_token_id(data, "[PAD]") == 5
+
+
 def test_special_token_id_absent_returns_none():
     assert _special_token_id(_NO_MASK, "[MASK]") is None
 

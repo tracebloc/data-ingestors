@@ -29,7 +29,12 @@ def _special_token_id(tokenizer_data: dict, token: str) -> Optional[int]:
     """
     for entry in tokenizer_data.get("added_tokens", []) or []:
         if isinstance(entry, dict) and entry.get("content") == token:
-            return entry.get("id")
+            token_id = entry.get("id")
+            # Only trust an added_tokens entry that actually carries an id;
+            # a malformed entry without one must not shadow the model.vocab
+            # mapping below (which may still hold the id).
+            if token_id is not None:
+                return token_id
     vocab = (tokenizer_data.get("model") or {}).get("vocab")
     if isinstance(vocab, dict):
         return vocab.get(token)
