@@ -56,7 +56,7 @@ class TableNameValidator(BaseValidator):
         """
         try:
             # Get table name from config
-            table_name = config.TABLE_NAME
+            table_name = (self._config or config).TABLE_NAME
 
             if not table_name:
                 return self._create_result(

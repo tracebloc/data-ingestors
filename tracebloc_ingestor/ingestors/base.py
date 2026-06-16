@@ -186,7 +186,7 @@ class BaseIngestor(ABC):
                 f"patient_id, user_id), omit unique_id_column to use "
                 f"server-side UUIDs instead.{RESET}"
             )
-        
+
         # Remove label_column, annotation_column, and unique_id_column from schema
         # These are handled separately and should not be ingested as regular columns
         table_schema = schema.copy()
@@ -366,9 +366,9 @@ class BaseIngestor(ABC):
             # expects strings, so everything non-bool/non-null is stringified.
             cleaned_record = {
                 k.strip(): (
-                    bool(v) if pd.api.types.is_bool(v)
-                    else None if pd.isna(v) or v == ""
-                    else str(v).strip()
+                    bool(v)
+                    if pd.api.types.is_bool(v)
+                    else None if pd.isna(v) or v == "" else str(v).strip()
                 )
                 for k, v in record.items()
                 if k in self.schema and k not in columns_to_exclude
@@ -427,6 +427,7 @@ class BaseIngestor(ABC):
         # Late import: keep this module free of a Config singleton at
         # import time so unit tests can monkeypatch the env per test.
         from ..config import Config
+
         src = Config().SRC_PATH
         if not src or not str(src).strip():
             raise RuntimeError(
@@ -512,6 +513,7 @@ class BaseIngestor(ABC):
         # Late import: keep this module free of a Config singleton at
         # import time so unit tests can monkeypatch the env per test.
         from ..config import Config
+
         storage = Config().STORAGE_PATH
         if not storage or not os.path.isdir(storage):
             return None
@@ -574,6 +576,7 @@ class BaseIngestor(ABC):
                 # the cutoff would shift by the local UTC offset on
                 # non-UTC systems.
                 import time as _time
+
                 try:
                     mtime = os.path.getmtime(lock_path)
                     age = _time.time() - mtime
@@ -610,9 +613,7 @@ class BaseIngestor(ABC):
             except FileNotFoundError:
                 pass
             raise
-        logger.info(
-            f"Acquired table lock for '{self.table_name}' at {lock_path}"
-        )
+        logger.info(f"Acquired table lock for '{self.table_name}' at {lock_path}")
         return lock_path
 
     def _release_table_lock(self, lock_path: Optional[str]) -> None:
@@ -679,6 +680,10 @@ class BaseIngestor(ABC):
                 # (bugbot #252).
                 "full_schema": self.schema,
             },
+            # Inject the run's resolved Config so path-reading validators
+            # (SRC_PATH / DEST_PATH / TABLE_NAME) use it instead of a
+            # module-global Config() that reads os.environ (P4b).
+            self.database.config,
         )
         logger.info(f"Running {len(validators)} validator(s) on data source")
         all_valid = True
@@ -810,9 +815,7 @@ class BaseIngestor(ABC):
         # leaves no orphaned empty table behind that the next retry's
         # stale-table guard would trip on.
         if self.table is None:
-            self.table = self.database.create_table(
-                self.table_name, self._table_schema
-            )
+            self.table = self.database.create_table(self.table_name, self._table_schema)
 
         batch = []
         failed_records = []
@@ -1047,9 +1050,7 @@ class BaseIngestor(ABC):
         ``IngestionSummary.has_failures`` already trips on that gap.
         """
         try:
-            inserted_ids, api_success, db_failures = self._process_batch(
-                batch, session
-            )
+            inserted_ids, api_success, db_failures = self._process_batch(batch, session)
             # Only count records that were successfully inserted
             if inserted_ids:
                 stats["inserted_records"] += len(inserted_ids)

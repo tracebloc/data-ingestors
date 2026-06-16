@@ -21,7 +21,6 @@ except ImportError:
 
 from .base import BaseValidator, ValidationResult
 
-
 # Configure unified logging with config
 config = Config()
 logger = logging.getLogger(__name__)
@@ -82,7 +81,7 @@ class ImageResolutionValidator(BaseValidator):
             ValidationResult containing validation status and messages
         """
         try:
-            data = f"{config.SRC_PATH}/images"
+            data = f"{(self._config or config).SRC_PATH}/images"
             if not PIL_AVAILABLE:
                 return self._create_result(
                     is_valid=False,

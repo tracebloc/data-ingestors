@@ -65,7 +65,7 @@ class FilePairingValidator(BaseValidator):
 
     def validate(self, data: Any, **kwargs) -> ValidationResult:
         try:
-            src = Path(config.SRC_PATH)
+            src = Path((self._config or config).SRC_PATH)
             image_dir = src / self.image_path
             sidecar_dir = src / self.sidecar_path
 
