@@ -87,7 +87,7 @@ class BIOLabelValidator(BaseValidator):
                     errors=[f"Missing required column(s): {', '.join(missing)}"],
                 )
 
-            texts_dir = os.path.join(config.SRC_PATH, self.texts_path)
+            texts_dir = os.path.join((self._config or config).SRC_PATH, self.texts_path)
             errors: List[str] = []
 
             for idx, row in df.iterrows():
@@ -112,7 +112,12 @@ class BIOLabelValidator(BaseValidator):
             )
 
     def _validate_row(
-        self, row: pd.Series, idx: Any, filename_col: str, label_col: str, texts_dir: str
+        self,
+        row: pd.Series,
+        idx: Any,
+        filename_col: str,
+        label_col: str,
+        texts_dir: str,
     ) -> List[str]:
         row_label = f"Row {idx}"
         filename = str(row[filename_col])

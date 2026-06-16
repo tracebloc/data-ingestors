@@ -38,7 +38,19 @@ class DuplicateValidator(BaseValidator):
             name: Human-readable name of the validator
         """
         super().__init__(name)
-        self.dest_path = dest_path or config.DEST_PATH
+        # Store the explicit override only; the config-backed default is
+        # resolved lazily in the ``dest_path`` property so the run's injected
+        # Config (bound by ``map_validators`` AFTER construction, P4b) wins.
+        # Resolving here would snapshot the module-global DEST_PATH before the
+        # bind and ignore the injected value.
+        self._dest_path = dest_path
+
+    @property
+    def dest_path(self) -> str:
+        """Destination directory: explicit override, else the bound Config's
+        ``DEST_PATH`` (falling back to the module-global ``config`` when this
+        validator was constructed outside the registry flow)."""
+        return self._dest_path or (self._config or config).DEST_PATH
 
     def validate(self, data: Any, **kwargs) -> ValidationResult:
         """Validate directory existence.

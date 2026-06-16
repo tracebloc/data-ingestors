@@ -57,7 +57,7 @@ class TokenizerValidator(BaseValidator):
             ValidationResult with status and error details.
         """
         try:
-            tokenizer_path = Path(config.SRC_PATH) / "tokenizer.json"
+            tokenizer_path = Path((self._config or config).SRC_PATH) / "tokenizer.json"
 
             if not tokenizer_path.exists():
                 if self.optional:
