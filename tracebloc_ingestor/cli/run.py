@@ -9,14 +9,12 @@ flow:
        a single multi-line error listing every violation by JSON-pointer
        path. No DB / network I/O happens before validation passes.
     3. Resolve convention defaults via ``conventions.resolve`` (pure).
-    4. Bridge to the legacy env-var path-resolution layer in
-       ``file_transfer.py`` by setting ``SRC_PATH`` / ``TABLE_NAME`` /
-       ``LABEL_FILE`` from the resolved config. Direct refactor of
-       ``file_transfer.py`` to take paths via parameters is a follow-up;
-       env-var injection is the minimal bridge for v1.
-    5. Construct ``Config``, ``Database``, ``APIClient``. ``APIClient``
-       triggers ``Config.validate()`` which fails fast on missing auth
-       (per #43).
+    4. Build the run's ``Config`` from the resolved YAML — ``SRC_PATH`` /
+       ``TABLE_NAME`` / ``LABEL_FILE`` become explicit per-instance overrides
+       (``_resolve_config``), with no ``os.environ`` bridge (P4c).
+    5. Construct ``Database`` and ``APIClient`` with that Config (injected
+       onward to the ingestor, its validators and file transfer). ``APIClient``
+       triggers ``Config.validate()`` which fails fast on missing auth (#43).
     6. Dispatch to ``CSVIngestor`` or ``JSONIngestor`` based on
        ``source_type``.
     7. Run ``ingestor.ingest(source_path, batch_size=...)``.
@@ -56,7 +54,6 @@ from ..ingestors import CSVIngestor, JSONIngestor
 from ..utils.logging import setup_logging
 from .conventions import ResolvedConfig, resolve
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -69,6 +66,7 @@ _SCHEMA_PATH = Path(__file__).resolve().parent.parent / "schema" / "ingest.v1.js
 # ---------------------------------------------------------------------------
 # Public entrypoint
 # ---------------------------------------------------------------------------
+
 
 def main(argv: List[str] | None = None) -> int:  # pragma: no cover - thin shell
     """Entrypoint registered as the ``tracebloc-ingest`` console script.
@@ -102,12 +100,9 @@ def main(argv: List[str] | None = None) -> int:  # pragma: no cover - thin shell
 
     errors = list(_validate(raw_config))
     if errors:
-        return _fail(
-            "ingest.yaml validation failed:\n" + _format_errors(errors)
-        )
+        return _fail("ingest.yaml validation failed:\n" + _format_errors(errors))
 
     resolved = resolve(raw_config)
-    _set_legacy_env_vars(resolved)
 
     if resolved.processor_specs:
         logger.warning(
@@ -136,7 +131,7 @@ def main(argv: List[str] | None = None) -> int:  # pragma: no cover - thin shell
             len(resolved.sidecars),
         )
 
-    config = Config()
+    config = _resolve_config(resolved)
     setup_logging(config)
 
     database = Database(config)
@@ -170,6 +165,7 @@ def main(argv: List[str] | None = None) -> int:  # pragma: no cover - thin shell
 # Validation
 # ---------------------------------------------------------------------------
 
+
 def _load_schema() -> Dict[str, Any]:
     return json.loads(_SCHEMA_PATH.read_text(encoding="utf-8"))
 
@@ -181,7 +177,9 @@ def _validate(raw_config: Dict[str, Any]) -> Iterable[ValidationError]:
     regardless of jsonschema's internal traversal order.
     """
     validator = Draft7Validator(_load_schema())
-    return sorted(validator.iter_errors(raw_config), key=lambda e: list(e.absolute_path))
+    return sorted(
+        validator.iter_errors(raw_config), key=lambda e: list(e.absolute_path)
+    )
 
 
 def _describe_from_schema_path(
@@ -244,59 +242,64 @@ def _format_errors(errors: List[ValidationError]) -> str:
     lines = []
     for e in errors:
         path = ".".join(str(p) for p in e.absolute_path) or "<root>"
-        description = _describe_from_schema_path(
-            schema, list(e.absolute_schema_path)
-        )
+        description = _describe_from_schema_path(schema, list(e.absolute_schema_path))
         if description:
             lines.append(f"  {path}: {description}")
             # Keep the mechanic on a follow-up line for power-user
             # debugging without burying it in the headline.
-            lines.append(
-                f"      (rule: {e.validator}={e.validator_value!r})"
-            )
+            lines.append(f"      (rule: {e.validator}={e.validator_value!r})")
         else:
             lines.append(f"  {path}: {e.message}")
     return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
-# Bridging — the legacy env-var path layer
+# Config resolution — build the run's Config from the resolved ingest.yaml
 # ---------------------------------------------------------------------------
 
-def _set_legacy_env_vars(resolved: ResolvedConfig) -> None:
-    """Bridge the resolved YAML config into the legacy env-var path layer
-    in ``file_transfer.py``.
 
-    The path-resolution layer reads ``SRC_PATH`` / ``TABLE_NAME`` /
-    ``LABEL_FILE`` via :class:`Config`, whose env-driven fields are now
-    lazy properties — they read ``os.environ`` on access. So this
-    function just needs to set the env vars; module-level
-    ``config = Config()`` snapshots scattered across validators and
-    ingestors all pick up the new values at their next attribute read.
+def _resolve_config(resolved: ResolvedConfig) -> Config:
+    """Build the run's :class:`Config` from the resolved ingest.yaml (P4c).
+
+    Replaces the former env-var bridge (``_set_legacy_env_vars``). Instead of
+    writing ``SRC_PATH`` / ``TABLE_NAME`` / ``LABEL_FILE`` into ``os.environ``
+    for a scattering of module-global ``Config()`` instances to read, we build
+    ONE Config with these as explicit per-instance overrides and inject it:
+    ``Database`` -> ``BaseIngestor`` -> validators (``map_validators``, P4b)
+    and file transfer (``map_file_transfer``, P4c). No process-global env
+    mutation, so the path layer is driven by construction, not spooky action
+    through ``os.environ``.
 
     ``SRC_PATH`` is derived from whichever sidecar directory is set, since
-    ``file_transfer.py`` joins ``SRC_PATH/<subfolder>/<filename>`` for each
-    category. The dominant convention is that all sidecar dirs share a
-    parent (``/data/images/``, ``/data/annotations/``, etc.) — for non-
-    standard layouts, customers use ``spec.sidecars[]`` (also deferred).
+    ``file_transfer`` joins ``SRC_PATH/<subfolder>/<filename>`` for each
+    category. The dominant convention is that all sidecar dirs share a parent
+    (``/data/images/``, ``/data/annotations/``, …) — for non-standard layouts,
+    customers use ``spec.sidecars[]`` (deferred). Omitting the ``SRC_PATH``
+    override when no sidecar dir is set preserves the prior behavior exactly
+    (the bridge only set the env var in that case), letting ``Config.SRC_PATH``
+    fall back to its empty default for tabular / time-series categories.
     """
-    src_path = None
+    overrides = {
+        "TABLE_NAME": resolved.table_name,
+        "LABEL_FILE": resolved.source_path,
+    }
     src_path_source = (
-        resolved.images or resolved.texts or resolved.masks
-        or resolved.annotations or resolved.sequences
+        resolved.images
+        or resolved.texts
+        or resolved.masks
+        or resolved.annotations
+        or resolved.sequences
     )
     if src_path_source:
-        src_path = os.path.dirname(src_path_source.rstrip("/"))
+        overrides["SRC_PATH"] = os.path.dirname(src_path_source.rstrip("/"))
 
-    os.environ["TABLE_NAME"] = resolved.table_name
-    os.environ["LABEL_FILE"] = resolved.source_path
-    if src_path:
-        os.environ["SRC_PATH"] = src_path
+    return Config(**overrides)
 
 
 # ---------------------------------------------------------------------------
 # Ingestor dispatch
 # ---------------------------------------------------------------------------
+
 
 def _build_ingestor(
     database: Database,
@@ -345,6 +348,7 @@ def _build_ingestor(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _fail(message: str) -> int:
     """Print to stderr and return non-zero. Logger may not be configured yet

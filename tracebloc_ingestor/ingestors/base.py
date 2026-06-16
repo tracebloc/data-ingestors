@@ -410,9 +410,14 @@ class BaseIngestor(ABC):
             return None
 
     @staticmethod
-    def _check_src_path() -> None:
+    def _check_src_path(config=None) -> None:
         """Fail fast with a clear message when ``config.SRC_PATH`` isn't set
         or doesn't exist (#772 P2).
+
+        ``config`` is the run's resolved Config — ``validate_data`` threads
+        ``self.database.config`` so SRC_PATH comes from the resolved
+        ingest.yaml, not ``os.environ`` (P4c). A ``None`` default keeps the
+        env-reading path for direct callers / tests that monkeypatch env.
 
         Every file-bearing category resolves its per-row sidecars against
         ``config.SRC_PATH`` (file_transfer.py:105 etc.). If the env var
@@ -428,7 +433,7 @@ class BaseIngestor(ABC):
         # import time so unit tests can monkeypatch the env per test.
         from ..config import Config
 
-        src = Config().SRC_PATH
+        src = (config if config is not None else Config()).SRC_PATH
         if not src or not str(src).strip():
             raise RuntimeError(
                 f"{RED}SRC_PATH is empty. Set it to the cluster-PVC path where "
@@ -654,7 +659,7 @@ class BaseIngestor(ABC):
         # the real cause is "SRC_PATH was never staged / set" (#772 P2).
         # File-bearing categories only (tabular has nothing under SRC_PATH).
         if self.category in _FILE_BEARING_CATEGORIES:
-            self._check_src_path()
+            self._check_src_path(self.database.config)
 
         # Pre-flight: a non-UTF-8 CSV otherwise surfaces as a misleading
         # "No data found" (validators read UTF-8 and swallow decode errors).
@@ -850,7 +855,10 @@ class BaseIngestor(ABC):
 
                             if self.category in _FILE_BEARING_CATEGORIES:
                                 processed_record = map_file_transfer(
-                                    self.category, processed_record, self.file_options
+                                    self.category,
+                                    processed_record,
+                                    self.file_options,
+                                    self.database.config,
                                 )
                                 # Skip record if file transfer failed. Tracked as
                                 # `file_transfer_failures` (not `skipped_records`)

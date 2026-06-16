@@ -56,22 +56,33 @@ def make_ingestor(records=None, **overrides):
 # IngestionSummary.has_failures
 # ---------------------------------------------------------------------------
 
+
 def test_summary_clean_run_no_failures():
     s = IngestionSummary("id", 10, 10, 10, 10, 0, 0, 0)
     assert s.has_failures is False
 
 
-@pytest.mark.parametrize("kwargs", [
-    dict(failed_records=1),
-    dict(file_transfer_failures=1),
-    dict(skipped_records=1),        # a record dropped during processing (#234)
-    dict(inserted_records=9),       # < total
-    dict(api_sent_records=9),       # < inserted
-])
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        dict(failed_records=1),
+        dict(file_transfer_failures=1),
+        dict(skipped_records=1),  # a record dropped during processing (#234)
+        dict(inserted_records=9),  # < total
+        dict(api_sent_records=9),  # < inserted
+    ],
+)
 def test_summary_has_failures(kwargs):
-    base = dict(ingestor_id="id", total_records=10, processed_records=10,
-                inserted_records=10, api_sent_records=10, failed_records=0,
-                skipped_records=0, file_transfer_failures=0)
+    base = dict(
+        ingestor_id="id",
+        total_records=10,
+        processed_records=10,
+        inserted_records=10,
+        api_sent_records=10,
+        failed_records=0,
+        skipped_records=0,
+        file_transfer_failures=0,
+    )
     base.update(kwargs)
     assert IngestionSummary(**base).has_failures is True
 
@@ -80,22 +91,30 @@ def test_summary_has_failures(kwargs):
 # __init__ schema cleaning
 # ---------------------------------------------------------------------------
 
+
 def test_init_strips_label_annotation_unique_from_schema():
     ing = make_ingestor(
         schema={"a": "INT", "lbl": "VARCHAR", "ann": "TEXT", "uid": "VARCHAR"},
-        label_column="lbl", annotation_column="ann", unique_id_column="uid",
+        label_column="lbl",
+        annotation_column="ann",
+        unique_id_column="uid",
         category=None,
     )
     # Table creation is deferred until validation passes (#260), so inspect
     # the cleaned schema stashed for later create_table() instead of asserting
     # against a call that hasn't happened yet.
     table_schema = ing._table_schema
-    assert "lbl" not in table_schema and "ann" not in table_schema and "uid" not in table_schema
+    assert (
+        "lbl" not in table_schema
+        and "ann" not in table_schema
+        and "uid" not in table_schema
+    )
     assert "a" in table_schema
 
 
 def test_init_injects_number_of_columns_for_tabular():
     from tracebloc_ingestor.utils.constants import TaskCategory
+
     ing = make_ingestor(
         schema={"a": "INT", "b": "FLOAT"},
         category=TaskCategory.TABULAR_CLASSIFICATION,
@@ -106,6 +125,7 @@ def test_init_injects_number_of_columns_for_tabular():
 # ---------------------------------------------------------------------------
 # process_record / _map_unique_id
 # ---------------------------------------------------------------------------
+
 
 def test_process_record_generates_uuid_data_id():
     ing = make_ingestor(category=None, label_column="a")
@@ -134,6 +154,7 @@ def test_process_record_missing_unique_id_returns_none():
 
 def test_process_record_applies_bucket_label_policy():
     from tracebloc_ingestor.utils.label_policy import BUCKET
+
     ing = make_ingestor(label_column="a", label_policy=BUCKET, category=None)
     rec = ing.process_record({"a": "12345", "filename": "f"})
     # bucket policy hashes the raw value -> not equal to the raw value
@@ -191,13 +212,17 @@ def test_process_record_preserves_none_for_sql_null():
     """
     import numpy as np
 
-    ing = make_ingestor(schema={"a": "VARCHAR(10)", "b": "INT", "c": "VARCHAR(50)"}, category=None)
-    rec = ing.process_record({
-        "a": None,            # explicit Python None
-        "b": np.nan,           # float NaN (e.g. from pd.read_csv)
-        "c": pd.NA,           # pd.NA (e.g. from pandas StringDtype)
-        "filename": "f",
-    })
+    ing = make_ingestor(
+        schema={"a": "VARCHAR(10)", "b": "INT", "c": "VARCHAR(50)"}, category=None
+    )
+    rec = ing.process_record(
+        {
+            "a": None,  # explicit Python None
+            "b": np.nan,  # float NaN (e.g. from pd.read_csv)
+            "c": pd.NA,  # pd.NA (e.g. from pandas StringDtype)
+            "filename": "f",
+        }
+    )
     assert rec is not None
     assert rec["a"] is None, f"expected None, got {rec['a']!r}"
     assert rec["b"] is None, f"expected None, got {rec['b']!r}"
@@ -274,6 +299,7 @@ def test_process_record_preserves_mask_id_for_semantic_segmentation():
     DB column — #212 bugbot — and _process_batch strips it before insert).
     """
     from tracebloc_ingestor.utils.constants import TaskCategory
+
     ing = make_ingestor(
         schema={}, category=TaskCategory.SEMANTIC_SEGMENTATION, label_column=None
     )
@@ -292,19 +318,21 @@ def test_process_record_omits_mask_id_for_non_semseg_categories():
     through would make SQLAlchemy treat it as an unconsumed column at
     insert time (#212 bugbot)."""
     from tracebloc_ingestor.utils.constants import TaskCategory
+
     ing = make_ingestor(
         schema={}, category=TaskCategory.IMAGE_CLASSIFICATION, label_column=None
     )
     rec = ing.process_record({"filename": "image_001", "mask_id": "stray"})
     assert rec is not None
-    assert "mask_id" not in rec, (
-        f"non-semseg category should NOT carry mask_id; got {rec}"
-    )
+    assert (
+        "mask_id" not in rec
+    ), f"non-semseg category should NOT carry mask_id; got {rec}"
 
 
 # ---------------------------------------------------------------------------
 # _process_batch
 # ---------------------------------------------------------------------------
+
 
 def test_process_batch_success():
     ing = make_ingestor()
@@ -349,14 +377,15 @@ def test_process_batch_strips_mask_id_before_insert():
     ing._process_batch(batch, session)
     # The dicts that reached insert_batch must not carry mask_id.
     passed_batch = ing.database.insert_batch.call_args[0][1]
-    assert all("mask_id" not in r for r in passed_batch), (
-        f"mask_id leaked to insert: {passed_batch}"
-    )
+    assert all(
+        "mask_id" not in r for r in passed_batch
+    ), f"mask_id leaked to insert: {passed_batch}"
 
 
 # ---------------------------------------------------------------------------
 # validate_data
 # ---------------------------------------------------------------------------
+
 
 def test_validate_data_no_validators_passes():
     ing = make_ingestor(category=None)
@@ -386,6 +415,7 @@ def test_validate_data_validator_exception_raises():
 # ---------------------------------------------------------------------------
 # ingest (full flow, Session patched)
 # ---------------------------------------------------------------------------
+
 
 def test_init_does_not_create_table_until_validation_passes():
     # REGRESSION GUARD (#260): create_table used to fire inside __init__, so a
@@ -434,11 +464,14 @@ def test_ingest_happy_path():
     ing.api_client.create_dataset.assert_called_once()
 
 
-@pytest.mark.parametrize("failing_step", [
-    "send_generate_edge_label_meta",
-    "send_global_meta_meta",
-    "prepare_dataset",
-])
+@pytest.mark.parametrize(
+    "failing_step",
+    [
+        "send_generate_edge_label_meta",
+        "send_global_meta_meta",
+        "prepare_dataset",
+    ],
+)
 def test_ingest_fails_loud_when_backend_registration_step_fails(failing_step):
     # REGRESSION GUARD: a False return from ANY backend registration step leaves
     # the dataset half-created — rows are committed to MySQL but the dataset is
@@ -464,6 +497,7 @@ def test_ingest_skips_edge_label_call_for_self_supervised_categories():
     only runs for label-carrying categories. The remaining registration
     steps (send_global_meta_meta, prepare_dataset, create_dataset) still run."""
     from tracebloc_ingestor.utils.constants import TaskCategory
+
     records = [{"a": "1", "filename": "f1"}]
     ing = make_ingestor(
         records=records,
@@ -472,9 +506,11 @@ def test_ingest_skips_edge_label_call_for_self_supervised_categories():
     )
     # Patch validate_data + map_file_transfer to skip real-filesystem checks;
     # the gate we're testing lives at the registration block AFTER ingest.
-    with patch.object(base_mod, "Session") as Sess, \
-         patch.object(ing, "validate_data", return_value=True), \
-         patch.object(base_mod, "map_file_transfer", side_effect=lambda c, r, o: r):
+    with patch.object(base_mod, "Session") as Sess, patch.object(
+        ing, "validate_data", return_value=True
+    ), patch.object(
+        base_mod, "map_file_transfer", side_effect=lambda c, r, o, cfg=None: r
+    ):
         Sess.return_value.__enter__.return_value = MagicMock()
         ing.ingest("src", batch_size=10)
     ing.api_client.send_generate_edge_label_meta.assert_not_called()
@@ -487,15 +523,18 @@ def test_ingest_still_calls_edge_label_for_label_carrying_categories():
     """Regression guard for the gate above: a non-self-supervised category
     still calls the edge-label endpoint."""
     from tracebloc_ingestor.utils.constants import TaskCategory
+
     records = [{"a": "1", "filename": "f1"}]
     ing = make_ingestor(
         records=records,
         category=TaskCategory.IMAGE_CLASSIFICATION,
         label_column="a",
     )
-    with patch.object(base_mod, "Session") as Sess, \
-         patch.object(ing, "validate_data", return_value=True), \
-         patch.object(base_mod, "map_file_transfer", side_effect=lambda c, r, o: r):
+    with patch.object(base_mod, "Session") as Sess, patch.object(
+        ing, "validate_data", return_value=True
+    ), patch.object(
+        base_mod, "map_file_transfer", side_effect=lambda c, r, o, cfg=None: r
+    ):
         Sess.return_value.__enter__.return_value = MagicMock()
         ing.ingest("src", batch_size=10)
     ing.api_client.send_generate_edge_label_meta.assert_called_once()
@@ -546,8 +585,9 @@ def test_ingest_keeps_good_records_and_counts_dropped():
         captured["summary"] = summary
         return real_log(self, summary)
 
-    with patch.object(base_mod, "Session") as Sess, \
-         patch.object(BaseIngestor, "_log_summary", spy):
+    with patch.object(base_mod, "Session") as Sess, patch.object(
+        BaseIngestor, "_log_summary", spy
+    ):
         Sess.return_value.__enter__.return_value = MagicMock()
         failed = ing.ingest("src", batch_size=10)
 
@@ -582,6 +622,7 @@ def test_context_manager_protocol():
 # CSV encoding pre-flight (validate_data)
 # ---------------------------------------------------------------------------
 
+
 def test_check_csv_encoding_rejects_non_utf8(tmp_path):
     # A Latin-1 export (German umlauts) used to surface as a misleading
     # "No data found"; now it fails fast with a clear UTF-8 message.
@@ -599,9 +640,9 @@ def test_check_csv_encoding_accepts_utf8(tmp_path):
 
 def test_check_csv_encoding_skips_non_csv_sources(tmp_path):
     # Non-CSV / non-path / missing sources are left to the validators.
-    BaseIngestor._check_csv_encoding(str(tmp_path))                   # a directory
-    BaseIngestor._check_csv_encoding(None)                            # not a path
-    BaseIngestor._check_csv_encoding(str(tmp_path / "missing.csv"))   # nonexistent
+    BaseIngestor._check_csv_encoding(str(tmp_path))  # a directory
+    BaseIngestor._check_csv_encoding(None)  # not a path
+    BaseIngestor._check_csv_encoding(str(tmp_path / "missing.csv"))  # nonexistent
 
 
 def test_check_csv_encoding_rejects_nul_byte(tmp_path):
@@ -618,12 +659,14 @@ def test_check_csv_encoding_rejects_nul_byte(tmp_path):
 # Concurrent-ingest table lock — backend/#772 P2
 # ---------------------------------------------------------------------------
 
+
 def test_acquire_table_lock_creates_lock_file(tmp_path):
     """Lock file is created at STORAGE_PATH/.tracebloc-ingest-<table>.lock
     with metadata (ingestor_id, pid, hostname, started_at) so a holder
     can be identified on conflict."""
     import json
     from tracebloc_ingestor.config import Config as CfgCls
+
     with patch.object(CfgCls, "STORAGE_PATH", str(tmp_path)):
         ing = make_ingestor(table_name="dataset_a", category=None)
         lock_path = ing._acquire_table_lock()
@@ -641,6 +684,7 @@ def test_acquire_table_lock_rejects_concurrent_ingest(tmp_path):
     fails fast with a message naming the holder. Without this guard,
     two ingests would race create_table / interleave upserts (#772 P2)."""
     from tracebloc_ingestor.config import Config as CfgCls
+
     with patch.object(CfgCls, "STORAGE_PATH", str(tmp_path)):
         ing_a = make_ingestor(table_name="dataset_a", category=None)
         path_a = ing_a._acquire_table_lock()
@@ -656,6 +700,7 @@ def test_acquire_table_lock_different_tables_dont_conflict(tmp_path):
     """The lock is keyed by table_name — two different datasets can
     ingest concurrently without blocking each other."""
     from tracebloc_ingestor.config import Config as CfgCls
+
     with patch.object(CfgCls, "STORAGE_PATH", str(tmp_path)):
         ing_a = make_ingestor(table_name="dataset_a", category=None)
         ing_b = make_ingestor(table_name="dataset_b", category=None)
@@ -673,14 +718,13 @@ def test_acquire_table_lock_reclaims_stale_lock(tmp_path):
     import json
     from datetime import datetime, timedelta
     from tracebloc_ingestor.config import Config as CfgCls
+
     with patch.object(CfgCls, "STORAGE_PATH", str(tmp_path)):
         ing = make_ingestor(table_name="dataset_stale", category=None)
         lock_path = ing._table_lock_path()
         old = (datetime.utcnow() - timedelta(days=2)).isoformat() + "Z"
         with open(lock_path, "w") as f:
-            json.dump(
-                {"ingestor_id": "crashed-ingest", "started_at": old}, f
-            )
+            json.dump({"ingestor_id": "crashed-ingest", "started_at": old}, f)
         # Stale lock detected -> removed -> reacquired with the new holder.
         path = ing._acquire_table_lock()
         assert path == lock_path
@@ -693,6 +737,7 @@ def test_acquire_table_lock_noop_when_storage_path_missing(tmp_path):
     """No STORAGE_PATH (e.g. unit tests, local dev) -> the lock is
     skipped. Returns None, _release_table_lock(None) is a no-op."""
     from tracebloc_ingestor.config import Config as CfgCls
+
     missing = str(tmp_path / "never_exists")
     with patch.object(CfgCls, "STORAGE_PATH", missing):
         ing = make_ingestor(table_name="dataset_a", category=None)
@@ -704,6 +749,7 @@ def test_release_table_lock_idempotent(tmp_path):
     """Double-release (e.g. exception path + finally path both call it)
     must not raise."""
     from tracebloc_ingestor.config import Config as CfgCls
+
     with patch.object(CfgCls, "STORAGE_PATH", str(tmp_path)):
         ing = make_ingestor(table_name="dataset_a", category=None)
         path = ing._acquire_table_lock()
@@ -715,6 +761,7 @@ def test_release_table_lock_idempotent(tmp_path):
 # #221 bugbot — lock release on every exit + mtime fallback
 # ---------------------------------------------------------------------------
 
+
 def test_lock_released_when_validate_data_raises(tmp_path):
     """#221 bugbot HIGH: the original code only released the lock on
     validation errors / inner Session except. An exception escaping the
@@ -722,6 +769,7 @@ def test_lock_released_when_validate_data_raises(tmp_path):
     that wasn't caught by the surrounding except) used to leak the lock
     until the stale-cutoff. try/finally now releases on every exit."""
     from tracebloc_ingestor.config import Config as CfgCls
+
     with patch.object(CfgCls, "STORAGE_PATH", str(tmp_path)):
         ing = make_ingestor(records=[], category=None)
         with patch.object(ing, "validate_data", side_effect=RuntimeError("boom")):
@@ -730,9 +778,10 @@ def test_lock_released_when_validate_data_raises(tmp_path):
         lock_path = ing._table_lock_path()
         assert lock_path is not None
         import os as _os
-        assert not _os.path.exists(lock_path), (
-            f"lock leaked at {lock_path} after validate_data raised"
-        )
+
+        assert not _os.path.exists(
+            lock_path
+        ), f"lock leaked at {lock_path} after validate_data raised"
 
 
 def test_lock_released_when_count_records_raises(tmp_path):
@@ -741,13 +790,16 @@ def test_lock_released_when_count_records_raises(tmp_path):
     used to escape without releasing the lock — neither the validation
     except nor the Session except covered it. try/finally fixes it."""
     from tracebloc_ingestor.config import Config as CfgCls
+
     with patch.object(CfgCls, "STORAGE_PATH", str(tmp_path)):
         ing = make_ingestor(records=[], category=None)
-        with patch.object(ing, "validate_data", return_value=True), \
-             patch.object(ing, "_count_records", side_effect=RuntimeError("ouch")):
+        with patch.object(ing, "validate_data", return_value=True), patch.object(
+            ing, "_count_records", side_effect=RuntimeError("ouch")
+        ):
             with pytest.raises(RuntimeError):
                 ing.ingest("src")
         import os as _os
+
         assert not _os.path.exists(ing._table_lock_path()), "lock leaked"
 
 
@@ -759,6 +811,7 @@ def test_acquire_table_lock_recovers_from_corrupt_lock_via_mtime(tmp_path):
     import os as _os
     import json
     from tracebloc_ingestor.config import Config as CfgCls
+
     with patch.object(CfgCls, "STORAGE_PATH", str(tmp_path)):
         ing = make_ingestor(table_name="dataset_corrupt", category=None)
         lock_path = ing._table_lock_path()
@@ -778,6 +831,7 @@ def test_acquire_table_lock_corrupt_but_fresh_blocks(tmp_path):
     the second ingest — we don't auto-clear; the user has to remove it
     manually. Boundary test against the mtime fallback."""
     from tracebloc_ingestor.config import Config as CfgCls
+
     with patch.object(CfgCls, "STORAGE_PATH", str(tmp_path)):
         ing = make_ingestor(table_name="dataset_corrupt", category=None)
         lock_path = ing._table_lock_path()
@@ -790,6 +844,7 @@ def test_acquire_table_lock_corrupt_but_fresh_blocks(tmp_path):
 # ---------------------------------------------------------------------------
 # SRC_PATH pre-flight (validate_data) — #772 P2 / PR #218 (already on develop)
 # ---------------------------------------------------------------------------
+
 
 def test_check_src_path_empty_raises(clean_env):
     # SRC_PATH unset / blank -> N copies of "Source image not found" with no
@@ -834,6 +889,7 @@ def test_check_src_path_only_runs_for_file_bearing_categories():
     working even when SRC_PATH isn't set."""
     from tracebloc_ingestor.utils.constants import TaskCategory
     from tracebloc_ingestor.ingestors.base import _FILE_BEARING_CATEGORIES
+
     for cat in (
         TaskCategory.TABULAR_CLASSIFICATION,
         TaskCategory.TABULAR_REGRESSION,
@@ -859,4 +915,5 @@ def test_check_src_path_required_for_token_classification():
     early staging preflight instead of N file-transfer 'not found' errors."""
     from tracebloc_ingestor.utils.constants import TaskCategory
     from tracebloc_ingestor.ingestors.base import _FILE_BEARING_CATEGORIES
+
     assert TaskCategory.TOKEN_CLASSIFICATION in _FILE_BEARING_CATEGORIES

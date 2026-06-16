@@ -41,9 +41,12 @@ class ModalitySpec:
             set this category runs (P3b). Replaces the corresponding
             ``map_validators`` if/elif arm; the factory bodies live in
             ``modalities/validators.py``.
-        transfer: ``(record, file_options) -> record | None`` — stages this
-            category's per-row sidecar file(s); ``None`` for non-file-bearing
-            (tabular / time-series) categories (P3c). Replaces the
+        transfer: ``(record, file_options, cfg) -> record | None`` — stages
+            this category's per-row sidecar file(s); ``None`` for
+            non-file-bearing (tabular / time-series) categories (P3c). ``cfg``
+            is the run's resolved Config, threaded from ``map_file_transfer``
+            so the copy primitives read SRC_PATH / DEST_PATH from it rather
+            than a module-global ``Config()`` (P4c). Replaces the
             ``map_file_transfer`` if/elif arm; bodies in
             ``modalities/transfer.py``. Invariant: ``transfer is not None``
             iff ``is_file_bearing`` (pinned by tests).
@@ -67,5 +70,5 @@ class ModalitySpec:
     data_format: str
     build_validators: Callable[[Dict[str, Any]], List]
     transfer: Optional[
-        Callable[[Dict[str, Any], Dict[str, Any]], Optional[Dict[str, Any]]]
+        Callable[[Dict[str, Any], Dict[str, Any], Any], Optional[Dict[str, Any]]]
     ] = None

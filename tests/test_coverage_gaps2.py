@@ -14,10 +14,10 @@ from tracebloc_ingestor.ingestors.base import BaseIngestor
 from tracebloc_ingestor.validators.base import ValidationResult
 from tracebloc_ingestor.utils.constants import TaskCategory
 
-
 # ===========================================================================
 # BaseIngestor branches
 # ===========================================================================
+
 
 class FakeIngestor(BaseIngestor):
     def __init__(self, records, **kwargs):
@@ -39,8 +39,14 @@ def make_ingestor(records=None, **overrides):
     api.send_global_meta_meta.return_value = True
     api.prepare_dataset.return_value = True
     api.create_dataset.return_value = {"id": 1}
-    kwargs = dict(database=db, api_client=api, table_name="tbl",
-                  schema={"a": "INT"}, intent="train", category=None)
+    kwargs = dict(
+        database=db,
+        api_client=api,
+        table_name="tbl",
+        schema={"a": "INT"},
+        intent="train",
+        category=None,
+    )
     kwargs.update(overrides)
     return FakeIngestor(records or [], **kwargs)
 
@@ -54,15 +60,17 @@ def test_map_unique_id_warns_on_missing_label_column():
 
 
 def test_process_record_sets_annotation():
-    ing = make_ingestor(schema={"a": "INT", "ann": "TEXT"},
-                        annotation_column="ann", category=None)
+    ing = make_ingestor(
+        schema={"a": "INT", "ann": "TEXT"}, annotation_column="ann", category=None
+    )
     rec = ing.process_record({"a": "1", "ann": "boxdata", "filename": "f"})
     assert rec["annotation"] == "boxdata"
 
 
 def test_process_record_excludes_unique_id_from_payload():
-    ing = make_ingestor(schema={"a": "INT", "uid": "VARCHAR(10)"},
-                        unique_id_column="uid", category=None)
+    ing = make_ingestor(
+        schema={"a": "INT", "uid": "VARCHAR(10)"}, unique_id_column="uid", category=None
+    )
     rec = ing.process_record({"a": "1", "uid": "id7", "filename": "f"})
     assert rec["data_id"] == "id7"
     assert "uid" not in rec
@@ -105,10 +113,11 @@ def test_ingest_image_category_batches_in_loop():
     ing.database.insert_batch.return_value = ([1], [])
     # Bypass the file-bearing-category SRC_PATH preflight (#772 P2) — this
     # test is about batching, not the env-var guard which has its own tests.
-    with patch.object(base_mod, "Session") as Sess, \
-         patch.object(base_mod, "map_file_transfer", side_effect=lambda c, r, o: r), \
-         patch.object(base_mod, "map_validators", return_value=[]), \
-         patch.object(base_mod.BaseIngestor, "_check_src_path", return_value=None):
+    with patch.object(base_mod, "Session") as Sess, patch.object(
+        base_mod, "map_file_transfer", side_effect=lambda c, r, o, cfg=None: r
+    ), patch.object(base_mod, "map_validators", return_value=[]), patch.object(
+        base_mod.BaseIngestor, "_check_src_path", return_value=None
+    ):
         Sess.return_value.__enter__.return_value = MagicMock()
         failed = ing.ingest("src", batch_size=1)
     assert failed == []
@@ -120,8 +129,9 @@ def test_ingest_records_db_failures():
     records = [{"a": "1", "filename": "f1"}]
     ing = make_ingestor(records=records, category=None)
     ing.database.insert_batch.return_value = ([], [{"record": {}, "error": "dup"}])
-    with patch.object(base_mod, "Session") as Sess, \
-         patch.object(base_mod, "map_validators", return_value=[]):
+    with patch.object(base_mod, "Session") as Sess, patch.object(
+        base_mod, "map_validators", return_value=[]
+    ):
         Sess.return_value.__enter__.return_value = MagicMock()
         failed = ing.ingest("src", batch_size=10)
     assert any(f.get("error") == "dup" for f in failed)
@@ -130,9 +140,9 @@ def test_ingest_records_db_failures():
 def test_ingest_processing_error_in_loop():
     records = [{"a": "1", "filename": "f1"}]
     ing = make_ingestor(records=records, category=None)
-    with patch.object(base_mod, "Session") as Sess, \
-         patch.object(base_mod, "map_validators", return_value=[]), \
-         patch.object(ing, "process_record", side_effect=RuntimeError("boom")):
+    with patch.object(base_mod, "Session") as Sess, patch.object(
+        base_mod, "map_validators", return_value=[]
+    ), patch.object(ing, "process_record", side_effect=RuntimeError("boom")):
         Sess.return_value.__enter__.return_value = MagicMock()
         failed = ing.ingest("src", batch_size=10)
     assert len(failed) == 1
@@ -143,19 +153,31 @@ def test_ingest_processing_error_in_loop():
 # CSV / JSON ingestor .ingest() methods + edge branches
 # ===========================================================================
 
+
 def _csv_ingestor(schema=None, **ov):
     from tracebloc_ingestor.ingestors.csv_ingestor import CSVIngestor
-    db = MagicMock(); db.create_table.return_value = MagicMock()
+
+    db = MagicMock()
+    db.create_table.return_value = MagicMock()
     db.insert_batch.return_value = ([1], [])
     db.get_table_schema.return_value = {}
     api = MagicMock()
-    for m in ("send_batch", "send_generate_edge_label_meta",
-              "send_global_meta_meta", "prepare_dataset"):
+    for m in (
+        "send_batch",
+        "send_generate_edge_label_meta",
+        "send_global_meta_meta",
+        "prepare_dataset",
+    ):
         getattr(api, m).return_value = True
     api.create_dataset.return_value = {"id": 1}
-    kw = dict(database=db, api_client=api, table_name="tbl",
-              schema=schema if schema is not None else {"a": "INT"},
-              intent="train", category=None)
+    kw = dict(
+        database=db,
+        api_client=api,
+        table_name="tbl",
+        schema=schema if schema is not None else {"a": "INT"},
+        intent="train",
+        category=None,
+    )
     kw.update(ov)
     return CSVIngestor(**kw)
 
@@ -170,8 +192,9 @@ def test_csv_validate_type_error_raises():
 def test_csv_ingest_method(make_csv):
     path = make_csv({"a": [1, 2]})
     ing = _csv_ingestor(schema={"a": "INT"})
-    with patch.object(base_mod, "Session") as Sess, \
-         patch.object(base_mod, "map_validators", return_value=[]):
+    with patch.object(base_mod, "Session") as Sess, patch.object(
+        base_mod, "map_validators", return_value=[]
+    ):
         Sess.return_value.__enter__.return_value = MagicMock()
         failed = ing.ingest(str(path), batch_size=10)
     assert failed == []
@@ -185,17 +208,28 @@ def test_csv_ingest_method_propagates_error():
 
 def _json_ingestor(schema=None, **ov):
     from tracebloc_ingestor.ingestors.json_ingestor import JSONIngestor
-    db = MagicMock(); db.create_table.return_value = MagicMock()
+
+    db = MagicMock()
+    db.create_table.return_value = MagicMock()
     db.insert_batch.return_value = ([1], [])
     db.get_table_schema.return_value = {}
     api = MagicMock()
-    for m in ("send_batch", "send_generate_edge_label_meta",
-              "send_global_meta_meta", "prepare_dataset"):
+    for m in (
+        "send_batch",
+        "send_generate_edge_label_meta",
+        "send_global_meta_meta",
+        "prepare_dataset",
+    ):
         getattr(api, m).return_value = True
     api.create_dataset.return_value = {"id": 1}
-    kw = dict(database=db, api_client=api, table_name="tbl",
-              schema=schema if schema is not None else {"a": "INT"},
-              intent="train", category=None)
+    kw = dict(
+        database=db,
+        api_client=api,
+        table_name="tbl",
+        schema=schema if schema is not None else {"a": "INT"},
+        intent="train",
+        category=None,
+    )
     kw.update(ov)
     return JSONIngestor(**kw)
 
@@ -224,11 +258,13 @@ def test_json_count_records_scalar_returns_none(tmp_path):
 
 def test_json_ingest_method(tmp_path):
     import json
+
     p = tmp_path / "d.json"
     p.write_text(json.dumps([{"a": 1}, {"a": 2}]))
     ing = _json_ingestor(schema={"a": "INT"})
-    with patch.object(base_mod, "Session") as Sess, \
-         patch.object(base_mod, "map_validators", return_value=[]):
+    with patch.object(base_mod, "Session") as Sess, patch.object(
+        base_mod, "map_validators", return_value=[]
+    ):
         Sess.return_value.__enter__.return_value = MagicMock()
         failed = ing.ingest(str(p), batch_size=10)
     assert failed == []
@@ -246,8 +282,17 @@ def test_json_ingest_method_propagates_error():
 from tracebloc_ingestor.validators.xml_validator import PascalVOCXMLValidator
 
 
-def _obj(name=True, pose=True, truncated="0", difficult="0", bndbox=True,
-         xmin=10, ymin=10, xmax=100, ymax=100):
+def _obj(
+    name=True,
+    pose=True,
+    truncated="0",
+    difficult="0",
+    bndbox=True,
+    xmin=10,
+    ymin=10,
+    xmax=100,
+    ymax=100,
+):
     parts = ["<object>"]
     if name is not None:
         parts.append(f"<name>{'cat' if name else ''}</name>")
@@ -378,8 +423,10 @@ def test_bndbox_missing_coord(v):
         "<object><bndbox><xmin>1</xmin><ymin>1</ymin><xmax>5</xmax></bndbox></object>"
     )
     res = v._validate_bndbox_element(obj, 0)
-    assert any("Missing required 'ymax'" in e or "Missing required bndbox" in e
-               for e in res["errors"])
+    assert any(
+        "Missing required 'ymax'" in e or "Missing required bndbox" in e
+        for e in res["errors"]
+    )
 
 
 def test_bndbox_ymin_ge_ymax(v):

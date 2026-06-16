@@ -121,7 +121,9 @@ def _has_extension(filename: str) -> bool:
     return False
 
 
-def _find_src(subdirectory: str, filename: str, extension: str):
+def _find_src(
+    subdirectory: str, filename: str, extension: str, cfg: Optional[Config] = None
+):
     """Resolve a source file in `SRC_PATH/<subdirectory>/`.
 
     Returns (src_path, filename_with_ext) on success, or
@@ -130,14 +132,19 @@ def _find_src(subdirectory: str, filename: str, extension: str):
     OBJECT_DETECTION and SEMANTIC_SEGMENTATION branches in
     `map_file_transfer`) consistent with what the corresponding
     `*_transfer` function actually copies.
+
+    ``cfg`` is the run's resolved Config, threaded from ``map_file_transfer``
+    (P4c); ``None`` falls back to the module-global ``config`` for direct
+    callers / tests.
     """
+    cfg = cfg or config
     filename_with_ext = (
         filename if _has_extension(filename) else f"{filename}{extension}"
     )
     # _safe_join raises on a traversal/absolute filename (#239); a genuinely
     # missing file still returns None below (skip), so a malicious manifest
     # value is rejected loudly while an absent sidecar is tolerated.
-    candidate = _safe_join(config.SRC_PATH, subdirectory, filename_with_ext)
+    candidate = _safe_join(cfg.SRC_PATH, subdirectory, filename_with_ext)
     if os.path.exists(candidate):
         return candidate, filename_with_ext
     return None, filename_with_ext
@@ -148,6 +155,7 @@ def image_transfer(
     options: Dict[str, Any],
     src_path: str = None,
     filename_with_ext: str = None,
+    cfg: Optional[Config] = None,
 ) -> Optional[Dict[str, Any]]:
     """Copy an image from SRC_PATH/images/ to DEST_PATH/.
 
@@ -162,8 +170,9 @@ def image_transfer(
     pattern: returning the record on a missing source let the DB/API
     write succeed and falsely report 100% success).
     """
+    cfg = cfg or config
     # Create destination directory if it doesn't exist
-    os.makedirs(config.DEST_PATH, exist_ok=True)
+    os.makedirs(cfg.DEST_PATH, exist_ok=True)
 
     try:
         # Get the filename from the record
@@ -174,15 +183,17 @@ def image_transfer(
             return None
 
         if src_path is None:
-            src_path, filename_with_ext = _find_src("images", filename, extension)
+            src_path, filename_with_ext = _find_src(
+                "images", filename, extension, cfg=cfg
+            )
             if src_path is None:
                 logger.error(
-                    f"{RED}Source image not found: {os.path.join(config.SRC_PATH, 'images', filename_with_ext)}{RESET}"
+                    f"{RED}Source image not found: {os.path.join(cfg.SRC_PATH, 'images', filename_with_ext)}{RESET}"
                 )
                 return None
 
         # Save the resized image (write target guarded against escaping DEST — #239)
-        image_dest_path = _safe_join(config.DEST_PATH, filename_with_ext)
+        image_dest_path = _safe_join(cfg.DEST_PATH, filename_with_ext)
         # Copy file with retry logic
         _copy_file_with_retry(src_path, image_dest_path)
 
@@ -209,6 +220,7 @@ def annotation_transfer(
     extension: str,
     src_path: str = None,
     filename_with_ext: str = None,
+    cfg: Optional[Config] = None,
 ) -> Optional[Dict[str, Any]]:
     """Copy an annotation file from SRC_PATH/annotations/ to DEST_PATH/.
 
@@ -218,8 +230,9 @@ def annotation_transfer(
 
     Returns ``None`` on missing source (see issue #99).
     """
+    cfg = cfg or config
     # Create destination directory if it doesn't exist
-    os.makedirs(config.DEST_PATH, exist_ok=True)
+    os.makedirs(cfg.DEST_PATH, exist_ok=True)
 
     try:
         # Get the filename from the record
@@ -229,15 +242,17 @@ def annotation_transfer(
             return None
 
         if src_path is None:
-            src_path, filename_with_ext = _find_src("annotations", filename, extension)
+            src_path, filename_with_ext = _find_src(
+                "annotations", filename, extension, cfg=cfg
+            )
             if src_path is None:
                 logger.error(
-                    f"{RED}Source file not found: {os.path.join(config.SRC_PATH, 'annotations', filename_with_ext)}{RESET}"
+                    f"{RED}Source file not found: {os.path.join(cfg.SRC_PATH, 'annotations', filename_with_ext)}{RESET}"
                 )
                 return None
 
         # Save the file (write target guarded against escaping DEST — #239)
-        file_dest_path = _safe_join(config.DEST_PATH, filename_with_ext)
+        file_dest_path = _safe_join(cfg.DEST_PATH, filename_with_ext)
         # Copy file with retry logic
         _copy_file_with_retry(src_path, file_dest_path)
 
@@ -252,6 +267,7 @@ def text_transfer(
     record: Dict[str, Any],
     options: Dict[str, Any],
     src_subdir: str = "texts",
+    cfg: Optional[Config] = None,
 ) -> Optional[Dict[str, Any]]:
     """Transfer text files for text-based tasks.
 
@@ -265,8 +281,9 @@ def text_transfer(
     Returns:
         Updated record dictionary, or ``None`` on missing source (see issue #99).
     """
+    cfg = cfg or config
     # Create destination directory if it doesn't exist
-    os.makedirs(config.DEST_PATH, exist_ok=True)
+    os.makedirs(cfg.DEST_PATH, exist_ok=True)
 
     try:
         # Get the filename from the record
@@ -284,13 +301,13 @@ def text_transfer(
 
         # Process the text file (both ends guarded against escaping the
         # SRC/DEST sandboxes via a crafted filename — #239)
-        text_src_path = _safe_join(config.SRC_PATH, src_subdir, filename_with_ext)
+        text_src_path = _safe_join(cfg.SRC_PATH, src_subdir, filename_with_ext)
         if not os.path.exists(text_src_path):
             logger.error(f"{RED}Source text file not found: {text_src_path}{RESET}")
             return None
 
         # Save the text file
-        text_dest_path = _safe_join(config.DEST_PATH, filename_with_ext)
+        text_dest_path = _safe_join(cfg.DEST_PATH, filename_with_ext)
         # Copy file with retry logic
         _copy_file_with_retry(text_src_path, text_dest_path)
 
@@ -304,16 +321,18 @@ def text_transfer(
         raise ValueError(f"{RED}Error processing text file: {str(e)}{RESET}")
 
 
-def _find_mask_src(mask_id: str):
+def _find_mask_src(mask_id: str, cfg: Optional[Config] = None):
     """Locate a mask file in SRC_PATH/masks/, trying common image extensions.
 
     Returns (src_path, extension, mask_name) on success, or (None, None, mask_name)
-    if no matching file is found.
+    if no matching file is found. ``cfg`` (P4c) is the run's resolved Config;
+    ``None`` falls back to the module-global ``config``.
     """
+    cfg = cfg or config
     mask_name = mask_id.split(".")[0] if "." in mask_id else mask_id
     for ext in [".png", ".jpg", ".jpeg"]:
         # _safe_join raises on a traversal/absolute mask_id (#239).
-        candidate = _safe_join(config.SRC_PATH, "masks", f"{mask_name}{ext}")
+        candidate = _safe_join(cfg.SRC_PATH, "masks", f"{mask_name}{ext}")
         if os.path.exists(candidate):
             return candidate, ext, mask_name
     return None, None, mask_name
@@ -324,6 +343,7 @@ def mask_transfer(
     mask_src_path: str,
     mask_ext: str,
     mask_name: str,
+    cfg: Optional[Config] = None,
 ) -> Dict[str, Any]:
     """Copy a pre-resolved mask file from SRC_PATH/masks/ to DEST_PATH/.
 
@@ -331,11 +351,12 @@ def mask_transfer(
     passing the resolved path; this keeps the filesystem lookup to a single
     call per record.
     """
-    os.makedirs(config.DEST_PATH, exist_ok=True)
+    cfg = cfg or config
+    os.makedirs(cfg.DEST_PATH, exist_ok=True)
 
     try:
         # Write target guarded against escaping DEST via a crafted mask_id (#239)
-        mask_dest_path = _safe_join(config.DEST_PATH, f"{mask_name}{mask_ext}")
+        mask_dest_path = _safe_join(cfg.DEST_PATH, f"{mask_name}{mask_ext}")
         _copy_file_with_retry(mask_src_path, mask_dest_path)
 
         logger.info(f"{GREEN}Successfully copied mask: {mask_name}{RESET}")
@@ -345,7 +366,7 @@ def mask_transfer(
         raise ValueError(f"{RED}Error processing mask file: {str(e)}{RESET}")
 
 
-def _copy_tokenizer_if_present() -> None:
+def _copy_tokenizer_if_present(cfg: Optional[Config] = None) -> None:
     """Copy a user-shipped ``tokenizer.json`` from SRC_PATH to DEST_PATH (once).
 
     Optional for NLP datasets: the training client looks for
@@ -353,15 +374,19 @@ def _copy_tokenizer_if_present() -> None:
     absent the client falls back to the HuggingFace tokenizer_id / default.
     No-op when no tokenizer.json was shipped, or when it was already copied.
     """
-    tokenizer_src = os.path.join(config.SRC_PATH, "tokenizer.json")
-    tokenizer_dest = os.path.join(config.DEST_PATH, "tokenizer.json")
+    cfg = cfg or config
+    tokenizer_src = os.path.join(cfg.SRC_PATH, "tokenizer.json")
+    tokenizer_dest = os.path.join(cfg.DEST_PATH, "tokenizer.json")
     if os.path.isfile(tokenizer_src) and not os.path.exists(tokenizer_dest):
         _copy_file_with_retry(tokenizer_src, tokenizer_dest)
-        logger.info(f"{GREEN}Copied tokenizer.json to {config.DEST_PATH}{RESET}")
+        logger.info(f"{GREEN}Copied tokenizer.json to {cfg.DEST_PATH}{RESET}")
 
 
 def map_file_transfer(
-    task_category: TaskCategory, record: Dict[str, Any], options: Dict[str, Any]
+    task_category: TaskCategory,
+    record: Dict[str, Any],
+    options: Dict[str, Any],
+    cfg: Optional[Config] = None,
 ) -> Optional[Dict[str, Any]]:
     """Stage a record's per-row sidecar file(s), dispatched by category.
 
@@ -379,6 +404,10 @@ def map_file_transfer(
         task_category: the task category.
         record: the record (filename / data_id / …).
         options: transfer options (extension, …).
+        cfg: the run's resolved Config, threaded to the copy primitives so
+            they read SRC_PATH / DEST_PATH from it instead of a module-global
+            Config() that reads os.environ (P4c). None falls back to that
+            global for direct callers / tests.
 
     Returns:
         The (possibly mutated) record, or None if a required sidecar is missing.
@@ -388,4 +417,4 @@ def map_file_transfer(
     spec = REGISTRY.get(task_category)
     if spec is None or spec.transfer is None:
         return None
-    return spec.transfer(record, options)
+    return spec.transfer(record, options, cfg)

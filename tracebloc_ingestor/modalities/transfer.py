@@ -24,6 +24,7 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, Optional
 
+from ..config import Config
 from ..file_transfer import (
     _copy_tokenizer_if_present,
     _find_mask_src,
@@ -39,86 +40,87 @@ from ..utils.constants import RED, RESET
 
 
 def image_classification(
-    record: Dict[str, Any], options: Dict[str, Any]
+    record: Dict[str, Any], options: Dict[str, Any], cfg: Optional[Config] = None
 ) -> Optional[Dict[str, Any]]:
-    return image_transfer(record, options)
+    return image_transfer(record, options, cfg=cfg)
 
 
 def keypoint_detection(
-    record: Dict[str, Any], options: Dict[str, Any]
+    record: Dict[str, Any], options: Dict[str, Any], cfg: Optional[Config] = None
 ) -> Optional[Dict[str, Any]]:
-    return image_transfer(record, options)
+    return image_transfer(record, options, cfg=cfg)
 
 
 def object_detection(
-    record: Dict[str, Any], options: Dict[str, Any]
+    record: Dict[str, Any], options: Dict[str, Any], cfg: Optional[Config] = None
 ) -> Optional[Dict[str, Any]]:
     # Atomic: only copy image+annotation together. Pre-verify both sources so a
     # missing image (image_transfer returns the record, not None, on missing
     # source) doesn't let annotation_transfer leave an orphan annotation on
     # disk — and vice versa.
+    cfg = cfg or config
     filename = record.get("filename")
     if not filename:
         logger.error(f"{RED}No filename found in record{RESET}")
         return None
     image_src_path, image_filename = _find_src(
-        "images", filename, options.get("extension")
+        "images", filename, options.get("extension"), cfg=cfg
     )
     if image_src_path is None:
         logger.error(
-            f"{RED}Source image not found: {os.path.join(config.SRC_PATH, 'images', image_filename)} — skipping record{RESET}"
+            f"{RED}Source image not found: {os.path.join(cfg.SRC_PATH, 'images', image_filename)} — skipping record{RESET}"
         )
         return None
     annotation_src_path, annotation_filename = _find_src(
-        "annotations", filename, ".xml"
+        "annotations", filename, ".xml", cfg=cfg
     )
     if annotation_src_path is None:
         logger.error(
-            f"{RED}Source annotation not found: {os.path.join(config.SRC_PATH, 'annotations', annotation_filename)} — skipping record{RESET}"
+            f"{RED}Source annotation not found: {os.path.join(cfg.SRC_PATH, 'annotations', annotation_filename)} — skipping record{RESET}"
         )
         return None
-    record = image_transfer(record, options, image_src_path, image_filename)
+    record = image_transfer(record, options, image_src_path, image_filename, cfg=cfg)
     return annotation_transfer(
-        record, options, ".xml", annotation_src_path, annotation_filename
+        record, options, ".xml", annotation_src_path, annotation_filename, cfg=cfg
     )
 
 
 def text_classification(
-    record: Dict[str, Any], options: Dict[str, Any]
+    record: Dict[str, Any], options: Dict[str, Any], cfg: Optional[Config] = None
 ) -> Optional[Dict[str, Any]]:
-    result = text_transfer(record, options)
+    result = text_transfer(record, options, cfg=cfg)
     # Optional: ship a custom tokenizer.json so the client uses it instead of
     # the HF default; absent is fine (handled by the optional validator).
-    _copy_tokenizer_if_present()
+    _copy_tokenizer_if_present(cfg=cfg)
     return result
 
 
 def token_classification(
-    record: Dict[str, Any], options: Dict[str, Any]
+    record: Dict[str, Any], options: Dict[str, Any], cfg: Optional[Config] = None
 ) -> Optional[Dict[str, Any]]:
     # Same on-disk layout as text classification: one .txt per sample in the
     # ``texts`` subdir. BIO tags travel in the labels CSV, not on disk.
-    result = text_transfer(record, options)
+    result = text_transfer(record, options, cfg=cfg)
     # Optional custom tokenizer.json (same as text classification).
-    _copy_tokenizer_if_present()
+    _copy_tokenizer_if_present(cfg=cfg)
     return result
 
 
 def masked_language_modeling(
-    record: Dict[str, Any], options: Dict[str, Any]
+    record: Dict[str, Any], options: Dict[str, Any], cfg: Optional[Config] = None
 ) -> Optional[Dict[str, Any]]:
-    result = text_transfer(record, options, src_subdir="sequences")
+    result = text_transfer(record, options, src_subdir="sequences", cfg=cfg)
     # Copy the user's tokenizer.json so the MLM client uses it instead of
     # falling back to bert-base-uncased (a vocab_size mismatch with the model's
     # nn.Embedding would cause a CUDA device-side assert at training). For MLM
     # the tokenizer is mandatory — its presence and [MASK]/[PAD] tokens are
     # enforced by TokenizerValidator at validation.
-    _copy_tokenizer_if_present()
+    _copy_tokenizer_if_present(cfg=cfg)
     return result
 
 
 def semantic_segmentation(
-    record: Dict[str, Any], options: Dict[str, Any]
+    record: Dict[str, Any], options: Dict[str, Any], cfg: Optional[Config] = None
 ) -> Optional[Dict[str, Any]]:
     # Atomic: only copy image+mask together. Pre-verify both sources before
     # either copy, since image_transfer returns the record (not None) when the
@@ -126,16 +128,17 @@ def semantic_segmentation(
     # still let mask_transfer leave an orphan mask on disk. Both sides resolve
     # their source via shared helpers (`_find_src` / `_find_mask_src`) so the
     # pre-check stays in lockstep with what the copy functions actually look for.
+    cfg = cfg or config
     filename = record.get("filename")
     if not filename:
         logger.error(f"{RED}No filename found in record{RESET}")
         return None
     image_src_path, image_filename = _find_src(
-        "images", filename, options.get("extension")
+        "images", filename, options.get("extension"), cfg=cfg
     )
     if image_src_path is None:
         logger.error(
-            f"{RED}Source image not found: {os.path.join(config.SRC_PATH, 'images', image_filename)} — skipping record{RESET}"
+            f"{RED}Source image not found: {os.path.join(cfg.SRC_PATH, 'images', image_filename)} — skipping record{RESET}"
         )
         return None
 
@@ -143,11 +146,11 @@ def semantic_segmentation(
     if not mask_id:
         logger.error(f"{RED}No mask_id found in record{RESET}")
         return None
-    mask_src_path, mask_ext, mask_name = _find_mask_src(mask_id)
+    mask_src_path, mask_ext, mask_name = _find_mask_src(mask_id, cfg=cfg)
     if mask_src_path is None:
         logger.error(
-            f"{RED}Source mask not found: {mask_name} in {config.SRC_PATH}/masks/ — skipping record{RESET}"
+            f"{RED}Source mask not found: {mask_name} in {cfg.SRC_PATH}/masks/ — skipping record{RESET}"
         )
         return None
-    record = image_transfer(record, options, image_src_path, image_filename)
-    return mask_transfer(record, mask_src_path, mask_ext, mask_name)
+    record = image_transfer(record, options, image_src_path, image_filename, cfg=cfg)
+    return mask_transfer(record, mask_src_path, mask_ext, mask_name, cfg=cfg)
