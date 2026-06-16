@@ -43,7 +43,6 @@ from tracebloc_ingestor.ingestors import base as base_mod
 from tracebloc_ingestor.ingestors.base import BaseIngestor
 from tracebloc_ingestor.utils.constants import TaskCategory
 
-
 # ---------------------------------------------------------------------------
 # helpers (mirror test_batch_send_failure_accounting.py)
 # ---------------------------------------------------------------------------
@@ -65,8 +64,13 @@ _TEMPLATE_CATEGORIES = [
 
 
 def _client(**overrides):
-    defaults = dict(BACKEND_TOKEN="tok", CLIENT_USERNAME=None,
-                    CLIENT_PASSWORD=None, EDGE_ENV="prod", TITLE=None)
+    defaults = dict(
+        BACKEND_TOKEN="tok",
+        CLIENT_USERNAME=None,
+        CLIENT_PASSWORD=None,
+        EDGE_ENV="prod",
+        TITLE=None,
+    )
     defaults.update(overrides)
     return APIClient(Config(**defaults))
 
@@ -125,11 +129,11 @@ def _run_ingest(ing, batch_size=10):
         captured["summary"] = summary
         return real_log(self, summary)
 
-    with patch.object(base_mod, "Session") as Sess, \
-         patch.object(BaseIngestor, "_log_summary", spy), \
-         patch.object(ing, "validate_data", return_value=True), \
-         patch.object(base_mod, "map_file_transfer",
-                      side_effect=lambda c, r, o: r):
+    with patch.object(base_mod, "Session") as Sess, patch.object(
+        BaseIngestor, "_log_summary", spy
+    ), patch.object(ing, "validate_data", return_value=True), patch.object(
+        base_mod, "map_file_transfer", side_effect=lambda c, r, o, cfg=None: r
+    ):
         Sess.return_value.__enter__.return_value = MagicMock()
         failed = ing.ingest("src", batch_size=batch_size)
     return failed, captured.get("summary")
@@ -138,6 +142,7 @@ def _run_ingest(ing, batch_size=10):
 # ---------------------------------------------------------------------------
 # 1. api_send_failed accounting holds for every template category
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.parametrize("category", _TEMPLATE_CATEGORIES)
 def test_api_send_failure_counted_for_every_category(category):
@@ -226,9 +231,7 @@ def test_template_except_handler_reraises(template):
     must still route through run_ingestion either way."""
     main_fn = _main_node(template)
     for handler in _swallowing_handlers(main_fn):
-        has_raise = any(
-            isinstance(stmt, ast.Raise) for stmt in ast.walk(handler)
-        )
+        has_raise = any(isinstance(stmt, ast.Raise) for stmt in ast.walk(handler))
         assert has_raise, (
             f"{template}: exception handler in main() does not re-raise "
             f"— a hard ingest failure would exit 0"
@@ -249,6 +252,7 @@ def test_template_except_handler_reraises(template):
 # ---------------------------------------------------------------------------
 # 3. mid-batch DB failure: only the inserted records are sent to the API
 # ---------------------------------------------------------------------------
+
 
 def test_mid_batch_db_failure_sends_only_inserted_records():
     """3-record batch, middle record fails DB insert. The API send must
@@ -274,9 +278,10 @@ def test_mid_batch_db_failure_sends_only_inserted_records():
     sent = ing.api_client.send_batch.call_args[0][0]
     sent_data_ids = {record["data_id"] for _, record in sent}
     batch = seen["batch"]
-    assert sent_data_ids == {batch[0]["data_id"], batch[2]["data_id"]}, (
-        "API send must carry the records that actually inserted"
-    )
+    assert sent_data_ids == {
+        batch[0]["data_id"],
+        batch[2]["data_id"],
+    }, "API send must carry the records that actually inserted"
     assert len(sent) == 2
     # Accounting unchanged: the DB failure is the only failed record.
     assert [f["error"] for f in failed] == ["dup key"]
@@ -293,7 +298,7 @@ def test_mid_batch_db_failure_sends_only_inserted_records():
 # Well past the old str(e)[:100] cutoff ("HTTP 400: " left ~90 visible chars).
 _DRF_400_BODY = (
     '{"error": ["No data found for table name padding padding padding '
-    'padding padding padding padding to push the explanation well past '
+    "padding padding padding padding to push the explanation well past "
     'the first hundred characters of the message."]}'
 )
 
@@ -319,10 +324,9 @@ _DRF_400_BODY = (
 )
 def test_registration_call_400_logs_status_and_full_error(call, caplog):
     client = _client()
-    with patch.object(client.session, "post",
-                      return_value=_resp(400, text=_DRF_400_BODY)), \
-         patch.object(client.session, "get",
-                      return_value=_resp(400, text=_DRF_400_BODY)):
+    with patch.object(
+        client.session, "post", return_value=_resp(400, text=_DRF_400_BODY)
+    ), patch.object(client.session, "get", return_value=_resp(400, text=_DRF_400_BODY)):
         with caplog.at_level(logging.ERROR, logger="tracebloc_ingestor.api.client"):
             assert call(client) is False
     joined = "\n".join(r.getMessage() for r in caplog.records)
@@ -334,8 +338,9 @@ def test_registration_call_400_logs_status_and_full_error(call, caplog):
 
 def test_create_dataset_400_logs_full_error_and_raises(caplog):
     client = _client()
-    with patch.object(client.session, "post",
-                      return_value=_resp(400, text=_DRF_400_BODY)):
+    with patch.object(
+        client.session, "post", return_value=_resp(400, text=_DRF_400_BODY)
+    ):
         with caplog.at_level(logging.ERROR, logger="tracebloc_ingestor.api.client"):
             with pytest.raises(requests.exceptions.HTTPError):
                 client.create_dataset(
@@ -357,8 +362,9 @@ def test_create_dataset_exception_propagates_out_of_ingest():
         "HTTP 401: token expired"
     )
 
-    with patch.object(base_mod, "Session") as Sess, \
-         patch.object(ing, "validate_data", return_value=True):
+    with patch.object(base_mod, "Session") as Sess, patch.object(
+        ing, "validate_data", return_value=True
+    ):
         Sess.return_value.__enter__.return_value = MagicMock()
         with pytest.raises(requests.exceptions.HTTPError):
             ing.ingest("src", batch_size=10)

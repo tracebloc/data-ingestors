@@ -30,7 +30,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
 EXAMPLES_DIR = REPO_ROOT / "examples" / "yaml"
 
@@ -54,12 +53,17 @@ def mock_runtime():
     """Patch the heavy runtime — Database, APIClient, and Config — at the
     cli.run import boundary. Returns the mock objects so tests can assert
     on calls."""
-    with patch("tracebloc_ingestor.cli.run.Config") as mock_config_cls, \
-         patch("tracebloc_ingestor.cli.run.Database") as mock_db_cls, \
-         patch("tracebloc_ingestor.cli.run.APIClient") as mock_api_cls, \
-         patch("tracebloc_ingestor.cli.run.CSVIngestor") as mock_csv_cls, \
-         patch("tracebloc_ingestor.cli.run.JSONIngestor") as mock_json_cls, \
-         patch("tracebloc_ingestor.cli.run.setup_logging") as mock_setup_logging:
+    with patch("tracebloc_ingestor.cli.run.Config") as mock_config_cls, patch(
+        "tracebloc_ingestor.cli.run.Database"
+    ) as mock_db_cls, patch(
+        "tracebloc_ingestor.cli.run.APIClient"
+    ) as mock_api_cls, patch(
+        "tracebloc_ingestor.cli.run.CSVIngestor"
+    ) as mock_csv_cls, patch(
+        "tracebloc_ingestor.cli.run.JSONIngestor"
+    ) as mock_json_cls, patch(
+        "tracebloc_ingestor.cli.run.setup_logging"
+    ) as mock_setup_logging:
         mock_config = MagicMock()
         mock_config.BATCH_SIZE = 4000
         mock_config_cls.return_value = mock_config
@@ -87,8 +91,10 @@ def mock_runtime():
 # Failure modes — must fail fast, no DB / network calls.
 # ---------------------------------------------------------------------------
 
+
 def test_missing_ingest_config_fails_fast(clean_env, mock_runtime, capsys):
     from tracebloc_ingestor.cli.run import main
+
     rc = main()
     assert rc == 2
     assert "INGEST_CONFIG" in capsys.readouterr().err
@@ -96,28 +102,36 @@ def test_missing_ingest_config_fails_fast(clean_env, mock_runtime, capsys):
     mock_runtime["APIClient"].assert_not_called()
 
 
-def test_nonexistent_ingest_config_fails_fast(clean_env, mock_runtime, monkeypatch, capsys):
+def test_nonexistent_ingest_config_fails_fast(
+    clean_env, mock_runtime, monkeypatch, capsys
+):
     monkeypatch.setenv("INGEST_CONFIG", "/nope/does/not/exist.yaml")
     from tracebloc_ingestor.cli.run import main
+
     rc = main()
     assert rc == 2
     assert "does not exist" in capsys.readouterr().err
     mock_runtime["Database"].assert_not_called()
 
 
-def test_malformed_yaml_fails_fast(clean_env, mock_runtime, monkeypatch, capsys, tmp_path):
+def test_malformed_yaml_fails_fast(
+    clean_env, mock_runtime, monkeypatch, capsys, tmp_path
+):
     bad = tmp_path / "bad.yaml"
     bad.write_text("apiVersion: tracebloc.io/v1\n  kind: ::: invalid", encoding="utf-8")
     monkeypatch.setenv("INGEST_CONFIG", str(bad))
 
     from tracebloc_ingestor.cli.run import main
+
     rc = main()
     assert rc == 2
     assert "not valid YAML" in capsys.readouterr().err
     mock_runtime["Database"].assert_not_called()
 
 
-def test_schema_violation_fails_fast(clean_env, mock_runtime, monkeypatch, capsys, tmp_path):
+def test_schema_violation_fails_fast(
+    clean_env, mock_runtime, monkeypatch, capsys, tmp_path
+):
     """A config that passes YAML parsing but fails schema validation must
     exit before any DB/network call, listing the failures.
 
@@ -141,6 +155,7 @@ def test_schema_violation_fails_fast(clean_env, mock_runtime, monkeypatch, capsy
     monkeypatch.setenv("INGEST_CONFIG", str(bad))
 
     from tracebloc_ingestor.cli.run import main
+
     rc = main()
 
     err = capsys.readouterr().err
@@ -189,6 +204,7 @@ def test_schema_violation_surfaces_description_not_raw_mechanic(
     monkeypatch.setenv("INGEST_CONFIG", str(bad))
 
     from tracebloc_ingestor.cli.run import main
+
     rc = main()
 
     err = capsys.readouterr().err
@@ -256,12 +272,12 @@ def test_describe_from_schema_path_skips_root_description():
 # Happy path — CSV
 # ---------------------------------------------------------------------------
 
+
 def test_csv_happy_path(clean_env, mock_runtime, monkeypatch):
-    monkeypatch.setenv(
-        "INGEST_CONFIG", str(EXAMPLES_DIR / "image_classification.yaml")
-    )
+    monkeypatch.setenv("INGEST_CONFIG", str(EXAMPLES_DIR / "image_classification.yaml"))
 
     from tracebloc_ingestor.cli.run import main
+
     rc = main()
 
     assert rc == 0
@@ -278,10 +294,9 @@ def test_csv_happy_path(clean_env, mock_runtime, monkeypatch):
 
 
 def test_csv_kwargs_match_resolved_config(clean_env, mock_runtime, monkeypatch):
-    monkeypatch.setenv(
-        "INGEST_CONFIG", str(EXAMPLES_DIR / "image_classification.yaml")
-    )
+    monkeypatch.setenv("INGEST_CONFIG", str(EXAMPLES_DIR / "image_classification.yaml"))
     from tracebloc_ingestor.cli.run import main
+
     main()
 
     _, kwargs = mock_runtime["CSVIngestor"].call_args
@@ -302,6 +317,7 @@ def test_csv_kwargs_match_resolved_config(clean_env, mock_runtime, monkeypatch):
 # Happy path — JSON
 # ---------------------------------------------------------------------------
 
+
 def test_json_happy_path(clean_env, mock_runtime, monkeypatch, tmp_path):
     """No JSON example ships in examples/yaml/; build one inline."""
     cfg = tmp_path / "json_config.yaml"
@@ -321,6 +337,7 @@ def test_json_happy_path(clean_env, mock_runtime, monkeypatch, tmp_path):
     monkeypatch.setenv("INGEST_CONFIG", str(cfg))
 
     from tracebloc_ingestor.cli.run import main
+
     rc = main()
 
     assert rc == 0
@@ -356,6 +373,7 @@ def test_json_receives_file_options_for_time_to_event(
     monkeypatch.setenv("INGEST_CONFIG", str(cfg))
 
     from tracebloc_ingestor.cli.run import main
+
     main()
 
     _, kwargs = mock_runtime["JSONIngestor"].call_args
@@ -366,14 +384,14 @@ def test_json_receives_file_options_for_time_to_event(
 # Deferred-feature warning for processors
 # ---------------------------------------------------------------------------
 
+
 def test_processors_trigger_warning_but_run_continues(
     clean_env, mock_runtime, monkeypatch, caplog
 ):
-    monkeypatch.setenv(
-        "INGEST_CONFIG", str(EXAMPLES_DIR / "custom_processor.yaml")
-    )
+    monkeypatch.setenv("INGEST_CONFIG", str(EXAMPLES_DIR / "custom_processor.yaml"))
     with caplog.at_level(logging.WARNING, logger="tracebloc_ingestor.cli.run"):
         from tracebloc_ingestor.cli.run import main
+
         rc = main()
 
     assert rc == 0
@@ -409,6 +427,7 @@ def test_validators_override_triggers_warning(
 
     with caplog.at_level(logging.WARNING, logger="tracebloc_ingestor.cli.run"):
         from tracebloc_ingestor.cli.run import main
+
         rc = main()
 
     assert rc == 0
@@ -440,6 +459,7 @@ def test_sidecars_triggers_warning(
 
     with caplog.at_level(logging.WARNING, logger="tracebloc_ingestor.cli.run"):
         from tracebloc_ingestor.cli.run import main
+
         rc = main()
 
     assert rc == 0
@@ -448,82 +468,66 @@ def test_sidecars_triggers_warning(
 
 
 # ---------------------------------------------------------------------------
-# Legacy env-var bridge
+# Config by construction (P4c — the env-var bridge was removed)
 # ---------------------------------------------------------------------------
 
-def test_legacy_env_vars_set_before_config_construction(
-    clean_env, mock_runtime, monkeypatch
-):
-    """The entrypoint must set SRC_PATH / TABLE_NAME / LABEL_FILE so any
-    downstream code that reads env lazily picks them up."""
-    monkeypatch.setenv(
-        "INGEST_CONFIG", str(EXAMPLES_DIR / "image_classification.yaml")
-    )
 
-    # Capture env state at the moment Config() is invoked.
-    captured_env = {}
-    def _capture_env(*args, **kwargs):
-        captured_env["TABLE_NAME"] = os.environ.get("TABLE_NAME")
-        captured_env["LABEL_FILE"] = os.environ.get("LABEL_FILE")
-        captured_env["SRC_PATH"] = os.environ.get("SRC_PATH")
-        return mock_runtime["Config"].return_value
-
-    mock_runtime["Config"].side_effect = _capture_env
+def test_resolved_config_built_with_overrides(clean_env, mock_runtime, monkeypatch):
+    """P4c: the entrypoint builds ONE Config with the resolved paths as explicit
+    per-instance overrides and injects it into Database (and thus the ingestor
+    / validators / file_transfer) — config by construction, not via env."""
+    monkeypatch.setenv("INGEST_CONFIG", str(EXAMPLES_DIR / "image_classification.yaml"))
 
     from tracebloc_ingestor.cli.run import main
+
     main()
 
-    assert captured_env["TABLE_NAME"] == "chest_xrays_train"
-    assert captured_env["LABEL_FILE"] == "/data/shared/chest-xrays/labels.csv"
-    # SRC_PATH = parent of `images:` dir, since file_transfer.py joins
+    # Config() was constructed with the resolved values as overrides.
+    _, kwargs = mock_runtime["Config"].call_args
+    assert kwargs["TABLE_NAME"] == "chest_xrays_train"
+    assert kwargs["LABEL_FILE"] == "/data/shared/chest-xrays/labels.csv"
+    # SRC_PATH = parent of the `images:` dir, since file_transfer joins
     # SRC_PATH/images/<filename>.
-    assert captured_env["SRC_PATH"] == "/data/shared/chest-xrays"
-
-
-def test_file_transfer_config_reads_env_lazily(clean_env, mock_runtime, monkeypatch):
-    """``file_transfer`` holds a module-level ``config = Config()`` captured
-    at import time, before the entrypoint runs. ``Config``'s env-driven
-    fields are lazy properties, so the bridge just needs to set env vars
-    — the captured instance reads them on next access.
-
-    This test pre-sets env to a stale value, runs the entrypoint (which
-    must overwrite env from the resolved YAML), and verifies the captured
-    ``file_transfer.config`` reflects the post-main env."""
-    monkeypatch.setenv(
-        "INGEST_CONFIG", str(EXAMPLES_DIR / "image_classification.yaml")
+    assert kwargs["SRC_PATH"] == "/data/shared/chest-xrays"
+    # …and that exact Config instance is injected into Database (-> ingestor).
+    mock_runtime["Database"].assert_called_once_with(
+        mock_runtime["Config"].return_value
     )
 
-    from tracebloc_ingestor import file_transfer
 
-    # Pre-poison env so the entrypoint has to overwrite it.
+def test_entrypoint_does_not_mutate_environ(clean_env, mock_runtime, monkeypatch):
+    """The env-var bridge (``_set_legacy_env_vars``) is gone: ``main`` resolves
+    paths into a Config, never into ``os.environ``. Pre-poisoned env stays
+    untouched — no spooky action at a distance through the process
+    environment (P4c). (Previously the bridge overwrote these.)"""
+    monkeypatch.setenv("INGEST_CONFIG", str(EXAMPLES_DIR / "image_classification.yaml"))
+    # Pre-poison: the old bridge would have overwritten these from the YAML.
     monkeypatch.setenv("TABLE_NAME", "STALE_TABLE")
     monkeypatch.setenv("LABEL_FILE", "/stale/labels.csv")
     monkeypatch.setenv("SRC_PATH", "/stale/src")
-    storage_path = file_transfer.config.STORAGE_PATH
 
     from tracebloc_ingestor.cli.run import main
+
     main()
 
-    assert file_transfer.config.TABLE_NAME == "chest_xrays_train"
-    assert file_transfer.config.LABEL_FILE == "/data/shared/chest-xrays/labels.csv"
-    assert file_transfer.config.SRC_PATH == "/data/shared/chest-xrays"
-    # DEST_PATH is derived from STORAGE_PATH/<table> via property — no
-    # in-place patching needed.
-    assert file_transfer.config.DEST_PATH == os.path.join(storage_path, "chest_xrays_train")
+    # main() did not write the resolved paths into os.environ.
+    assert os.environ["TABLE_NAME"] == "STALE_TABLE"
+    assert os.environ["LABEL_FILE"] == "/stale/labels.csv"
+    assert os.environ["SRC_PATH"] == "/stale/src"
 
 
 # ---------------------------------------------------------------------------
 # Failed-records non-zero exit
 # ---------------------------------------------------------------------------
 
+
 def test_failed_records_yield_nonzero_exit(clean_env, mock_runtime, monkeypatch):
-    monkeypatch.setenv(
-        "INGEST_CONFIG", str(EXAMPLES_DIR / "image_classification.yaml")
-    )
+    monkeypatch.setenv("INGEST_CONFIG", str(EXAMPLES_DIR / "image_classification.yaml"))
     csv_instance = mock_runtime["CSVIngestor"].return_value
     csv_instance.ingest.return_value = [{"image_id": "broken"}]  # one failure
 
     from tracebloc_ingestor.cli.run import main
+
     rc = main()
 
     assert rc == 1  # not 0, not 2 (which is reserved for fail-fast)
