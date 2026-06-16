@@ -402,18 +402,23 @@ def _copy_tokenizer_if_present(cfg: Optional[Config] = None) -> Optional[Dict[st
 def get_shipped_tokenizer_metadata(
     cfg: Optional[Config] = None,
 ) -> Optional[Dict[str, Any]]:
-    """Return the structural fingerprint of the ingested ``tokenizer.json``.
+    """Return the structural fingerprint of the staged ``tokenizer.json``.
 
-    Reads the user-shipped ``SRC_PATH/tokenizer.json`` (the file
-    :class:`TokenizerValidator` checked) and returns the 4 structural integers,
-    or ``None`` when no tokenizer was shipped. Called once after ingestion to
+    Reads ``DEST_PATH/tokenizer.json`` — the file the training client actually
+    loads — NOT ``SRC_PATH``. ``_copy_tokenizer_if_present`` copies the source
+    only once (it skips when a DEST copy already exists), so on a re-ingest
+    that ships a changed source the client keeps training on the existing DEST
+    file; fingerprinting DEST keeps the registered metadata matched to what is
+    trained on (else the contributor cross-check at linking would compare
+    against a tokenizer the site never used). Returns the 4 structural integers,
+    or ``None`` when no tokenizer was staged. Called once after ingestion to
     register the fingerprint on the existing global-metadata channel (#805
     Task 2); only these integers cross the cluster boundary. ``cfg`` is the
     run's resolved Config (threaded from the ingestor); ``None`` falls back to
     the module-global ``config``.
     """
     cfg = cfg or config
-    return load_tokenizer_metadata(os.path.join(cfg.SRC_PATH, "tokenizer.json"))
+    return load_tokenizer_metadata(os.path.join(cfg.DEST_PATH, "tokenizer.json"))
 
 
 def map_file_transfer(

@@ -193,9 +193,11 @@ def dirs(tmp_path, monkeypatch):
     return src, storage / "tbl"
 
 
-def test_get_shipped_tokenizer_metadata_reads_src(dirs):
-    src, _ = dirs
-    (src / "tokenizer.json").write_text(json.dumps(_BERT_STYLE))
+def test_get_shipped_tokenizer_metadata_reads_dest(dirs):
+    """Fingerprints the STAGED tokenizer (DEST) — the file the client uses."""
+    _, dest = dirs
+    dest.mkdir(parents=True, exist_ok=True)
+    (dest / "tokenizer.json").write_text(json.dumps(_BERT_STYLE))
     meta = file_transfer.get_shipped_tokenizer_metadata()
     assert meta["vocab_size"] == 7
     assert meta["pad_token_id"] == 0
@@ -203,6 +205,19 @@ def test_get_shipped_tokenizer_metadata_reads_src(dirs):
 
 def test_get_shipped_tokenizer_metadata_none_when_absent(dirs):
     assert file_transfer.get_shipped_tokenizer_metadata() is None
+
+
+def test_get_shipped_fingerprints_dest_not_src(dirs):
+    """On a re-ingest the copy is skipped (DEST already exists), so the client
+    trains on DEST; the registered fingerprint must describe DEST, not a
+    changed SRC (bugbot)."""
+    src, dest = dirs
+    dest.mkdir(parents=True, exist_ok=True)
+    # SRC has a 3-token tokenizer; DEST (already staged) has the 7-token one.
+    (src / "tokenizer.json").write_text(json.dumps(_NO_MASK))
+    (dest / "tokenizer.json").write_text(json.dumps(_BERT_STYLE))
+    meta = file_transfer.get_shipped_tokenizer_metadata()
+    assert meta["vocab_size"] == 7  # DEST, not SRC's 3
 
 
 def test_copy_tokenizer_returns_fingerprint_on_copy(dirs):
