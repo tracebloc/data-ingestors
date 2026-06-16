@@ -424,3 +424,39 @@ def test_refresh_token_false_when_reauth_raises():
     client.token = "old_token"
     with patch.object(client, "authenticate", side_effect=RuntimeError("auth down")):
         assert client._refresh_token() is False
+
+
+# ---------------------------------------------------------------------------
+# send_batch payload contract — the per-record body the backend depends on,
+# including defaults and the misspelled-but-load-bearing `injestor_id` key. A
+# typo/default drift here would silently break registration with green tests.
+# ---------------------------------------------------------------------------
+
+
+def test_send_batch_payload_shape():
+    import json as _json
+
+    client = _client()
+    records = [
+        (1, {"data_id": "a", "data_intent": "test", "label": "cat"}),
+        (2, {"data_id": "b"}),  # exercises the data_intent / label defaults
+    ]
+    with patch.object(client.session, "post", return_value=_resp(200)) as post:
+        assert client.send_batch(records, "tbl", ingestor_id="ing-42") is True
+
+    sent = _json.loads(post.call_args.kwargs["data"])
+    assert sent[0] == {
+        "data_id": "a",
+        "data_intent": "test",
+        "label": "cat",
+        "is_sample": False,
+        "injestor_id": "ing-42",
+    }
+    # Defaults: data_intent -> "train", label -> "".
+    assert sent[1] == {
+        "data_id": "b",
+        "data_intent": "train",
+        "label": "",
+        "is_sample": False,
+        "injestor_id": "ing-42",
+    }
