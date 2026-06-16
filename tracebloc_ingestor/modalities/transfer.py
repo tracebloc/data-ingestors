@@ -12,11 +12,13 @@ The copy primitives (image_transfer, _find_src, _find_mask_src, …) still live
 in file_transfer.py; this module orchestrates them per category exactly as
 before.
 
-NOTE: semantic_segmentation still reads ``mask_id`` off the record here, as
-today. Moving that per-row sidecar pointer off the DB-bound record (the
-cross-layer leak: process_record sets it, this reads it, _process_batch pops
-it) is deferred to P5, where the record/sidecar split happens — it is out of
-scope for this behavior-preserving slice.
+NOTE: semantic_segmentation reads ``mask_id`` off the record here, but that
+pointer is no longer carried on the cleaned DB-bound record (the old
+cross-layer leak: process_record set it, this read it, _process_batch popped
+it). ``map_file_transfer`` now LENDS ``mask_id`` from the raw source record for
+the duration of the copy and strips it before return (P5), so this factory
+still reads ``record.get("mask_id")`` unchanged while the DB record never
+carries it.
 """
 
 from __future__ import annotations

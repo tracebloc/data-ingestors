@@ -119,18 +119,11 @@ class BatchWriter:
             Exception: If batch processing fails
         """
         try:
-            # Strip framework-internal runtime indirections that don't
-            # correspond to a DB column before binding. ``mask_id`` is
-            # carried on semantic_segmentation records purely so
-            # ``file_transfer.map_file_transfer`` can locate the per-row
-            # mask file; the standard tracebloc table has no ``mask_id``
-            # column (see database.py:standard_columns), so leaving it on
-            # the record would cause SQLAlchemy to treat it as an
-            # unconsumed column on insert (#212 bugbot). By the time we
-            # reach this point, file_transfer has already used the value
-            # — it's safe to drop.
-            for r in batch:
-                r.pop("mask_id", None)
+            # The batch carries only DB columns: RecordProcessor never writes
+            # runtime-only sidecar pointers (mask_id) onto the cleaned record,
+            # and map_file_transfer lends + strips them for the copy (P5). So
+            # there's nothing framework-internal to drop before binding — the
+            # former per-record ``mask_id`` pop (#212) is gone with its cause.
             # Insert batch and get IDs
             ids, db_failures = self.database.insert_batch(self.table_name, batch)
             api_success = False

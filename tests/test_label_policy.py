@@ -111,7 +111,6 @@ def _TestIngestor(label_column, label_policy_value, intent="train"):
         annotation_column=None,
         unique_id_column=None,  # → UUID generation
         label_policy=label_policy_value,
-        category=None,
         ingestor_id="test",
     )
 

@@ -231,7 +231,6 @@ class BaseIngestor(ABC):
             annotation_column=self.annotation_column,
             unique_id_column=self.unique_id_column,
             label_policy=self.label_policy,
-            category=self.category,
             ingestor_id=self.ingestor_id,
         )
 
@@ -454,6 +453,10 @@ class BaseIngestor(ABC):
                                     processed_record,
                                     self.file_options,
                                     self.database.config,
+                                    # Raw record carries per-row sidecar
+                                    # pointers (mask_id) that never belong on
+                                    # the cleaned DB record (#212, P5).
+                                    source_record=record,
                                 )
                                 # Skip record if file transfer failed. Tracked as
                                 # `file_transfer_failures` (not `skipped_records`)

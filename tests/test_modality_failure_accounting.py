@@ -132,7 +132,9 @@ def _run_ingest(ing, batch_size=10):
     with patch.object(base_mod, "Session") as Sess, patch.object(
         BaseIngestor, "_log_summary", spy
     ), patch.object(ing, "validate_data", return_value=True), patch.object(
-        base_mod, "map_file_transfer", side_effect=lambda c, r, o, cfg=None: r
+        base_mod,
+        "map_file_transfer",
+        side_effect=lambda c, r, o, cfg=None, source_record=None: r,
     ):
         Sess.return_value.__enter__.return_value = MagicMock()
         failed = ing.ingest("src", batch_size=batch_size)

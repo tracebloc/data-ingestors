@@ -285,19 +285,14 @@ def test_process_record_treats_empty_string_as_null():
     assert rec["b"] is None
 
 
-def test_process_record_preserves_mask_id_for_semantic_segmentation():
-    """Regression: semantic_segmentation onboarding was broken end-to-end.
-
-    With the documented 8-line schema-less example yaml + the shipped CSV
-    (`filename, mask_id, image_label`), the cleaned_record comprehension's
-    `k in self.schema` filter drops every CSV column. The next stage
-    (file_transfer.py:401) does `record.get("mask_id")` and aborts with
-    "No mask_id found in record" — every record skipped, 0 rows ingested
-    even though #207's FilePairingValidator passes.
-
-    mask_id must round-trip from the raw record onto the cleaned dict
-    for SEMANTIC_SEGMENTATION (scoped narrowly because there's no mask_id
-    DB column — #212 bugbot — and _process_batch strips it before insert).
+def test_process_record_does_not_carry_mask_id_on_cleaned_record():
+    """P5: ``mask_id`` is a per-row pointer to a mask FILE, not a table column
+    (there's no mask_id column on the standard table — #212). So process_record
+    must NOT put it on the cleaned, DB-bound record — not even for
+    SEMANTIC_SEGMENTATION. The schema filter drops it and the old semseg re-add
+    is gone; ``map_file_transfer`` now lends mask_id from the RAW source record
+    for the copy (see test_map_file_transfer_lends_then_strips_mask_id), so it
+    never rides the DB record through process -> transfer -> batch.
     """
     from tracebloc_ingestor.utils.constants import TaskCategory
 
@@ -308,8 +303,8 @@ def test_process_record_preserves_mask_id_for_semantic_segmentation():
         {"filename": "image_001", "mask_id": "image_001_mask", "image_label": "road"}
     )
     assert rec is not None
-    assert rec["mask_id"] == "image_001_mask"
     assert rec["filename"] == "image_001"
+    assert "mask_id" not in rec, f"mask_id must not ride the cleaned record; got {rec}"
 
 
 def test_process_record_omits_mask_id_for_non_semseg_categories():
@@ -367,24 +362,45 @@ def test_process_batch_reraises_on_insert_error():
         ing._batch_writer._process([{"data_id": "a"}], MagicMock())
 
 
-def test_process_batch_strips_mask_id_before_insert():
-    # #212 bugbot: mask_id is a SEMANTIC_SEGMENTATION-only runtime
-    # indirection consumed by file_transfer.map_file_transfer; it has no
-    # corresponding DB column, so leaving it on the dict at insert time
-    # makes SQLAlchemy reject the row as an unconsumed column. By the time
-    # we reach insert, file_transfer has already used the value — pop it.
-    ing = make_ingestor()
-    session = MagicMock()
-    batch = [
-        {"data_id": "a", "mask_id": "image_001_mask"},
-        {"data_id": "b", "mask_id": "image_002_mask"},
-    ]
-    ing._batch_writer._process(batch, session)
-    # The dicts that reached insert_batch must not carry mask_id.
-    passed_batch = ing.database.insert_batch.call_args[0][1]
-    assert all(
-        "mask_id" not in r for r in passed_batch
-    ), f"mask_id leaked to insert: {passed_batch}"
+def test_map_file_transfer_lends_then_strips_mask_id(monkeypatch):
+    """P5 (replaces the old _process_batch mask_id pop): the sidecar pointer is
+    now owned by map_file_transfer. It LENDS mask_id from the RAW source record
+    to the transfer (so the copy can locate the mask file) and STRIPS it before
+    return — so it never reaches the DB insert. BatchWriter no longer pops it
+    because the cleaned record never carries it (#212)."""
+    from tracebloc_ingestor import file_transfer
+    from tracebloc_ingestor.modalities.spec import ModalitySpec
+
+    seen = {}
+
+    def spy_transfer(record, options, cfg=None):
+        seen["mask_id_during_transfer"] = record.get("mask_id")
+        return record  # transfer succeeds
+
+    fake_spec = ModalitySpec(
+        category="seg",
+        is_file_bearing=True,
+        is_tabular_family=False,
+        is_self_supervised=False,
+        data_format="image",
+        build_validators=lambda opts: [],
+        transfer=spy_transfer,
+    )
+    monkeypatch.setattr(
+        "tracebloc_ingestor.modalities.registry.REGISTRY", {"seg": fake_spec}
+    )
+
+    cleaned = {"data_id": "a", "filename": "img1"}  # DB-bound: no mask_id
+    result = file_transfer.map_file_transfer(
+        "seg", cleaned, {}, source_record={"filename": "img1", "mask_id": "img1_mask"}
+    )
+
+    # The transfer SAW the lent pointer...
+    assert seen["mask_id_during_transfer"] == "img1_mask"
+    # ...but it's stripped before return (same dict, mutated in place), so it
+    # never reaches insert_batch.
+    assert "mask_id" not in result
+    assert "mask_id" not in cleaned
 
 
 # ---------------------------------------------------------------------------
@@ -514,7 +530,9 @@ def test_ingest_skips_edge_label_call_for_self_supervised_categories():
     with patch.object(base_mod, "Session") as Sess, patch.object(
         ing, "validate_data", return_value=True
     ), patch.object(
-        base_mod, "map_file_transfer", side_effect=lambda c, r, o, cfg=None: r
+        base_mod,
+        "map_file_transfer",
+        side_effect=lambda c, r, o, cfg=None, source_record=None: r,
     ):
         Sess.return_value.__enter__.return_value = MagicMock()
         ing.ingest("src", batch_size=10)
@@ -538,7 +556,9 @@ def test_ingest_still_calls_edge_label_for_label_carrying_categories():
     with patch.object(base_mod, "Session") as Sess, patch.object(
         ing, "validate_data", return_value=True
     ), patch.object(
-        base_mod, "map_file_transfer", side_effect=lambda c, r, o, cfg=None: r
+        base_mod,
+        "map_file_transfer",
+        side_effect=lambda c, r, o, cfg=None, source_record=None: r,
     ):
         Sess.return_value.__enter__.return_value = MagicMock()
         ing.ingest("src", batch_size=10)
