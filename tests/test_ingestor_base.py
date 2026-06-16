@@ -338,7 +338,9 @@ def test_process_record_omits_mask_id_for_non_semseg_categories():
 def test_process_batch_success():
     ing = make_ingestor()
     session = MagicMock()
-    ids, api_success, db_failures = ing._process_batch([{"data_id": "a"}], session)
+    ids, api_success, db_failures = ing._batch_writer._process(
+        [{"data_id": "a"}], session
+    )
     assert ids == [1, 2]
     assert api_success is True
     assert db_failures == []
@@ -348,7 +350,9 @@ def test_process_batch_no_ids_skips_api():
     ing = make_ingestor()
     ing.database.insert_batch.return_value = ([], [{"err": "x"}])
     session = MagicMock()
-    ids, api_success, db_failures = ing._process_batch([{"data_id": "a"}], session)
+    ids, api_success, db_failures = ing._batch_writer._process(
+        [{"data_id": "a"}], session
+    )
     assert ids == []
     assert api_success is False
     ing.api_client.send_batch.assert_not_called()
@@ -360,7 +364,7 @@ def test_process_batch_reraises_on_insert_error():
     err.response = MagicMock(text="detail")
     ing.database.insert_batch.side_effect = err
     with pytest.raises(RuntimeError):
-        ing._process_batch([{"data_id": "a"}], MagicMock())
+        ing._batch_writer._process([{"data_id": "a"}], MagicMock())
 
 
 def test_process_batch_strips_mask_id_before_insert():
@@ -375,7 +379,7 @@ def test_process_batch_strips_mask_id_before_insert():
         {"data_id": "a", "mask_id": "image_001_mask"},
         {"data_id": "b", "mask_id": "image_002_mask"},
     ]
-    ing._process_batch(batch, session)
+    ing._batch_writer._process(batch, session)
     # The dicts that reached insert_batch must not carry mask_id.
     passed_batch = ing.database.insert_batch.call_args[0][1]
     assert all(
