@@ -8,8 +8,9 @@ out-of-bounds IndexError.
 
 import json
 import logging
+import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict, Optional
 
 from .base import BaseValidator, ValidationResult
 from ..config import Config
@@ -17,6 +18,71 @@ from ..config import Config
 config = Config()
 logger = logging.getLogger(__name__)
 logger.setLevel(config.LOG_LEVEL)
+
+
+def _special_token_id(tokenizer_data: dict, token: str) -> Optional[int]:
+    """Resolve a special token's id from a HuggingFace tokenizer JSON.
+
+    Prefers the ``added_tokens`` list (where special tokens carry an explicit
+    id), then falls back to the ``model.vocab`` mapping. Returns ``None`` when
+    the token isn't present — e.g. classification tokenizers have no ``[MASK]``.
+    """
+    for entry in tokenizer_data.get("added_tokens", []) or []:
+        if isinstance(entry, dict) and entry.get("content") == token:
+            return entry.get("id")
+    vocab = (tokenizer_data.get("model") or {}).get("vocab")
+    if isinstance(vocab, dict):
+        return vocab.get(token)
+    return None
+
+
+def extract_tokenizer_metadata(tokenizer_data: dict) -> Dict[str, Any]:
+    """Extract the 4 structural integers that fingerprint a tokenizer (#805).
+
+    These — and only these — cross to the backend on the global-metadata
+    channel so a contributor tokenizer can be cross-checked at dataset
+    linking without ever shipping vocabulary content or a hash (the FL
+    guardrail): the vocabulary of a custom (e.g. clinical / knowledge-graph)
+    tokenizer is data-derived and must not be centrally fingerprinted.
+
+    Returns a dict with:
+      - ``vocab_size``:     number of distinct tokens (``model.vocab`` ∪
+                            ``added_tokens``) — the bound the model's embedding
+                            table must cover; matches ``len(tokenizer)`` and the
+                            SDK's upload-time vocab-fit check.
+      - ``mask_token_id``:  id of ``[MASK]``, or ``None`` (classification has
+                            no ``[MASK]``).
+      - ``pad_token_id``:   id of ``[PAD]``, or ``None``.
+      - ``tokenizer_type``: ``model.type`` (``WordLevel`` / ``WordPiece`` /
+                            ``BPE`` / ``Unigram``), or ``None``.
+    """
+    vocab = TokenizerValidator._extract_vocab(tokenizer_data) or set()
+    model = tokenizer_data.get("model") or {}
+    return {
+        "vocab_size": len(vocab),
+        "mask_token_id": _special_token_id(tokenizer_data, "[MASK]"),
+        "pad_token_id": _special_token_id(tokenizer_data, "[PAD]"),
+        "tokenizer_type": model.get("type"),
+    }
+
+
+def load_tokenizer_metadata(tokenizer_path: str) -> Optional[Dict[str, Any]]:
+    """Read ``tokenizer_path`` and return its structural fingerprint, or ``None``.
+
+    Returns ``None`` (with a warning) when the file is absent or unparseable so
+    callers on the post-ingest registration path never crash an already-committed
+    dataset over a tokenizer read — presence and validity are enforced upstream
+    by :class:`TokenizerValidator` at validation time.
+    """
+    if not os.path.isfile(tokenizer_path):
+        return None
+    try:
+        with open(tokenizer_path, "r", encoding="utf-8") as f:
+            tokenizer_data = json.load(f)
+    except (OSError, ValueError) as e:
+        logger.warning(f"Could not read tokenizer.json at {tokenizer_path}: {e}")
+        return None
+    return extract_tokenizer_metadata(tokenizer_data)
 
 
 class TokenizerValidator(BaseValidator):

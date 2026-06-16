@@ -15,6 +15,7 @@ import pytest
 
 from tracebloc_ingestor.modalities import (
     FILE_BEARING_CATEGORIES,
+    NLP_CATEGORIES,
     REGISTRY,
     SELF_SUPERVISED_CATEGORIES,
     TABULAR_FAMILY_CATEGORIES,
@@ -53,6 +54,17 @@ def test_derived_sets_match_spec_flags():
     }
     assert SELF_SUPERVISED_CATEGORIES == {
         c for c, s in REGISTRY.items() if s.is_self_supervised
+    }
+    assert NLP_CATEGORIES == {c for c, s in REGISTRY.items() if s.is_nlp}
+
+
+def test_nlp_categories_are_the_three_text_categories():
+    """#805 Task 2: the tokenizer-fingerprint set is exactly the NLP text
+    categories (text/token classification + MLM) — never image/tabular."""
+    assert NLP_CATEGORIES == {
+        TaskCategory.TEXT_CLASSIFICATION,
+        TaskCategory.TOKEN_CLASSIFICATION,
+        TaskCategory.MASKED_LANGUAGE_MODELING,
     }
 
 
