@@ -119,11 +119,13 @@ class BatchWriter:
             Exception: If batch processing fails
         """
         try:
-            # The batch carries only DB columns: RecordProcessor never writes
-            # runtime-only sidecar pointers (mask_id) onto the cleaned record,
-            # and map_file_transfer lends + strips them for the copy (P5). So
-            # there's nothing framework-internal to drop before binding — the
-            # former per-record ``mask_id`` pop (#212) is gone with its cause.
+            # The batch carries only DB columns. Runtime-only sidecar pointers
+            # (SIDECAR_KEYS, e.g. mask_id) are kept off the cleaned record by
+            # RecordProcessor — which excludes them even when a template lists
+            # one in its schema — and map_file_transfer strips its whole
+            # SIDECAR_KEYS set after the copy. So there is nothing
+            # framework-internal to drop here before binding; the former
+            # per-record ``mask_id`` pop (#212) is gone with its cause.
             # Insert batch and get IDs
             ids, db_failures = self.database.insert_batch(self.table_name, batch)
             api_success = False
