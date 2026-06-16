@@ -30,11 +30,9 @@ from tracebloc_ingestor.utils.constants import (
     FileExtension,
     TaskCategory,
 )
-from tracebloc_ingestor.utils.logging import setup_logging
 
 # Initialize config and configure logging
 config = Config()
-setup_logging(config)
 logger = logging.getLogger(__name__)
 logger.setLevel(config.LOG_LEVEL)
 
