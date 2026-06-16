@@ -34,11 +34,9 @@ from tenacity import (
     before_sleep_log,
 )
 from .config import Config
-from .utils.logging import setup_logging
 
 # Configure unified logging with config
 config = Config()
-setup_logging(config)
 logger = logging.getLogger(__name__)
 
 

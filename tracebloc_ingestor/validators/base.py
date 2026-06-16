@@ -14,10 +14,8 @@ import logging
 from tqdm import tqdm
 
 from tracebloc_ingestor.config import Config
-from tracebloc_ingestor.utils.logging import setup_logging
 
 config = Config()
-setup_logging(config)
 logger = logging.getLogger(__name__)
 logger.setLevel(config.LOG_LEVEL)
 

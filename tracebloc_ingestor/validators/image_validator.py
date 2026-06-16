@@ -9,7 +9,6 @@ from typing import Any, List, Optional, Tuple
 import logging
 
 from tracebloc_ingestor.config import Config
-from tracebloc_ingestor.utils.logging import setup_logging
 
 try:
     from PIL import Image, UnidentifiedImageError
@@ -25,7 +24,6 @@ from .base import BaseValidator, ValidationResult
 
 # Configure unified logging with config
 config = Config()
-setup_logging(config)
 logger = logging.getLogger(__name__)
 logger.setLevel(config.LOG_LEVEL)
 

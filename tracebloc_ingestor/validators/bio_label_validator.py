@@ -24,10 +24,8 @@ import pandas as pd
 from .base import BaseValidator, ValidationResult
 from ..config import Config
 from ..utils.constants import FileExtension
-from ..utils.logging import setup_logging
 
 config = Config()
-setup_logging(config)
 logger = logging.getLogger(__name__)
 logger.setLevel(config.LOG_LEVEL)
 
