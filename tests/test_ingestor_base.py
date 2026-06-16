@@ -13,6 +13,7 @@ import pandas as pd
 import pytest
 
 from tracebloc_ingestor.ingestors import base as base_mod
+from tracebloc_ingestor.ingestors import preflight
 from tracebloc_ingestor.ingestors.base import BaseIngestor, IngestionSummary
 from tracebloc_ingestor.validators.base import ValidationResult
 
@@ -629,20 +630,20 @@ def test_check_csv_encoding_rejects_non_utf8(tmp_path):
     bad = tmp_path / "umlaut.csv"
     bad.write_bytes("Größe,label\n1,a\n".encode("latin-1"))
     with pytest.raises(ValueError, match="UTF-8"):
-        BaseIngestor._check_csv_encoding(str(bad))
+        preflight.check_csv_encoding(str(bad))
 
 
 def test_check_csv_encoding_accepts_utf8(tmp_path):
     good = tmp_path / "ok.csv"
     good.write_text("Größe,label\n1,a\n", encoding="utf-8")
-    BaseIngestor._check_csv_encoding(str(good))  # must not raise
+    preflight.check_csv_encoding(str(good))  # must not raise
 
 
 def test_check_csv_encoding_skips_non_csv_sources(tmp_path):
     # Non-CSV / non-path / missing sources are left to the validators.
-    BaseIngestor._check_csv_encoding(str(tmp_path))  # a directory
-    BaseIngestor._check_csv_encoding(None)  # not a path
-    BaseIngestor._check_csv_encoding(str(tmp_path / "missing.csv"))  # nonexistent
+    preflight.check_csv_encoding(str(tmp_path))  # a directory
+    preflight.check_csv_encoding(None)  # not a path
+    preflight.check_csv_encoding(str(tmp_path / "missing.csv"))  # nonexistent
 
 
 def test_check_csv_encoding_rejects_nul_byte(tmp_path):
@@ -652,7 +653,7 @@ def test_check_csv_encoding_rejects_nul_byte(tmp_path):
     bad = tmp_path / "nul.csv"
     bad.write_bytes(b"id,name\n1,a\x00b\n2,ok\n")
     with pytest.raises(ValueError, match="NUL byte"):
-        BaseIngestor._check_csv_encoding(str(bad))
+        preflight.check_csv_encoding(str(bad))
 
 
 # ---------------------------------------------------------------------------
@@ -851,14 +852,14 @@ def test_check_src_path_empty_raises(clean_env):
     # actionable cause. Fail fast with the real reason.
     clean_env.setenv("SRC_PATH", "")
     with pytest.raises(RuntimeError, match="SRC_PATH is empty"):
-        BaseIngestor._check_src_path()
+        preflight.check_src_path()
 
 
 def test_check_src_path_unset_raises(clean_env):
     # SRC_PATH not in env at all -> same outcome.
     clean_env.delenv("SRC_PATH", raising=False)
     with pytest.raises(RuntimeError, match="SRC_PATH is empty"):
-        BaseIngestor._check_src_path()
+        preflight.check_src_path()
 
 
 def test_check_src_path_relative_raises(clean_env):
@@ -866,20 +867,20 @@ def test_check_src_path_relative_raises(clean_env):
     # time; the validator surfaces the misconfiguration before that point.
     clean_env.setenv("SRC_PATH", "data/shared")  # not absolute
     with pytest.raises(RuntimeError, match="not an absolute path"):
-        BaseIngestor._check_src_path()
+        preflight.check_src_path()
 
 
 def test_check_src_path_nonexistent_raises(clean_env, tmp_path):
     missing = tmp_path / "never_staged"
     clean_env.setenv("SRC_PATH", str(missing))
     with pytest.raises(RuntimeError, match="does not exist"):
-        BaseIngestor._check_src_path()
+        preflight.check_src_path()
 
 
 def test_check_src_path_accepts_real_directory(clean_env, tmp_path):
     # A properly-staged absolute directory passes — no raise.
     clean_env.setenv("SRC_PATH", str(tmp_path))
-    BaseIngestor._check_src_path()  # must not raise
+    preflight.check_src_path()  # must not raise
 
 
 def test_check_src_path_only_runs_for_file_bearing_categories():
