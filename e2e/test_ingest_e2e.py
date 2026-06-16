@@ -101,14 +101,17 @@ CASES = [
         sequences=str(T / "masked_language_modeling/data/sequences"),
     ), id="masked_language_modeling"),
 
-    # ── known gap (xfail → tracking ticket; XPASS signals the fix landed) ──
+    # semantic_segmentation: now ingests through the declarative path after the
+    # mask sidecar was wired (#136). mask_id is preserved through process_record
+    # (#212) and staged by the semantic_segmentation transfer factory, so the
+    # per-row mask lands in DEST_PATH alongside its image — verified end-to-end
+    # by this case (3 images + 3 masks staged, 3 rows inserted).
     pytest.param(_cfg(
         table="e2e_seg", category="semantic_segmentation",
         csv=str(T / "semantic_segmentation/semantic_data/labels_file_sample.csv"),
         images=str(T / "semantic_segmentation/semantic_data/images"),
         masks=str(T / "semantic_segmentation/semantic_data/masks"), label="image_label",
-    ), id="semantic_segmentation",
-        marks=pytest.mark.xfail(reason="mask sidecar not wired in declarative path (#136)", strict=False)),
+    ), id="semantic_segmentation"),
 ]
 
 

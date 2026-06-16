@@ -23,12 +23,19 @@ The suite **auto-skips when no MySQL is reachable**, so the default `pytest`
 (unit) run is unaffected. CI runs it with a MySQL service in
 `.github/workflows/e2e.yml`.
 
-## Known gaps (currently `xfail`)
+## Known gaps
 
-| Modality | Why | Ticket |
+None — every bundled template currently ingests end-to-end, so the suite has no
+`xfail` cases. The three modalities that were once gaps have all been fixed and
+folded back into the suite as normal cases:
+
+| Modality | Was | Fixed by |
 |---|---|---|
-| object_detection | bundled VisDrone XML uses `difficult=2`; validator only accepts `0/1` | #135 |
-| semantic_segmentation | mask sidecar column not wired through the declarative path | #136 |
+| object_detection | bundled VisDrone XML uses `difficult=2`; validator only accepted `0/1` | #135 |
 | masked_language_modeling | template missing the required `tokenizer.json` | #137 |
+| semantic_segmentation | mask sidecar not wired through the declarative path | #136 |
 
-When a fix lands, the corresponding test XPASSes — drop the `xfail` mark.
+**Convention for future gaps:** add the case with
+`marks=pytest.mark.xfail(reason="…", strict=False)` against its tracking ticket.
+When the fix lands the test XPASSes; that signals the mark can be dropped (turn
+it back into a normal case).
