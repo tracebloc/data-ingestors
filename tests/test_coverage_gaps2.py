@@ -77,8 +77,14 @@ def test_process_record_excludes_unique_id_from_payload():
 
 
 def test_process_record_exception_returns_none():
+    # _map_unique_id moved to RecordProcessor (P5c); process_record delegates
+    # to it, so patch it there to force the exception path.
+    from tracebloc_ingestor.ingestors.record_processor import RecordProcessor
+
     ing = make_ingestor(category=None)
-    with patch.object(ing, "_map_unique_id", side_effect=RuntimeError("boom")):
+    with patch.object(
+        RecordProcessor, "_map_unique_id", side_effect=RuntimeError("boom")
+    ):
         assert ing.process_record({"a": "1"}) is None
 
 
