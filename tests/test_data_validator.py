@@ -253,11 +253,30 @@ def test_unknown_type_fails():
     assert "Unknown data type" in result.errors[0]
 
 
-def test_schema_column_not_in_df_is_ignored():
+def test_schema_column_not_in_df_now_fails():
+    """Issue #289: a schema column absent from the CSV used to pass the
+    DataValidator silently — the read-time check in CSVIngestor caught it
+    later, AFTER ``create_table`` had run, leaving an orphan empty table.
+    The validator now fails fast at preflight so ``create_table`` is never
+    reached and no table is created.
+    """
     df = pd.DataFrame({"a": [1]})
     result = DataValidator(schema={"b": "INT"}).validate(df)
-    # 'b' isn't in df.columns, so nothing is validated -> valid.
-    assert result.is_valid
+    assert not result.is_valid
+    assert any("Schema columns not present in CSV" in e for e in result.errors)
+    assert any("b" in e for e in result.errors)
+
+
+def test_schema_column_missing_lists_all_missing_columns():
+    """When multiple schema columns are absent, all are named in the error so
+    a user can fix the CSV in one pass instead of one column at a time."""
+    df = pd.DataFrame({"present": [1]})
+    result = DataValidator(
+        schema={"present": "INT", "missing1": "INT", "missing2": "FLOAT"}
+    ).validate(df)
+    assert not result.is_valid
+    err = " ".join(result.errors)
+    assert "missing1" in err and "missing2" in err
 
 
 # ---------------------------------------------------------------------------

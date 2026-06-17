@@ -379,6 +379,28 @@ class DataValidator(BaseValidator):
         # returns a new frame, so the caller's DataFrame is untouched.
         df = df.rename(columns=lambda c: str(c).strip())
 
+        # Fail fast when a schema column is absent from the CSV header (#289).
+        # The same check exists at row-read time in CSVIngestor._validate_data_types
+        # but that fires AFTER ``create_table`` has run — leaving an empty
+        # orphaned table behind that the next retry's stale-table guard trips
+        # on (the #260 failure mode, at a different gate). Mirror the
+        # CSVIngestor wording so a user who has previously hit the read-time
+        # version sees the same message at preflight.
+        missing_schema_cols = set(self.schema) - set(df.columns)
+        if missing_schema_cols:
+            return self._create_result(
+                is_valid=False,
+                errors=[
+                    f"Schema columns not present in CSV: "
+                    f"{', '.join(sorted(missing_schema_cols))}."
+                ],
+                metadata={
+                    "schema_columns": list(self.schema.keys()),
+                    "file_columns": list(df.columns),
+                    "missing_schema_columns": sorted(missing_schema_cols),
+                },
+            )
+
         errors = []
         warnings = []
         metadata = {
