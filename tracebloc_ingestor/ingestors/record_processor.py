@@ -11,10 +11,16 @@ Extracted verbatim from ``BaseIngestor.process_record`` / ``_map_unique_id``;
 public ``process_record`` delegates here. The attribute names match the
 ingestor's so the bodies are byte-for-byte unchanged.
 
-NOTE (deferred, P5): ``process`` still writes ``mask_id`` onto the cleaned
-record for ``semantic_segmentation`` — the cross-layer indirection that
-``file_transfer`` reads and ``_process_batch`` pops (#212). Untangling that
-record/sidecar split is a follow-up; this slice preserves behaviour exactly.
+The cleaned record holds the schema-declared DB columns + framework columns.
+``semantic_segmentation``'s ``mask_id`` points at a per-row mask FILE: when the
+template DECLARES it in the schema (``schema={"mask_id": "VARCHAR(255)"}``) it
+is a real column and is KEPT here and stored — the training client reads it
+from MySQL to locate masks (backend#816), so dropping it breaks semseg
+training. When ``mask_id`` is NOT declared it is not a DB column;
+``map_file_transfer`` lends it from the raw source record for the copy and
+strips it (not stored). Either way ``_process_batch`` no longer needs the
+former blanket ``mask_id`` pop (#212) — the cleaned record carries only the
+columns the schema declares.
 """
 
 import logging
@@ -24,7 +30,7 @@ from typing import Any, Dict, Optional
 import pandas as pd
 
 from ..utils import label_policy as label_policy_module
-from ..utils.constants import Intent, TaskCategory
+from ..utils.constants import Intent
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +48,6 @@ class RecordProcessor:
         annotation_column: Optional[str],
         unique_id_column: Optional[str],
         label_policy: Any,
-        category: Any,
         ingestor_id: str,
     ):
         self.schema = schema
@@ -51,7 +56,6 @@ class RecordProcessor:
         self.annotation_column = annotation_column
         self.unique_id_column = unique_id_column
         self.label_policy = label_policy
-        self.category = category
         self.ingestor_id = ingestor_id
 
     def _map_unique_id(
@@ -218,24 +222,14 @@ class RecordProcessor:
             cleaned_record["ingestor_id"] = self.ingestor_id
             cleaned_record["filename"] = record.get("filename")
             cleaned_record["extension"] = record.get("extension")
-            # Preserve mask_id for semantic_segmentation ONLY. The
-            # cleaned_record comprehension above filters by ``k in
-            # self.schema``, but for the documented 8-line schema-less
-            # example yaml that filter drops every CSV column including
-            # mask_id — which file_transfer.py:401 needs to locate the
-            # per-row mask file. Without this, every record was skipped at
-            # file-transfer with "No mask_id found in record" despite
-            # #207's FilePairingValidator pass.
-            #
-            # Scoped to SEMANTIC_SEGMENTATION because mask_id is a runtime
-            # indirection only — there's no `mask_id` column on the
-            # standard tracebloc table (see database.py:standard_columns),
-            # so putting it on every category's cleaned_record would break
-            # SQL inserts on tables that don't have it (#212 bugbot).
-            # _process_batch additionally pops it before insert so even
-            # the semseg path doesn't try to bind it as a column.
-            if self.category == TaskCategory.SEMANTIC_SEGMENTATION:
-                cleaned_record["mask_id"] = record.get("mask_id")
+            # The cleaned record carries ONLY DB columns + framework columns —
+            # no runtime-only sidecar pointers. semantic_segmentation's mask_id
+            # is a per-row pointer to a mask FILE, not a table column (there's no
+            # mask_id column on the standard tracebloc table — #212); it stays on
+            # the RAW source record and is lent to the transfer by
+            # ``map_file_transfer`` for the duration of the copy. So mask_id no
+            # longer rides the DB-bound record through process -> transfer ->
+            # batch (the cross-layer leak this split removes — P5).
             return cleaned_record
 
         except Exception as e:

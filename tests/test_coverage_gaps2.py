@@ -120,7 +120,9 @@ def test_ingest_image_category_batches_in_loop():
     # Bypass the file-bearing-category SRC_PATH preflight (#772 P2) — this
     # test is about batching, not the env-var guard which has its own tests.
     with patch.object(base_mod, "Session") as Sess, patch.object(
-        base_mod, "map_file_transfer", side_effect=lambda c, r, o, cfg=None: r
+        base_mod,
+        "map_file_transfer",
+        side_effect=lambda c, r, o, cfg=None, source_record=None: r,
     ), patch.object(base_mod, "map_validators", return_value=[]), patch.object(
         base_mod.preflight, "check_src_path", return_value=None
     ):

@@ -382,11 +382,20 @@ def _copy_tokenizer_if_present(cfg: Optional[Config] = None) -> None:
         logger.info(f"{GREEN}Copied tokenizer.json to {cfg.DEST_PATH}{RESET}")
 
 
+# Per-row sidecar pointers that live on the RAW source record (not table
+# columns, so never on the cleaned DB-bound record). map_file_transfer lends
+# them to the transfer for the copy, then strips them (#212, P5). Currently
+# just ``mask_id`` (semantic_segmentation); add future runtime-only pointers
+# here.
+_SIDECAR_KEYS = ("mask_id",)
+
+
 def map_file_transfer(
     task_category: TaskCategory,
     record: Dict[str, Any],
     options: Dict[str, Any],
     cfg: Optional[Config] = None,
+    source_record: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
     """Stage a record's per-row sidecar file(s), dispatched by category.
 
@@ -402,12 +411,21 @@ def map_file_transfer(
 
     Args:
         task_category: the task category.
-        record: the record (filename / data_id / …).
+        record: the cleaned, DB-bound record (filename / data_id / …); the
+            transfer mutates its filename/extension to the staged values.
         options: transfer options (extension, …).
         cfg: the run's resolved Config, threaded to the copy primitives so
             they read SRC_PATH / DEST_PATH from it instead of a module-global
             Config() that reads os.environ (P4c). None falls back to that
             global for direct callers / tests.
+        source_record: the RAW source record (pre-cleaning). Used to LEND a
+            per-row sidecar pointer (``mask_id``) to the transfer when it is NOT
+            a declared schema column — so the copy can locate the mask file even
+            though the cleaned ``record`` doesn't carry it; the lent value is
+            stripped before return (not stored). When ``mask_id`` IS a declared
+            column it's already on ``record`` (kept by RecordProcessor and
+            stored for the client — backend#816), so no lend happens. None: the
+            transfer reads any sidecar pointer off ``record`` itself.
 
     Returns:
         The (possibly mutated) record, or None if a required sidecar is missing.
@@ -417,4 +435,21 @@ def map_file_transfer(
     spec = REGISTRY.get(task_category)
     if spec is None or spec.transfer is None:
         return None
-    return spec.transfer(record, options, cfg)
+
+    # Lend the raw record's sidecar pointers to the transfer ONLY when they're
+    # not already on the cleaned record (`key not in record` = not a declared
+    # schema column), then strip exactly what we lent in `finally` so a
+    # transfer-only pointer can't reach the DB insert — even if the transfer
+    # raises or drops the record. A DECLARED mask_id column stays on `record`
+    # and is stored (the client reads it to locate masks; backend#816).
+    lent = []
+    if source_record is not None:
+        for key in _SIDECAR_KEYS:
+            if key in source_record and key not in record:
+                record[key] = source_record[key]
+                lent.append(key)
+    try:
+        return spec.transfer(record, options, cfg)
+    finally:
+        for key in lent:
+            record.pop(key, None)
