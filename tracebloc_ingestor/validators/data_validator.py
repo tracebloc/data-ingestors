@@ -203,6 +203,36 @@ class DataValidator(BaseValidator):
                     ],
                     metadata={"rows_checked": 0},
                 )
+
+            # Fail fast when a schema column is absent from the CSV header (#289).
+            # The same check exists at row-read time in CSVIngestor._validate_data_types
+            # but that fires AFTER ``create_table`` has run, leaving an empty
+            # orphaned table behind that the next retry's stale-table guard
+            # trips on (the #260 failure mode, at a different gate). Mirror
+            # the CSVIngestor wording so a user who has previously hit the
+            # read-time version sees the same message at preflight.
+            #
+            # Scoped to the CSV streaming path on purpose: JSON ingestion is
+            # intentionally permissive about sparse records — JSONIngestor.
+            # _validate_record only warns when a schema field is absent and
+            # proceeds with ingestion. Putting this check on the shared
+            # ``_validate_schema`` would reject JSON inputs the ingestor would
+            # have accepted (bugbot, PR #292).
+            if _stripped:  # only run when the header probe succeeded
+                missing_schema_cols = set(self.schema) - set(_stripped)
+                if missing_schema_cols:
+                    return self._create_result(
+                        is_valid=False,
+                        errors=[
+                            f"Schema columns not present in CSV: "
+                            f"{', '.join(sorted(missing_schema_cols))}."
+                        ],
+                        metadata={
+                            "schema_columns": list(self.schema.keys()),
+                            "file_columns": list(_stripped),
+                            "missing_schema_columns": sorted(missing_schema_cols),
+                        },
+                    )
         except (OSError, UnicodeDecodeError, _csv.Error, TypeError, StopIteration):
             # Header probe failed; let pd.read_csv surface the real error below.
             pass
@@ -378,28 +408,6 @@ class DataValidator(BaseValidator):
         # it passed pre-flight validation only to fail later at ingest. rename()
         # returns a new frame, so the caller's DataFrame is untouched.
         df = df.rename(columns=lambda c: str(c).strip())
-
-        # Fail fast when a schema column is absent from the CSV header (#289).
-        # The same check exists at row-read time in CSVIngestor._validate_data_types
-        # but that fires AFTER ``create_table`` has run — leaving an empty
-        # orphaned table behind that the next retry's stale-table guard trips
-        # on (the #260 failure mode, at a different gate). Mirror the
-        # CSVIngestor wording so a user who has previously hit the read-time
-        # version sees the same message at preflight.
-        missing_schema_cols = set(self.schema) - set(df.columns)
-        if missing_schema_cols:
-            return self._create_result(
-                is_valid=False,
-                errors=[
-                    f"Schema columns not present in CSV: "
-                    f"{', '.join(sorted(missing_schema_cols))}."
-                ],
-                metadata={
-                    "schema_columns": list(self.schema.keys()),
-                    "file_columns": list(df.columns),
-                    "missing_schema_columns": sorted(missing_schema_cols),
-                },
-            )
 
         errors = []
         warnings = []
