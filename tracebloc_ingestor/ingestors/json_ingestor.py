@@ -67,14 +67,6 @@ logger = logging.getLogger(__name__)
 __all__ = ["JSONIngestor"]
 
 
-# Boolean string forms DataValidator._validate_boolean accepts. Keep this list
-# in lockstep with that validator so the JSON per-record check and the CSV
-# preflight agree.
-_VALID_BOOL_STRINGS = {
-    "true", "false", "yes", "no", "y", "n", "t", "f", "1", "0", "1.0", "0.0"
-}
-
-
 def _validate_value_against_dtype(value: Any, dtype_upper: str) -> None:
     """Raise ValueError if ``value`` doesn't fit the declared MySQL dtype.
 
@@ -110,7 +102,7 @@ def _validate_value_against_dtype(value: Any, dtype_upper: str) -> None:
             return
         if isinstance(value, str):
             s = value.strip().lower()
-            if s in _VALID_BOOL_STRINGS:
+            if s in coercion.BOOL_STRINGS:
                 return
             # Numeric-coercible strings ("00", "01", "1.0", "0.0", "1e0", …)
             # that resolve to 0 or 1 are accepted by DataValidator; mirror that.

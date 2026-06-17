@@ -801,13 +801,14 @@ class DataValidator(BaseValidator):
                 # Check which values are valid numeric booleans (0, 1, 0.0, 1.0)
                 numeric_valid = numeric_series.isin([0, 1, 0.0, 1.0])
                 
-                # For non-numeric values, check against valid boolean strings
-                valid_boolean_strings = {
-                    "true", "false", "yes", "no", "y", "n", 
-                    "t", "f", "TRUE", "FALSE", "YES", "NO"
-                }
+                # For non-numeric values, check against the shared boolean
+                # vocabulary (coercion.BOOL_STRINGS) — the same set the CSV
+                # cast and JSON check read, so the layers can't drift. The
+                # digit forms it adds ("1"/"0"/"1.0"/"0.0") are already
+                # covered by numeric_valid above, so membership here is inert
+                # for them; this only supplies the letter forms (true/yes/…).
                 string_lower = string_series.str.lower()
-                string_valid = string_lower.isin(valid_boolean_strings)
+                string_valid = string_lower.isin(coercion.BOOL_STRINGS)
                 
                 # A value is valid if it's either a valid numeric boolean OR a valid boolean string
                 # (NaN from to_numeric means it wasn't numeric, so check string_valid for those)

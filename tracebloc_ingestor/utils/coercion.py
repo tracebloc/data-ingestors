@@ -22,7 +22,7 @@ object series throw outright. Every check here therefore coerces with
 compares or ``isinf``-checks a raw object series.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, FrozenSet, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -31,6 +31,9 @@ __all__ = [
     "INT64_MIN",
     "INT64_MAX",
     "NA_SENTINELS",
+    "BOOL_TRUE_STRINGS",
+    "BOOL_FALSE_STRINGS",
+    "BOOL_STRINGS",
     "build_csv_na_values",
     "int_range_error",
     "int_value_overflows",
@@ -62,6 +65,21 @@ NA_SENTINELS: List[str] = [
     "<NA>",
     "#N/A",
 ]
+
+# Boolean string vocabulary — the textual/numeric tokens that map to a BOOL
+# value. The three layers (CSV cast, JSON per-record check, DataValidator
+# gate) each carried their own copy and drifted on the digit forms (#204);
+# this is the one definition they all read now.
+#
+# Behaviour the layers must keep (NOT changed by centralising the vocabulary):
+#   - the CSV cast maps a token to True/False *only* by membership in these
+#     sets — it has no numeric fallback, so "00" / "1e0" cast to NULL;
+#   - the gate + JSON check additionally accept any string ``pd.to_numeric``
+#     resolves to 0 or 1, a wider set kept at those call sites unchanged.
+# The sets below are the exact-token core all three share.
+BOOL_TRUE_STRINGS: FrozenSet[str] = frozenset({"true", "t", "yes", "y", "1", "1.0"})
+BOOL_FALSE_STRINGS: FrozenSet[str] = frozenset({"false", "f", "no", "n", "0", "0.0"})
+BOOL_STRINGS: FrozenSet[str] = BOOL_TRUE_STRINGS | BOOL_FALSE_STRINGS
 
 # Integer base types — used to decide whether the int64-range check applies
 # (a 1e26 value is a valid FLOAT but an out-of-range INT/BIGINT).

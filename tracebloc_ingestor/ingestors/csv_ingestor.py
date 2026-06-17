@@ -276,8 +276,12 @@ class CSVIngestor(BaseIngestor):
                     # bool-like values" on those strings — a direct contradiction
                     # with the validator, which blesses them, so a CSV with a
                     # yes/no column passed validation then crashed the ingestor.
-                    _truthy = {"true", "t", "yes", "y", "1", "1.0"}
-                    _falsy = {"false", "f", "no", "n", "0", "0.0"}
+                    # Vocabulary lives in coercion (the single source the
+                    # validator gate + JSON check read too) so the layers
+                    # can't drift. No numeric fallback here by design — only
+                    # these exact tokens map to a bool; see coercion.BOOL_*.
+                    _truthy = coercion.BOOL_TRUE_STRINGS
+                    _falsy = coercion.BOOL_FALSE_STRINGS
                     _norm = df[column].astype("string").str.strip().str.lower()
                     df[column] = _norm.map(
                         lambda x: True if x in _truthy
