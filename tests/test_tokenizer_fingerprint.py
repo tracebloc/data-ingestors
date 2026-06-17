@@ -120,6 +120,59 @@ def test_extract_handles_empty_or_unknown_structure():
 
 
 # ---------------------------------------------------------------------------
+# Hardening — adversarial / malformed tokenizer.json (found by fuzzing).
+# Every input must yield the 4 scalar keys and never raise (FL guardrail).
+# ---------------------------------------------------------------------------
+
+_EMPTY = {
+    "vocab_size": 0,
+    "mask_token_id": None,
+    "pad_token_id": None,
+    "tokenizer_type": None,
+}
+
+
+@pytest.mark.parametrize("bad", [[], "x", 42, None, True, [1, 2, 3]])
+def test_extract_non_dict_top_level_is_safe(bad):
+    """A tokenizer.json that is valid JSON but not an object must not crash."""
+    assert extract_tokenizer_metadata(bad) == _EMPTY
+
+
+@pytest.mark.parametrize("model", [None, "wordpiece", 123, [], {"type": {"x": 1}}])
+def test_extract_malformed_model_is_safe(model):
+    """A null / non-dict ``model`` (or a non-string ``model.type``) must not
+    crash and must not leak a non-scalar ``tokenizer_type``."""
+    meta = extract_tokenizer_metadata({"model": model})
+    assert set(meta) == set(_EMPTY)
+    assert meta["tokenizer_type"] is None or isinstance(meta["tokenizer_type"], str)
+
+
+def test_extract_non_int_added_token_id_is_dropped():
+    """A non-int ``id`` (e.g. a nested object) must not become the token id —
+    the FL guardrail allows only scalar integers across the boundary."""
+    data = {
+        "model": {"vocab": {"[PAD]": 0}},
+        "added_tokens": [{"content": "[MASK]", "id": {"x": 1}}],
+    }
+    meta = extract_tokenizer_metadata(data)
+    assert meta["mask_token_id"] is None  # the {"x": 1} id was rejected
+    assert meta["pad_token_id"] == 0  # vocab fallback still works
+
+
+def test_extract_dict_model_type_coerced_to_none():
+    meta = extract_tokenizer_metadata({"model": {"type": {"nested": 1}, "vocab": {}}})
+    assert meta["tokenizer_type"] is None
+
+
+def test_load_valid_json_non_object_returns_none(tmp_path):
+    """A tokenizer.json holding a JSON array/string/number is parseable but
+    not a tokenizer — load must return None, not crash."""
+    p = tmp_path / "tokenizer.json"
+    p.write_text("[1, 2, 3]")
+    assert load_tokenizer_metadata(str(p)) is None
+
+
+# ---------------------------------------------------------------------------
 # _special_token_id
 # ---------------------------------------------------------------------------
 
