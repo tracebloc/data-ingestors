@@ -77,8 +77,14 @@ def test_process_record_excludes_unique_id_from_payload():
 
 
 def test_process_record_exception_returns_none():
+    # _map_unique_id moved to RecordProcessor (P5c); process_record delegates
+    # to it, so patch it there to force the exception path.
+    from tracebloc_ingestor.ingestors.record_processor import RecordProcessor
+
     ing = make_ingestor(category=None)
-    with patch.object(ing, "_map_unique_id", side_effect=RuntimeError("boom")):
+    with patch.object(
+        RecordProcessor, "_map_unique_id", side_effect=RuntimeError("boom")
+    ):
         assert ing.process_record({"a": "1"}) is None
 
 
@@ -114,7 +120,9 @@ def test_ingest_image_category_batches_in_loop():
     # Bypass the file-bearing-category SRC_PATH preflight (#772 P2) — this
     # test is about batching, not the env-var guard which has its own tests.
     with patch.object(base_mod, "Session") as Sess, patch.object(
-        base_mod, "map_file_transfer", side_effect=lambda c, r, o, cfg=None: r
+        base_mod,
+        "map_file_transfer",
+        side_effect=lambda c, r, o, cfg=None, source_record=None: r,
     ), patch.object(base_mod, "map_validators", return_value=[]), patch.object(
         base_mod.preflight, "check_src_path", return_value=None
     ):

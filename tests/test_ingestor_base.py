@@ -285,19 +285,14 @@ def test_process_record_treats_empty_string_as_null():
     assert rec["b"] is None
 
 
-def test_process_record_preserves_mask_id_for_semantic_segmentation():
-    """Regression: semantic_segmentation onboarding was broken end-to-end.
-
-    With the documented 8-line schema-less example yaml + the shipped CSV
-    (`filename, mask_id, image_label`), the cleaned_record comprehension's
-    `k in self.schema` filter drops every CSV column. The next stage
-    (file_transfer.py:401) does `record.get("mask_id")` and aborts with
-    "No mask_id found in record" — every record skipped, 0 rows ingested
-    even though #207's FilePairingValidator passes.
-
-    mask_id must round-trip from the raw record onto the cleaned dict
-    for SEMANTIC_SEGMENTATION (scoped narrowly because there's no mask_id
-    DB column — #212 bugbot — and _process_batch strips it before insert).
+def test_process_record_does_not_carry_mask_id_when_not_in_schema():
+    """When ``mask_id`` is NOT a declared schema column it is not a DB column,
+    so process_record keeps it off the cleaned record (the schema filter drops
+    it; the old semseg re-add is gone). ``map_file_transfer`` then lends it from
+    the RAW source record for the copy (see
+    test_map_file_transfer_lends_then_strips_mask_id). The complementary case —
+    ``mask_id`` DECLARED in the schema (the semseg template) → kept + stored —
+    is test_process_record_stores_mask_id_when_declared_in_schema.
     """
     from tracebloc_ingestor.utils.constants import TaskCategory
 
@@ -308,8 +303,31 @@ def test_process_record_preserves_mask_id_for_semantic_segmentation():
         {"filename": "image_001", "mask_id": "image_001_mask", "image_label": "road"}
     )
     assert rec is not None
-    assert rec["mask_id"] == "image_001_mask"
     assert rec["filename"] == "image_001"
+    assert "mask_id" not in rec, f"mask_id (not in schema) must not be a column; got {rec}"
+
+
+def test_process_record_stores_mask_id_when_declared_in_schema():
+    """Contract with the training client (backend#816): for semantic_segmentation
+    the client SELECTs the dataset row and does ``str(row["mask_id"])`` to locate
+    each mask file — it raises FileNotFoundError if mask_id is missing/NULL. So
+    when the semseg TEMPLATE declares ``mask_id`` in its schema, the ingestor
+    MUST keep it on the cleaned record so it lands in MySQL. (develop popped it →
+    NULL → semseg training crashed; this pins the stored contract that the P5
+    mask_id work restores.)"""
+    from tracebloc_ingestor.utils.constants import TaskCategory
+
+    ing = make_ingestor(
+        schema={"mask_id": "VARCHAR(255)"},
+        category=TaskCategory.SEMANTIC_SEGMENTATION,
+        label_column=None,
+    )
+    rec = ing.process_record({"mask_id": "image_001_mask", "filename": "image_001"})
+    assert rec is not None
+    assert rec["mask_id"] == "image_001_mask", (
+        "mask_id declared in schema must be kept on the cleaned record so it "
+        f"reaches MySQL (the client reads it to locate masks, backend#816); got {rec}"
+    )
 
 
 def test_process_record_omits_mask_id_for_non_semseg_categories():
@@ -338,7 +356,9 @@ def test_process_record_omits_mask_id_for_non_semseg_categories():
 def test_process_batch_success():
     ing = make_ingestor()
     session = MagicMock()
-    ids, api_success, db_failures = ing._process_batch([{"data_id": "a"}], session)
+    ids, api_success, db_failures = ing._batch_writer._process(
+        [{"data_id": "a"}], session
+    )
     assert ids == [1, 2]
     assert api_success is True
     assert db_failures == []
@@ -348,7 +368,9 @@ def test_process_batch_no_ids_skips_api():
     ing = make_ingestor()
     ing.database.insert_batch.return_value = ([], [{"err": "x"}])
     session = MagicMock()
-    ids, api_success, db_failures = ing._process_batch([{"data_id": "a"}], session)
+    ids, api_success, db_failures = ing._batch_writer._process(
+        [{"data_id": "a"}], session
+    )
     assert ids == []
     assert api_success is False
     ing.api_client.send_batch.assert_not_called()
@@ -360,27 +382,48 @@ def test_process_batch_reraises_on_insert_error():
     err.response = MagicMock(text="detail")
     ing.database.insert_batch.side_effect = err
     with pytest.raises(RuntimeError):
-        ing._process_batch([{"data_id": "a"}], MagicMock())
+        ing._batch_writer._process([{"data_id": "a"}], MagicMock())
 
 
-def test_process_batch_strips_mask_id_before_insert():
-    # #212 bugbot: mask_id is a SEMANTIC_SEGMENTATION-only runtime
-    # indirection consumed by file_transfer.map_file_transfer; it has no
-    # corresponding DB column, so leaving it on the dict at insert time
-    # makes SQLAlchemy reject the row as an unconsumed column. By the time
-    # we reach insert, file_transfer has already used the value — pop it.
-    ing = make_ingestor()
-    session = MagicMock()
-    batch = [
-        {"data_id": "a", "mask_id": "image_001_mask"},
-        {"data_id": "b", "mask_id": "image_002_mask"},
-    ]
-    ing._process_batch(batch, session)
-    # The dicts that reached insert_batch must not carry mask_id.
-    passed_batch = ing.database.insert_batch.call_args[0][1]
-    assert all(
-        "mask_id" not in r for r in passed_batch
-    ), f"mask_id leaked to insert: {passed_batch}"
+def test_map_file_transfer_lends_then_strips_mask_id(monkeypatch):
+    """P5 (replaces the old _process_batch mask_id pop): the sidecar pointer is
+    now owned by map_file_transfer. It LENDS mask_id from the RAW source record
+    to the transfer (so the copy can locate the mask file) and STRIPS it before
+    return — so it never reaches the DB insert. BatchWriter no longer pops it
+    because the cleaned record never carries it (#212)."""
+    from tracebloc_ingestor import file_transfer
+    from tracebloc_ingestor.modalities.spec import ModalitySpec
+
+    seen = {}
+
+    def spy_transfer(record, options, cfg=None):
+        seen["mask_id_during_transfer"] = record.get("mask_id")
+        return record  # transfer succeeds
+
+    fake_spec = ModalitySpec(
+        category="seg",
+        is_file_bearing=True,
+        is_tabular_family=False,
+        is_self_supervised=False,
+        data_format="image",
+        build_validators=lambda opts: [],
+        transfer=spy_transfer,
+    )
+    monkeypatch.setattr(
+        "tracebloc_ingestor.modalities.registry.REGISTRY", {"seg": fake_spec}
+    )
+
+    cleaned = {"data_id": "a", "filename": "img1"}  # DB-bound: no mask_id
+    result = file_transfer.map_file_transfer(
+        "seg", cleaned, {}, source_record={"filename": "img1", "mask_id": "img1_mask"}
+    )
+
+    # The transfer SAW the lent pointer...
+    assert seen["mask_id_during_transfer"] == "img1_mask"
+    # ...but it's stripped before return (same dict, mutated in place), so it
+    # never reaches insert_batch.
+    assert "mask_id" not in result
+    assert "mask_id" not in cleaned
 
 
 # ---------------------------------------------------------------------------
@@ -510,7 +553,9 @@ def test_ingest_skips_edge_label_call_for_self_supervised_categories():
     with patch.object(base_mod, "Session") as Sess, patch.object(
         ing, "validate_data", return_value=True
     ), patch.object(
-        base_mod, "map_file_transfer", side_effect=lambda c, r, o, cfg=None: r
+        base_mod,
+        "map_file_transfer",
+        side_effect=lambda c, r, o, cfg=None, source_record=None: r,
     ):
         Sess.return_value.__enter__.return_value = MagicMock()
         ing.ingest("src", batch_size=10)
@@ -534,7 +579,9 @@ def test_ingest_still_calls_edge_label_for_label_carrying_categories():
     with patch.object(base_mod, "Session") as Sess, patch.object(
         ing, "validate_data", return_value=True
     ), patch.object(
-        base_mod, "map_file_transfer", side_effect=lambda c, r, o, cfg=None: r
+        base_mod,
+        "map_file_transfer",
+        side_effect=lambda c, r, o, cfg=None, source_record=None: r,
     ):
         Sess.return_value.__enter__.return_value = MagicMock()
         ing.ingest("src", batch_size=10)
@@ -670,13 +717,13 @@ def test_acquire_table_lock_creates_lock_file(tmp_path):
 
     with patch.object(CfgCls, "STORAGE_PATH", str(tmp_path)):
         ing = make_ingestor(table_name="dataset_a", category=None)
-        lock_path = ing._acquire_table_lock()
+        lock_path = ing._table_lock.acquire()
         assert lock_path is not None
         assert lock_path.endswith(".tracebloc-ingest-dataset_a.lock")
         meta = json.loads(open(lock_path).read())
         assert meta["table_name"] == "dataset_a"
         assert meta["ingestor_id"] == ing.ingestor_id
-        ing._release_table_lock(lock_path)
+        ing._table_lock.release(lock_path)
         assert not __import__("os").path.exists(lock_path)
 
 
@@ -688,13 +735,13 @@ def test_acquire_table_lock_rejects_concurrent_ingest(tmp_path):
 
     with patch.object(CfgCls, "STORAGE_PATH", str(tmp_path)):
         ing_a = make_ingestor(table_name="dataset_a", category=None)
-        path_a = ing_a._acquire_table_lock()
+        path_a = ing_a._table_lock.acquire()
         try:
             ing_b = make_ingestor(table_name="dataset_a", category=None)
             with pytest.raises(RuntimeError, match="already running"):
-                ing_b._acquire_table_lock()
+                ing_b._table_lock.acquire()
         finally:
-            ing_a._release_table_lock(path_a)
+            ing_a._table_lock.release(path_a)
 
 
 def test_acquire_table_lock_different_tables_dont_conflict(tmp_path):
@@ -705,11 +752,11 @@ def test_acquire_table_lock_different_tables_dont_conflict(tmp_path):
     with patch.object(CfgCls, "STORAGE_PATH", str(tmp_path)):
         ing_a = make_ingestor(table_name="dataset_a", category=None)
         ing_b = make_ingestor(table_name="dataset_b", category=None)
-        path_a = ing_a._acquire_table_lock()
-        path_b = ing_b._acquire_table_lock()
+        path_a = ing_a._table_lock.acquire()
+        path_b = ing_b._table_lock.acquire()
         assert path_a != path_b
-        ing_a._release_table_lock(path_a)
-        ing_b._release_table_lock(path_b)
+        ing_a._table_lock.release(path_a)
+        ing_b._table_lock.release(path_b)
 
 
 def test_acquire_table_lock_reclaims_stale_lock(tmp_path):
@@ -722,16 +769,16 @@ def test_acquire_table_lock_reclaims_stale_lock(tmp_path):
 
     with patch.object(CfgCls, "STORAGE_PATH", str(tmp_path)):
         ing = make_ingestor(table_name="dataset_stale", category=None)
-        lock_path = ing._table_lock_path()
+        lock_path = ing._table_lock.path()
         old = (datetime.utcnow() - timedelta(days=2)).isoformat() + "Z"
         with open(lock_path, "w") as f:
             json.dump({"ingestor_id": "crashed-ingest", "started_at": old}, f)
         # Stale lock detected -> removed -> reacquired with the new holder.
-        path = ing._acquire_table_lock()
+        path = ing._table_lock.acquire()
         assert path == lock_path
         meta = json.loads(open(lock_path).read())
         assert meta["ingestor_id"] == ing.ingestor_id
-        ing._release_table_lock(lock_path)
+        ing._table_lock.release(lock_path)
 
 
 def test_acquire_table_lock_noop_when_storage_path_missing(tmp_path):
@@ -742,8 +789,8 @@ def test_acquire_table_lock_noop_when_storage_path_missing(tmp_path):
     missing = str(tmp_path / "never_exists")
     with patch.object(CfgCls, "STORAGE_PATH", missing):
         ing = make_ingestor(table_name="dataset_a", category=None)
-        assert ing._acquire_table_lock() is None
-        ing._release_table_lock(None)  # must not raise
+        assert ing._table_lock.acquire() is None
+        ing._table_lock.release(None)  # must not raise
 
 
 def test_release_table_lock_idempotent(tmp_path):
@@ -753,9 +800,9 @@ def test_release_table_lock_idempotent(tmp_path):
 
     with patch.object(CfgCls, "STORAGE_PATH", str(tmp_path)):
         ing = make_ingestor(table_name="dataset_a", category=None)
-        path = ing._acquire_table_lock()
-        ing._release_table_lock(path)
-        ing._release_table_lock(path)  # idempotent, no raise
+        path = ing._table_lock.acquire()
+        ing._table_lock.release(path)
+        ing._table_lock.release(path)  # idempotent, no raise
 
 
 # ---------------------------------------------------------------------------
@@ -776,7 +823,7 @@ def test_lock_released_when_validate_data_raises(tmp_path):
         with patch.object(ing, "validate_data", side_effect=RuntimeError("boom")):
             with pytest.raises(RuntimeError):
                 ing.ingest("src")
-        lock_path = ing._table_lock_path()
+        lock_path = ing._table_lock.path()
         assert lock_path is not None
         import os as _os
 
@@ -801,7 +848,7 @@ def test_lock_released_when_count_records_raises(tmp_path):
                 ing.ingest("src")
         import os as _os
 
-        assert not _os.path.exists(ing._table_lock_path()), "lock leaked"
+        assert not _os.path.exists(ing._table_lock.path()), "lock leaked"
 
 
 def test_acquire_table_lock_recovers_from_corrupt_lock_via_mtime(tmp_path):
@@ -815,16 +862,16 @@ def test_acquire_table_lock_recovers_from_corrupt_lock_via_mtime(tmp_path):
 
     with patch.object(CfgCls, "STORAGE_PATH", str(tmp_path)):
         ing = make_ingestor(table_name="dataset_corrupt", category=None)
-        lock_path = ing._table_lock_path()
+        lock_path = ing._table_lock.path()
         with open(lock_path, "w"):
             pass  # empty file -> JSON parse fails
         old = _os.path.getmtime(lock_path) - (13 * 3600)  # 13h ago
         _os.utime(lock_path, (old, old))
-        path = ing._acquire_table_lock()
+        path = ing._table_lock.acquire()
         assert path == lock_path
         meta = json.loads(open(lock_path).read())
         assert meta["ingestor_id"] == ing.ingestor_id
-        ing._release_table_lock(lock_path)
+        ing._table_lock.release(lock_path)
 
 
 def test_acquire_table_lock_corrupt_but_fresh_blocks(tmp_path):
@@ -835,11 +882,11 @@ def test_acquire_table_lock_corrupt_but_fresh_blocks(tmp_path):
 
     with patch.object(CfgCls, "STORAGE_PATH", str(tmp_path)):
         ing = make_ingestor(table_name="dataset_corrupt", category=None)
-        lock_path = ing._table_lock_path()
+        lock_path = ing._table_lock.path()
         with open(lock_path, "w"):
             pass  # empty, JSON parse fails, mtime is now (fresh)
         with pytest.raises(RuntimeError, match="already running"):
-            ing._acquire_table_lock()
+            ing._table_lock.acquire()
 
 
 # ---------------------------------------------------------------------------

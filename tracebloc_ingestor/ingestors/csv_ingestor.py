@@ -57,7 +57,7 @@ logger = logging.getLogger(__name__)
 logger.setLevel(config.LOG_LEVEL)
 
 
-__all__ = ["Ingestor"]
+__all__ = ["CSVIngestor"]
 
 
 def _cast_datetime_strict(series: pd.Series, column: str, dtype: str) -> pd.Series:
@@ -119,7 +119,6 @@ class CSVIngestor(BaseIngestor):
         api_client: APIClient,
         table_name: str,
         schema: Dict[str, str] = {},
-        max_retries: int = 3,
         csv_options: Optional[Dict[str, Any]] = None,
         file_options: Optional[Dict[str, Any]] = None,
         unique_id_column: Optional[str] = None,
@@ -137,7 +136,6 @@ class CSVIngestor(BaseIngestor):
             api_client: API client instance for data transmission
             table_name: Name of the target table
             schema: Database schema definition
-            max_retries: Maximum number of retry attempts
             csv_options: Additional options for pandas read_csv
             file_options: Additional options for file processing
             unique_id_column: Name of the column to use as unique identifier
@@ -156,7 +154,6 @@ class CSVIngestor(BaseIngestor):
             api_client,
             table_name,
             schema,
-            max_retries,
             unique_id_column,
             label_column,
             intent,
@@ -276,8 +273,12 @@ class CSVIngestor(BaseIngestor):
                     # bool-like values" on those strings — a direct contradiction
                     # with the validator, which blesses them, so a CSV with a
                     # yes/no column passed validation then crashed the ingestor.
-                    _truthy = {"true", "t", "yes", "y", "1", "1.0"}
-                    _falsy = {"false", "f", "no", "n", "0", "0.0"}
+                    # Vocabulary lives in coercion (the single source the
+                    # validator gate + JSON check read too) so the layers
+                    # can't drift. No numeric fallback here by design — only
+                    # these exact tokens map to a bool; see coercion.BOOL_*.
+                    _truthy = coercion.BOOL_TRUE_STRINGS
+                    _falsy = coercion.BOOL_FALSE_STRINGS
                     _norm = df[column].astype("string").str.strip().str.lower()
                     df[column] = _norm.map(
                         lambda x: True if x in _truthy
@@ -539,7 +540,7 @@ class CSVIngestor(BaseIngestor):
 
             return failed_records
 
-        except Exception as e:
+        except Exception:
             raise
 
     def _count_records(self, file_path: str) -> Optional[int]:

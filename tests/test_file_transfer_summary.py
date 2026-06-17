@@ -276,7 +276,7 @@ def test_ingest_counts_file_transfer_failures_separately(monkeypatch):
     # Force every map_file_transfer call to fail.
     monkeypatch.setattr(
         "tracebloc_ingestor.ingestors.base.map_file_transfer",
-        lambda category, record, options, cfg=None: None,
+        lambda category, record, options, cfg=None, source_record=None: None,
     )
 
     # Replace tqdm with a stub that records update() calls so we can
