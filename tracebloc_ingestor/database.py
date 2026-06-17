@@ -34,6 +34,7 @@ from tenacity import (
     before_sleep_log,
 )
 from .config import Config
+from .identifiers import MAX_COLUMN_IDENTIFIER_LENGTH
 
 # Configure unified logging with config
 config = Config()
@@ -287,7 +288,13 @@ class Database:
         # before CREATE TABLE turns it into a raw MySQL 1059 error. CSV headers are
         # used verbatim as column names, so long proteomics/genomics headers (e.g. a
         # semicolon-joined isoform list) blow the limit; name the offenders clearly.
-        _MAX_IDENTIFIER = 64
+        # The 64-char cap is the only column-name restriction enforced at ingest:
+        # every other shape (digit-leading, '|'/'.'/'-', spaces, unicode, even
+        # backticks) is deliberately accepted and backtick-quoted downstream
+        # (see identifiers.py — the canonical grammar shared with the trainer,
+        # ISSUE #382). MySQL's identifier limit is the one thing quoting can't
+        # rescue, so it stays a hard, actionable failure here.
+        _MAX_IDENTIFIER = MAX_COLUMN_IDENTIFIER_LENGTH
         _too_long = sorted(c for c in schema if len(str(c)) > _MAX_IDENTIFIER)
         if _too_long:
             preview = "; ".join(f"'{c[:40]}…' ({len(c)} chars)" for c in _too_long[:5])
