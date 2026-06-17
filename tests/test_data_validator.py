@@ -253,6 +253,66 @@ def test_unknown_type_fails():
     assert "Unknown data type" in result.errors[0]
 
 
+def test_unknown_type_suggests_closest_match():
+    """Issue #266: when the user types a typo'd type (INTERGER), the
+    DataValidator rejects FIRST — before ``Database._get_sqlalchemy_type``'s
+    suggestion (#264) ever runs. Surface the same hint at this layer."""
+    df = pd.DataFrame({"a": [1]})
+    result = DataValidator(schema={"a": "INTERGER"}).validate(df)
+    assert not result.is_valid
+    err = result.errors[0]
+    assert "Did you mean 'INTEGER'" in err
+    assert "Supported types" in err
+
+
+def test_unknown_type_no_suggestion_for_distant_input():
+    """A genuinely off-vocabulary type (no close match) gets the supported-types
+    list but no "Did you mean" hint — otherwise we'd surface noisy guesses."""
+    df = pd.DataFrame({"a": [1]})
+    result = DataValidator(schema={"a": "QUATERNION"}).validate(df)
+    assert not result.is_valid
+    err = result.errors[0]
+    assert "Did you mean" not in err
+    assert "Supported types" in err
+
+
+@pytest.mark.parametrize("dbtype", ["TINYINT", "SMALLINT", "MEDIUMINT", "BIGINT"])
+def test_integer_variants_pass_preflight(dbtype):
+    """Bugbot #293: TINYINT/SMALLINT/MEDIUMINT are accepted by
+    ``Database._get_sqlalchemy_type`` (all map to Integer) but were missing
+    from the validator's ``type_validators`` — preflight rejected them as
+    "Unknown data type" before ingestion even ran. BIGINT was already
+    covered; the rest now share the same per-value INT check."""
+    df = pd.DataFrame({"n": [1, 2, 3]})
+    result = DataValidator(schema={"n": dbtype}).validate(df)
+    assert result.is_valid, f"{dbtype} should pass; errors={result.errors}"
+
+
+@pytest.mark.parametrize("dbtype", ["BLOB", "LONGBLOB"])
+def test_blob_types_pass_preflight(dbtype):
+    """Bugbot #293: BLOB and LONGBLOB are valid MySQL types accepted by
+    Database._get_sqlalchemy_type, but the validator rejected them as
+    "Unknown data type". Worse, the new Levenshtein hint suggested BOOL
+    (distance 2 from BLOB), framing a correctly-spelled type as a typo.
+    Add a passthrough validator so the preflight gate matches the DB
+    layer's vocabulary."""
+    df = pd.DataFrame({"payload": [b"x", b"y", b"z"]})
+    result = DataValidator(schema={"payload": dbtype}).validate(df)
+    assert result.is_valid, f"{dbtype} should pass; errors={result.errors}"
+
+
+def test_typo_suggest_does_not_mislabel_blob_as_bool():
+    """Bugbot #293 (regression guard): for a CORRECTLY spelled BLOB schema
+    the user must NEVER see "Did you mean 'BOOL'?". The fix above makes
+    BLOB a known type; this test pins the contract so future deletions of
+    BLOB from ``type_validators`` reproduce the bugbot finding immediately."""
+    df = pd.DataFrame({"payload": [b"x"]})
+    result = DataValidator(schema={"payload": "BLOB"}).validate(df)
+    assert result.is_valid
+    # And the suggestion machinery never runs because the type is known.
+    assert not any("Did you mean" in e for e in (result.errors or []))
+
+
 def test_csv_schema_column_not_in_header_now_fails(make_csv):
     """Issue #289: a schema column absent from a CSV header used to pass the
     DataValidator silently — the read-time check in CSVIngestor caught it
