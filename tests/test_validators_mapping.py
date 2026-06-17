@@ -251,3 +251,62 @@ def test_map_validators_without_config_falls_back_to_module_global(monkeypatch):
     assert all(v._config is None for v in validators)
     dup = next(v for v in validators if isinstance(v, DuplicateValidator))
     assert dup.dest_path.endswith("/env_table")
+
+
+def test_nlp_categories_include_content_hygiene_validators():
+    """The text categories (text/token classification, MLM) gain the
+    zero-record and text-content validators; image/tabular do NOT."""
+    from tracebloc_ingestor.validators.ingestable_records_validator import (
+        IngestableRecordsValidator,
+    )
+    from tracebloc_ingestor.validators.text_content_validator import (
+        TextContentValidator,
+    )
+
+    for cat in (
+        TaskCategory.TEXT_CLASSIFICATION,
+        TaskCategory.TOKEN_CLASSIFICATION,
+        TaskCategory.MASKED_LANGUAGE_MODELING,
+    ):
+        types = _types(map_validators(cat, {}))
+        assert IngestableRecordsValidator in types, cat
+        assert TextContentValidator in types, cat
+        # FileTypeValidator stays first (the content validators come after it).
+        assert types[0] is FileTypeValidator, cat
+
+    for cat in (TaskCategory.IMAGE_CLASSIFICATION, TaskCategory.TABULAR_CLASSIFICATION):
+        types = _types(map_validators(cat, IMAGE_OPTS))
+        assert IngestableRecordsValidator not in types, cat
+        assert TextContentValidator not in types, cat
+
+
+def test_mlm_content_validators_target_sequences_subdir():
+    """MLM stages files under ``sequences/`` (not ``texts/``); the content
+    validators must point at that subdirectory."""
+    from tracebloc_ingestor.validators.ingestable_records_validator import (
+        IngestableRecordsValidator,
+    )
+    from tracebloc_ingestor.validators.text_content_validator import (
+        TextContentValidator,
+    )
+
+    v = map_validators(TaskCategory.MASKED_LANGUAGE_MODELING, {})
+    rec = next(x for x in v if isinstance(x, IngestableRecordsValidator))
+    txt = next(x for x in v if isinstance(x, TextContentValidator))
+    assert rec.file_subdir == "sequences"
+    assert txt.texts_path == "sequences"
+
+
+def test_text_classification_content_validators_target_texts_subdir():
+    from tracebloc_ingestor.validators.ingestable_records_validator import (
+        IngestableRecordsValidator,
+    )
+    from tracebloc_ingestor.validators.text_content_validator import (
+        TextContentValidator,
+    )
+
+    v = map_validators(TaskCategory.TEXT_CLASSIFICATION, {})
+    rec = next(x for x in v if isinstance(x, IngestableRecordsValidator))
+    txt = next(x for x in v if isinstance(x, TextContentValidator))
+    assert rec.file_subdir == "texts"
+    assert txt.texts_path == "texts"

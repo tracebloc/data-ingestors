@@ -88,6 +88,15 @@ class DuplicateValidator(BaseValidator):
                         f"Destination directory '{self.dest_path}' already exists"
                     )
 
+            # Within-CSV duplicate filename detection (warning). The check
+            # above guards re-ingesting into an existing TABLE; this catches the
+            # same filename appearing more than once in the INCOMING CSV, which
+            # would otherwise ingest as separate records with no notice. Warn
+            # only — repeated filenames may be intentional in some flows.
+            dup_warnings = self._within_csv_duplicate_warnings(data)
+            warnings.extend(dup_warnings)
+            metadata["within_csv_duplicate_filenames"] = len(dup_warnings) > 0
+
             # Check if parent directory exists (for creating the destination)
             parent_dir = Path(self.dest_path).parent
             parent_exists = parent_dir.exists()
@@ -111,6 +120,54 @@ class DuplicateValidator(BaseValidator):
                 errors=[f"Duplicate validation error: {str(e)}"],
                 metadata={"error_type": "validation_exception"},
             )
+
+    def _within_csv_duplicate_warnings(self, data: Any) -> List[str]:
+        """Warn when a filename appears more than once in the incoming CSV.
+
+        Bounded: reads only the ``filename`` column. A non-CSV input (e.g. a
+        ``None`` from the table-only callers, or a JSON path) is a no-op, and a
+        CSV with no ``filename`` column (tabular families) is skipped.
+        """
+        if not isinstance(data, (str, Path)) or Path(data).suffix.lower() != ".csv":
+            return []
+
+        import pandas as pd
+
+        try:
+            header = pd.read_csv(data, nrows=0, encoding="utf-8").columns
+        except Exception:  # noqa: BLE001 — header probe is best-effort
+            return []
+        filename_col = self._match_column(header, "filename")
+        if filename_col is None:
+            return []
+
+        try:
+            series = pd.read_csv(
+                data,
+                usecols=[filename_col],
+                encoding="utf-8",
+                dtype=str,
+                keep_default_na=False,
+            )[filename_col]
+        except Exception:  # noqa: BLE001 — let other validators surface read errors
+            return []
+
+        names = series.map(lambda v: str(v).strip())
+        names = names[names != ""]
+        counts = names.value_counts()
+        duplicated = counts[counts > 1]
+        if duplicated.empty:
+            return []
+
+        extra = int(duplicated.sum() - len(duplicated))  # rows beyond the first
+        sample = list(duplicated.index[:10])
+        suffix = " …" if len(duplicated) > 10 else ""
+        return [
+            f"{len(duplicated)} filename(s) appear more than once in the CSV "
+            f"({extra} duplicate row(s)): {sample}{suffix}. These will be "
+            f"ingested as separate records — remove the duplicates if this is "
+            f"unintended."
+        ]
 
     def _check_directory_exists(self) -> bool:
         """Check if the destination directory exists.

@@ -1088,3 +1088,94 @@ def test_ingest_does_not_profile_non_nlp():
     profile.assert_not_called()
     args, _ = ing.api_client.send_global_meta_meta.call_args
     assert "text_profile" not in args[2]
+
+
+# --- Truthful registration-failure message about row state (0-record case) ---
+
+
+def test_rows_state_clause_phrasing():
+    """The parenthetical must never claim phantom rows: zero ingested -> says so;
+    nonzero -> warns the rows are persisted."""
+    assert (
+        base_mod._rows_state_clause(0)
+        == "no rows were ingested, so nothing was left in the database"
+    )
+    assert "3 already-ingested row(s)" in base_mod._rows_state_clause(3)
+
+
+def test_zero_inserted_registration_failure_message_is_truthful():
+    """A registration failure with 0 inserted rows must NOT say rows are already
+    in the database (the misleading message the adversarial run surfaced)."""
+    # insert_batch reports 0 inserted ids -> inserted_records stays 0.
+    ing = make_ingestor(records=[{"a": "1", "filename": "f1"}], category=None)
+    ing.database.insert_batch.return_value = ([], [])  # no ids inserted
+    ing.api_client.send_generate_edge_label_meta.return_value = False
+    with patch.object(base_mod, "Session") as Sess:
+        Sess.return_value.__enter__.return_value = MagicMock()
+        with pytest.raises(RuntimeError) as exc:
+            ing.ingest("src", batch_size=10)
+    msg = str(exc.value)
+    assert "NOT registered" in msg
+    assert "already in the database" not in msg
+    assert "no rows were ingested" in msg
+
+
+def test_mlm_header_only_csv_fails_before_table_creation(clean_env, tmp_path):
+    """End-to-end fail-fast: a header-only MLM manifest is rejected during
+    validation, BEFORE the destination table is created — so no orphan empty
+    table is left behind (the #260 failure mode at the zero-records gate)."""
+    from tracebloc_ingestor.config import Config
+    from tracebloc_ingestor.utils.constants import TaskCategory
+
+    src = tmp_path / "src"
+    (src / "sequences").mkdir(parents=True)
+    clean_env.setenv("SRC_PATH", str(src))
+    clean_env.setenv("TABLE_NAME", "mlm_train")
+    clean_env.setenv("DEST_PATH", str(tmp_path / "dest" / "mlm_train"))
+
+    csv = tmp_path / "manifest.csv"
+    pd.DataFrame(columns=["filename"]).to_csv(csv, index=False)  # header only
+
+    ing = make_ingestor(
+        records=[],
+        category=TaskCategory.MASKED_LANGUAGE_MODELING,
+        label_column=None,
+    )
+    ing.database.config = Config()  # real config so path-reading validators work
+
+    with patch.object(base_mod, "Session") as Sess:
+        Sess.return_value.__enter__.return_value = MagicMock()
+        with pytest.raises(ValueError, match="No data rows found"):
+            ing.ingest(str(csv), batch_size=10)
+
+    ing.database.create_table.assert_not_called()
+
+
+def test_mlm_all_files_missing_fails_before_table_creation(clean_env, tmp_path):
+    """The other zero-record path: a populated CSV whose every referenced file
+    is missing is rejected before table creation."""
+    from tracebloc_ingestor.config import Config
+    from tracebloc_ingestor.utils.constants import TaskCategory
+
+    src = tmp_path / "src"
+    (src / "sequences").mkdir(parents=True)  # empty -> referenced files missing
+    clean_env.setenv("SRC_PATH", str(src))
+    clean_env.setenv("TABLE_NAME", "mlm_train")
+    clean_env.setenv("DEST_PATH", str(tmp_path / "dest" / "mlm_train"))
+
+    csv = tmp_path / "manifest.csv"
+    pd.DataFrame({"filename": ["doc1", "doc2"]}).to_csv(csv, index=False)
+
+    ing = make_ingestor(
+        records=[],
+        category=TaskCategory.MASKED_LANGUAGE_MODELING,
+        label_column=None,
+    )
+    ing.database.config = Config()
+
+    with patch.object(base_mod, "Session") as Sess:
+        Sess.return_value.__enter__.return_value = MagicMock()
+        with pytest.raises(ValueError, match="No referenced data files"):
+            ing.ingest(str(csv), batch_size=10)
+
+    ing.database.create_table.assert_not_called()
