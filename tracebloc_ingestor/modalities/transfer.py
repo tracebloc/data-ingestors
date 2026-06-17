@@ -28,7 +28,6 @@ from typing import Any, Dict, Optional
 
 from ..config import Config
 from ..file_transfer import (
-    _copy_tokenizer_if_present,
     _find_mask_src,
     _find_src,
     annotation_transfer,
@@ -90,11 +89,7 @@ def object_detection(
 def text_classification(
     record: Dict[str, Any], options: Dict[str, Any], cfg: Optional[Config] = None
 ) -> Optional[Dict[str, Any]]:
-    result = text_transfer(record, options, cfg=cfg)
-    # Optional: ship a custom tokenizer.json so the client uses it instead of
-    # the HF default; absent is fine (handled by the optional validator).
-    _copy_tokenizer_if_present(cfg=cfg)
-    return result
+    return text_transfer(record, options, cfg=cfg)
 
 
 def token_classification(
@@ -102,23 +97,13 @@ def token_classification(
 ) -> Optional[Dict[str, Any]]:
     # Same on-disk layout as text classification: one .txt per sample in the
     # ``texts`` subdir. BIO tags travel in the labels CSV, not on disk.
-    result = text_transfer(record, options, cfg=cfg)
-    # Optional custom tokenizer.json (same as text classification).
-    _copy_tokenizer_if_present(cfg=cfg)
-    return result
+    return text_transfer(record, options, cfg=cfg)
 
 
 def masked_language_modeling(
     record: Dict[str, Any], options: Dict[str, Any], cfg: Optional[Config] = None
 ) -> Optional[Dict[str, Any]]:
-    result = text_transfer(record, options, src_subdir="sequences", cfg=cfg)
-    # Copy the user's tokenizer.json so the MLM client uses it instead of
-    # falling back to bert-base-uncased (a vocab_size mismatch with the model's
-    # nn.Embedding would cause a CUDA device-side assert at training). For MLM
-    # the tokenizer is mandatory — its presence and [MASK]/[PAD] tokens are
-    # enforced by TokenizerValidator at validation.
-    _copy_tokenizer_if_present(cfg=cfg)
-    return result
+    return text_transfer(record, options, src_subdir="sequences", cfg=cfg)
 
 
 def semantic_segmentation(

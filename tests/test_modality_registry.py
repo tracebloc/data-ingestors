@@ -59,8 +59,8 @@ def test_derived_sets_match_spec_flags():
 
 
 def test_nlp_categories_are_the_three_text_categories():
-    """#805 Task 2: the tokenizer-fingerprint set is exactly the NLP text
-    categories (text/token classification + MLM) — never image/tabular."""
+    """#805: the NLP set is exactly the text categories
+    (text/token classification + MLM) — never image/tabular."""
     assert NLP_CATEGORIES == {
         TaskCategory.TEXT_CLASSIFICATION,
         TaskCategory.TOKEN_CLASSIFICATION,

@@ -205,19 +205,6 @@ def test_map_semantic_segmentation_missing_mask_id_returns_none(dirs):
     assert rec is None
 
 
-def test_map_mlm_copies_tokenizer(dirs):
-    src, dest = dirs
-    _seed(src, "sequences", "seq.txt", b"tokens")
-    (src / "tokenizer.json").write_text("{}")
-    rec = file_transfer.map_file_transfer(
-        TaskCategory.MASKED_LANGUAGE_MODELING,
-        {"filename": "seq"},
-        {"extension": ".txt"},
-    )
-    assert rec is not None
-    assert (dest / "tokenizer.json").exists()
-
-
 def test_map_token_classification(dirs):
     src, dest = dirs
     _seed(src, "texts", "doc.txt", b"John Smith")
@@ -239,36 +226,3 @@ def test_map_keypoint_detection(dirs):
 
 def test_map_unknown_category_returns_none(dirs):
     assert file_transfer.map_file_transfer("weird", {"filename": "x"}, {}) is None
-
-
-def test_map_text_classification_copies_optional_tokenizer(dirs):
-    src, dest = dirs
-    _seed(src, "texts", "doc.txt", b"hello world")
-    (src / "tokenizer.json").write_text("{}")
-    rec = file_transfer.map_file_transfer(
-        TaskCategory.TEXT_CLASSIFICATION, {"filename": "doc"}, {"extension": ".txt"}
-    )
-    assert rec is not None
-    assert (dest / "tokenizer.json").exists()
-
-
-def test_map_token_classification_copies_optional_tokenizer(dirs):
-    src, dest = dirs
-    _seed(src, "texts", "doc.txt", b"John Smith")
-    (src / "tokenizer.json").write_text("{}")
-    rec = file_transfer.map_file_transfer(
-        TaskCategory.TOKEN_CLASSIFICATION, {"filename": "doc"}, {"extension": ".txt"}
-    )
-    assert rec is not None
-    assert (dest / "tokenizer.json").exists()
-
-
-def test_map_token_classification_without_tokenizer_is_fine(dirs):
-    src, dest = dirs
-    _seed(src, "texts", "doc.txt", b"John Smith")  # no tokenizer.json
-    rec = file_transfer.map_file_transfer(
-        TaskCategory.TOKEN_CLASSIFICATION, {"filename": "doc"}, {"extension": ".txt"}
-    )
-    assert rec is not None
-    assert (dest / "doc.txt").exists()
-    assert not (dest / "tokenizer.json").exists()

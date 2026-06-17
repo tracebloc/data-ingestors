@@ -160,6 +160,6 @@ TABULAR_FAMILY_CATEGORIES = frozenset(
 SELF_SUPERVISED_CATEGORIES = frozenset(
     c for c, s in REGISTRY.items() if s.is_self_supervised
 )
-# NLP text categories that ship a tokenizer.json; their tokenizer fingerprint
-# is registered on the global-metadata channel at ingest (#805 Task 2).
+# NLP text categories (text / token classification, MLM). Gates NLP-specific
+# ingest handling such as the data-derived text profile (#805).
 NLP_CATEGORIES = frozenset(c for c, s in REGISTRY.items() if s.is_nlp)
