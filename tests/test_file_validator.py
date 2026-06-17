@@ -45,6 +45,13 @@ def test_invalid_extension_in_strict_mode_fails(clean_env, tmp_path):
     result = FileTypeValidator(allowed_extension=".jpg").validate(None)
     assert not result.is_valid
     assert any("invalid extensions" in e for e in result.errors)
+    # #291: the message must name the expected extension and point the user
+    # at how to override it — without it, the user only saw the rejected
+    # paths and had to guess what was allowed.
+    err = result.errors[0]
+    assert "Allowed extensions" in err
+    assert ".jpg" in err
+    assert "spec.file_options.extension" in err
 
 
 def test_no_files_fails(clean_env, tmp_path):

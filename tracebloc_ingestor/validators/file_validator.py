@@ -205,9 +205,20 @@ class FileTypeValidator(BaseValidator):
 
         # Check for invalid extensions in strict mode
         if invalid_files:
+            # Include the allowed extension(s) inline so the user knows what
+            # to switch to (#291). Without this the user only saw the list of
+            # rejected file paths and had to guess at the expected extension
+            # — the sibling Image Resolution Validator already does this
+            # right by embedding "(expected: [256, 256])" in its message.
             return self._create_result(
                 is_valid=False,
-                errors=[f"Files with invalid extensions found: {invalid_files}"],
+                errors=[
+                    f"Files with invalid extensions found: {invalid_files}. "
+                    f"Allowed extensions: {sorted(self.allowed_extension)}. "
+                    f"Set `spec.file_options.extension` in your ingest.yaml "
+                    f"to override the default (e.g. `.jpg` for image "
+                    f"categories, `.txt` for text_classification)."
+                ],
                 metadata={
                     "files_checked": len(files),
                     "extensions_found": sorted(extensions),
