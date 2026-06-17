@@ -96,7 +96,10 @@ def test_base_py_imports_the_registry_derived_sets():
 
     assert base._FILE_BEARING_CATEGORIES is registry.FILE_BEARING_CATEGORIES
     assert base._TABULAR_FAMILY_CATEGORIES is registry.TABULAR_FAMILY_CATEGORIES
-    assert base._SELF_SUPERVISED_CATEGORIES is registry.SELF_SUPERVISED_CATEGORIES
+    # base.py no longer imports SELF_SUPERVISED_CATEGORIES: edge-label metadata
+    # is now generated for every category (the #213 self-supervised skip was
+    # removed once backend PR #683 allowed blank labels), so the set is unused
+    # here. The registry remains its single source for other consumers.
 
 
 def test_data_format_valid_and_matches_conventions():
