@@ -965,3 +965,88 @@ def test_check_src_path_required_for_token_classification():
     from tracebloc_ingestor.ingestors.base import _FILE_BEARING_CATEGORIES
 
     assert TaskCategory.TOKEN_CLASSIFICATION in _FILE_BEARING_CATEGORIES
+
+
+# ---------------------------------------------------------------------------
+# #805 Task 2: tokenizer fingerprint registration on the global-metadata channel
+# ---------------------------------------------------------------------------
+
+_FINGERPRINT = {
+    "vocab_size": 15,
+    "mask_token_id": 4,
+    "pad_token_id": 0,
+    "tokenizer_type": "WordLevel",
+}
+
+
+@pytest.mark.parametrize(
+    "category",
+    ["MASKED_LANGUAGE_MODELING", "TEXT_CLASSIFICATION", "TOKEN_CLASSIFICATION"],
+)
+def test_ingest_registers_tokenizer_fingerprint_for_nlp(category):
+    """For every NLP category, a shipped tokenizer's 4-integer fingerprint is
+    attached to file_options so it rides the existing global-metadata channel."""
+    from tracebloc_ingestor.utils.constants import TaskCategory
+
+    cat = getattr(TaskCategory, category)
+    records = [{"a": "1", "filename": "f1"}]
+    ing = make_ingestor(records=records, category=cat, label_column=None)
+    with patch.object(base_mod, "Session") as Sess, patch.object(
+        ing, "validate_data", return_value=True
+    ), patch.object(
+        base_mod, "map_file_transfer", side_effect=lambda c, r, o, cfg=None: r
+    ), patch.object(
+        base_mod, "get_shipped_tokenizer_metadata", return_value=_FINGERPRINT
+    ):
+        Sess.return_value.__enter__.return_value = MagicMock()
+        ing.ingest("src", batch_size=10)
+    args, _ = ing.api_client.send_global_meta_meta.call_args
+    assert args[2].get("tokenizer") == _FINGERPRINT
+
+
+def test_ingest_warns_and_skips_tokenizer_when_absent_for_nlp():
+    """A site that ships no tokenizer.json still registers cleanly — the
+    fingerprint is simply omitted (the epic's legacy/skipped path)."""
+    from tracebloc_ingestor.utils.constants import TaskCategory
+
+    records = [{"a": "1", "filename": "f1"}]
+    ing = make_ingestor(
+        records=records,
+        category=TaskCategory.TEXT_CLASSIFICATION,
+        label_column="a",
+    )
+    with patch.object(base_mod, "Session") as Sess, patch.object(
+        ing, "validate_data", return_value=True
+    ), patch.object(
+        base_mod, "map_file_transfer", side_effect=lambda c, r, o, cfg=None: r
+    ), patch.object(
+        base_mod, "get_shipped_tokenizer_metadata", return_value=None
+    ):
+        Sess.return_value.__enter__.return_value = MagicMock()
+        ing.ingest("src", batch_size=10)
+    args, _ = ing.api_client.send_global_meta_meta.call_args
+    assert "tokenizer" not in args[2]
+    # Registration still completes — absence is non-fatal.
+    ing.api_client.create_dataset.assert_called_once()
+
+
+def test_ingest_does_not_register_tokenizer_for_non_nlp():
+    """Non-NLP categories never touch the tokenizer path."""
+    from tracebloc_ingestor.utils.constants import TaskCategory
+
+    records = [{"a": "1", "filename": "f1"}]
+    ing = make_ingestor(
+        records=records,
+        category=TaskCategory.IMAGE_CLASSIFICATION,
+        label_column="a",
+    )
+    with patch.object(base_mod, "Session") as Sess, patch.object(
+        ing, "validate_data", return_value=True
+    ), patch.object(
+        base_mod, "map_file_transfer", side_effect=lambda c, r, o, cfg=None: r
+    ), patch.object(base_mod, "get_shipped_tokenizer_metadata") as get_meta:
+        Sess.return_value.__enter__.return_value = MagicMock()
+        ing.ingest("src", batch_size=10)
+    get_meta.assert_not_called()
+    args, _ = ing.api_client.send_global_meta_meta.call_args
+    assert "tokenizer" not in args[2]

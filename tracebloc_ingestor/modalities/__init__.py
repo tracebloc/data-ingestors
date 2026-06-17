@@ -3,6 +3,7 @@ task category's ingestion behavior (structural refactor — backend#796, P3)."""
 
 from .registry import (
     FILE_BEARING_CATEGORIES,
+    NLP_CATEGORIES,
     REGISTRY,
     SELF_SUPERVISED_CATEGORIES,
     TABULAR_FAMILY_CATEGORIES,
@@ -17,4 +18,5 @@ __all__ = [
     "FILE_BEARING_CATEGORIES",
     "TABULAR_FAMILY_CATEGORIES",
     "SELF_SUPERVISED_CATEGORIES",
+    "NLP_CATEGORIES",
 ]

@@ -18,7 +18,7 @@ from ..utils.constants import (
 )
 from ..utils import label_policy as label_policy_module
 from ..utils.validators_mapping import map_validators
-from ..file_transfer import map_file_transfer
+from ..file_transfer import map_file_transfer, get_shipped_tokenizer_metadata
 from ..reporting import ConsoleRenderer
 from . import preflight
 from .batch_writer import BatchWriter
@@ -32,6 +32,7 @@ from .table_lock import TableLock
 # (and their None/unknown -> False semantics are preserved).
 from ..modalities.registry import (
     FILE_BEARING_CATEGORIES as _FILE_BEARING_CATEGORIES,
+    NLP_CATEGORIES as _NLP_CATEGORIES,
     SELF_SUPERVISED_CATEGORIES as _SELF_SUPERVISED_CATEGORIES,
     TABULAR_FAMILY_CATEGORIES as _TABULAR_FAMILY_CATEGORIES,
 )
@@ -563,6 +564,30 @@ class BaseIngestor(ABC):
                             "Backend rejected edge-label metadata; the dataset was "
                             "NOT registered (its rows are already in the database). "
                             "See the logged API error above."
+                        )
+
+                # Register the contributor tokenizer fingerprint for NLP
+                # datasets (#805 Task 2). When a tokenizer.json was shipped
+                # (mandatory for MLM, optional for text/token classification),
+                # attach its 4 structural integers (vocab_size / mask_token_id /
+                # pad_token_id / tokenizer_type) to file_options so they ride
+                # the existing global-metadata channel below and the backend can
+                # cross-check a contributor tokenizer at dataset linking. Only
+                # these integers cross the cluster boundary — never vocabulary
+                # content or a hash (the FL guardrail). A site that ships none
+                # simply skips the cross-check (the epic's legacy/skipped path).
+                if self.category in _NLP_CATEGORIES:
+                    tokenizer_meta = get_shipped_tokenizer_metadata(
+                        self.database.config
+                    )
+                    if tokenizer_meta:
+                        self.file_options["tokenizer"] = tokenizer_meta
+                    else:
+                        logger.warning(
+                            f"{YELLOW}No tokenizer.json shipped for NLP dataset "
+                            f"'{self.table_name}'; no tokenizer fingerprint will "
+                            f"be registered, so the contributor-tokenizer "
+                            f"cross-check is skipped for this site.{RESET}"
                         )
 
                 schema_dict = self.database.get_table_schema(self.table_name)

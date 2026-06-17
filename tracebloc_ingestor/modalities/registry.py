@@ -68,6 +68,7 @@ _SPECS = (
         data_format=DataFormat.TEXT,
         build_validators=v.text_classification,
         transfer=t.text_classification,
+        is_nlp=True,
     ),
     ModalitySpec(
         TaskCategory.TOKEN_CLASSIFICATION,
@@ -77,6 +78,7 @@ _SPECS = (
         data_format=DataFormat.TEXT,
         build_validators=v.token_classification,
         transfer=t.token_classification,
+        is_nlp=True,
     ),
     # masked_language_modeling is file-bearing AND self-supervised (no label).
     ModalitySpec(
@@ -87,6 +89,7 @@ _SPECS = (
         data_format=DataFormat.TEXT,
         build_validators=v.masked_language_modeling,
         transfer=t.masked_language_modeling,
+        is_nlp=True,
     ),
     # Tabular family (structured feature tables; no sidecar files -> no transfer).
     ModalitySpec(
@@ -157,3 +160,6 @@ TABULAR_FAMILY_CATEGORIES = frozenset(
 SELF_SUPERVISED_CATEGORIES = frozenset(
     c for c, s in REGISTRY.items() if s.is_self_supervised
 )
+# NLP text categories that ship a tokenizer.json; their tokenizer fingerprint
+# is registered on the global-metadata channel at ingest (#805 Task 2).
+NLP_CATEGORIES = frozenset(c for c, s in REGISTRY.items() if s.is_nlp)
