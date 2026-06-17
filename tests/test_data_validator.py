@@ -253,6 +253,29 @@ def test_unknown_type_fails():
     assert "Unknown data type" in result.errors[0]
 
 
+def test_unknown_type_suggests_closest_match():
+    """Issue #266: when the user types a typo'd type (INTERGER), the
+    DataValidator rejects FIRST — before ``Database._get_sqlalchemy_type``'s
+    suggestion (#264) ever runs. Surface the same hint at this layer."""
+    df = pd.DataFrame({"a": [1]})
+    result = DataValidator(schema={"a": "INTERGER"}).validate(df)
+    assert not result.is_valid
+    err = result.errors[0]
+    assert "Did you mean 'INTEGER'" in err
+    assert "Supported types" in err
+
+
+def test_unknown_type_no_suggestion_for_distant_input():
+    """A genuinely off-vocabulary type (no close match) gets the supported-types
+    list but no "Did you mean" hint — otherwise we'd surface noisy guesses."""
+    df = pd.DataFrame({"a": [1]})
+    result = DataValidator(schema={"a": "QUATERNION"}).validate(df)
+    assert not result.is_valid
+    err = result.errors[0]
+    assert "Did you mean" not in err
+    assert "Supported types" in err
+
+
 def test_csv_schema_column_not_in_header_now_fails(make_csv):
     """Issue #289: a schema column absent from a CSV header used to pass the
     DataValidator silently — the read-time check in CSVIngestor caught it

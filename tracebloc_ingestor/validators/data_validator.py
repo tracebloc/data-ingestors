@@ -19,6 +19,7 @@ import pandas as pd
 from .base import BaseValidator, ValidationResult
 from ..config import Config
 from ..utils import coercion
+from ..utils.typo_suggest import suggest_type as _suggest_type
 
 config = Config()
 logger = logging.getLogger(__name__)
@@ -471,9 +472,29 @@ class DataValidator(BaseValidator):
         if base_type in self.type_validators:
             return self.type_validators[base_type](series, column_name, expected_type)
         else:
+            # Surface a "Did you mean …?" hint when the customer has typed a
+            # close variant of a real type (INTERGER → INTEGER, BIGINTEGER →
+            # INTEGER, NUMRIC → NUMERIC). Without this the preflight error was
+            # just "Unknown data type: INTERGER" — the suggestion machinery
+            # existed in ``Database._get_sqlalchemy_type`` (#264) but the
+            # validator rejects unknown types FIRST, so that code path never
+            # ran for a typo'd schema (#266). Share the helper so both layers
+            # offer the same fix.
+            suggestion = _suggest_type(base_type, self.type_validators.keys())
+            if suggestion:
+                msg = (
+                    f"Unknown data type: {expected_type}. Did you mean "
+                    f"'{suggestion}'? Supported types: "
+                    f"{sorted(self.type_validators.keys())}"
+                )
+            else:
+                msg = (
+                    f"Unknown data type: {expected_type}. Supported types: "
+                    f"{sorted(self.type_validators.keys())}"
+                )
             return {
                 "is_valid": False,
-                "errors": [f"Unknown data type: {expected_type}"],
+                "errors": [msg],
                 "warnings": [],
             }
 
