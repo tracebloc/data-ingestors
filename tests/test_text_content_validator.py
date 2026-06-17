@@ -149,3 +149,16 @@ def test_traversal_path_is_skipped_not_inspected(staged):
     result = TextContentValidator(texts_path="sequences").validate(str(path))
     assert result.is_valid
     assert result.metadata["docs_checked"] == 0
+
+
+def test_truncated_trailing_multibyte_in_small_file_is_rejected(staged):
+    # A small file ending in an INCOMPLETE multibyte sequence (truncated/corrupt
+    # UTF-8) must be flushed at EOF and rejected — not held unvalidated in the
+    # incremental decoder buffer. (Bugbot: UTF-8 EOF not finalized.)
+    _, seq, make_csv = staged
+    # b"\xe2\x82" is the first 2 bytes of a 3-byte char (€ = E2 82 AC), truncated.
+    (seq / "a.txt").write_bytes(b"hello \xe2\x82")
+    path = make_csv(["a"])
+    result = TextContentValidator(texts_path="sequences").validate(str(path))
+    assert not result.is_valid
+    assert any("not valid UTF-8" in e for e in result.errors)

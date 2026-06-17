@@ -162,11 +162,16 @@ class TextContentValidator(BaseValidator):
                 f"text and re-ingest.",
             )
 
-        # Incremental decode so a multibyte character split at the byte cap is
-        # NOT mistaken for invalid input (final=False holds the partial); a
-        # genuinely non-UTF-8 byte still raises.
+        # Incremental decode. ``final`` is True only when we read the WHOLE file
+        # (the read returned fewer bytes than the cap, i.e. EOF) — so a truncated
+        # / wrongly-encoded trailing multibyte sequence in a small file is
+        # FLUSHED and raises, instead of sitting unvalidated in the decoder
+        # buffer. When we stopped at the cap (len(raw) == max_bytes) the file may
+        # continue, so we DON'T finalize — a legitimate multibyte char split at
+        # the cap must not be mistaken for invalid input.
+        final = len(raw) < self.max_bytes
         try:
-            codecs.getincrementaldecoder("utf-8")().decode(raw, final=False)
+            codecs.getincrementaldecoder("utf-8")().decode(raw, final=final)
         except UnicodeDecodeError:
             return (
                 "error",
