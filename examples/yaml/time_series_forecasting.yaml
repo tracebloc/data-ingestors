@@ -13,7 +13,9 @@ schema:
   # 'TIMESTAMP'". The previous `VARCHAR(64)` here failed on the very
   # first validator (#200).
   timestamp: TIMESTAMP
-  region: VARCHAR(32)
+  # All non-timestamp feature columns must be numeric — NumericColumnsValidator
+  # rejects strings outside the timestamp column (#290). Encode categorical
+  # features upstream as INT codes / INT one-hot columns before ingest.
   temperature_c: FLOAT
   is_holiday: INT
   demand_mw: FLOAT
