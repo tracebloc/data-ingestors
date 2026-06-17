@@ -6,8 +6,13 @@ on:
       - develop
       - ingestor-v2
 
+concurrency:
+  group: publish-dev-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   publish:
+    timeout-minutes: 20
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
