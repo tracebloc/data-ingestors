@@ -137,3 +137,15 @@ def test_binary_errors_are_capped(staged):
     assert not result.is_valid
     assert any("further errors suppressed" in e for e in result.errors)
     assert len(result.errors) <= _MAX_REPORTED + 1
+
+
+def test_traversal_path_is_skipped_not_inspected(staged):
+    # A manifest value escaping SRC_PATH/<subdir> is rejected by the transfer;
+    # this validator neither reads nor flags a file outside the dataset dir.
+    src, _, make_csv = staged
+    outside = src.parent / "outside.bin"
+    outside.write_bytes(b"\x00\xff binary outside")  # would be flagged if read
+    path = make_csv([str(outside), "../../outside.bin"])
+    result = TextContentValidator(texts_path="sequences").validate(str(path))
+    assert result.is_valid
+    assert result.metadata["docs_checked"] == 0

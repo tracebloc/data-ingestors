@@ -25,7 +25,7 @@ import os
 from typing import Any, List, Optional, Tuple
 
 from ..config import Config
-from ..file_transfer import _has_extension
+from ..file_transfer import _has_extension, _safe_join
 from ..text_profile import _sample
 from ..utils.constants import FileExtension
 from .base import BaseValidator, ValidationResult
@@ -86,7 +86,7 @@ class TextContentValidator(BaseValidator):
                     metadata={"docs_checked": 0, "reason": "no_filename_column"},
                 )
 
-            texts_dir = os.path.join((self._config or config).SRC_PATH, self.texts_path)
+            src_root = (self._config or config).SRC_PATH
             filenames = [
                 str(v).strip() for v in df[filename_col].tolist() if str(v).strip()
             ]
@@ -100,7 +100,14 @@ class TextContentValidator(BaseValidator):
                     if _has_extension(filename)
                     else f"{filename}{self.extension}"
                 )
-                text_path = os.path.join(texts_dir, resolved)
+                # Resolve as the transfer does (``_safe_join`` under SRC_PATH):
+                # an absolute / ``..`` manifest value is rejected by the transfer
+                # (#239), so we neither read nor flag a file outside the dataset
+                # dir — skip it (its missing-ness is the records validator's job).
+                try:
+                    text_path = _safe_join(src_root, self.texts_path, resolved)
+                except ValueError:
+                    continue
                 if not os.path.isfile(text_path):
                     # A missing referenced file is surfaced by
                     # IngestableRecordsValidator / the transfer path, not here.

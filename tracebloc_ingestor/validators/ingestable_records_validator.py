@@ -28,7 +28,7 @@ from typing import Any, Optional
 import pandas as pd
 
 from ..config import Config
-from ..file_transfer import _has_extension
+from ..file_transfer import _has_extension, _safe_join
 from ..utils.constants import FileExtension
 from .base import BaseValidator, ValidationResult
 
@@ -162,7 +162,17 @@ class IngestableRecordsValidator(BaseValidator):
                         if _has_extension(filename)
                         else f"{filename}{self.extension}"
                     )
-                    if os.path.isfile(os.path.join(subdir, resolved)):
+                    # Resolve EXACTLY as the transfer does (``_safe_join`` under
+                    # SRC_PATH): an absolute / ``..`` manifest value that would
+                    # otherwise let a plain join "find" a file outside the
+                    # dataset dir is rejected by the transfer (#239), so it is
+                    # NOT an ingestable file here either — skip it rather than
+                    # let it mask the zero-record case this validator guards.
+                    try:
+                        candidate = _safe_join(src_root, self.file_subdir, resolved)
+                    except ValueError:
+                        continue
+                    if os.path.isfile(candidate):
                         return self._create_result(
                             is_valid=True,
                             metadata={

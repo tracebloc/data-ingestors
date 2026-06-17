@@ -122,3 +122,23 @@ def test_file_bearing_but_no_filename_column_is_noop(clean_env, tmp_path, make_c
     result = IngestableRecordsValidator(file_subdir="sequences").validate(str(path))
     assert result.is_valid
     assert result.metadata["reason"] == "no_filename_column"
+
+
+def test_absolute_or_traversal_path_is_not_counted_as_found(
+    clean_env, tmp_path, make_csv
+):
+    # A manifest value that escapes SRC_PATH/<subdir> (absolute path or ``..``)
+    # is rejected by the transfer's _safe_join (#239); even though the file
+    # exists on disk it is NOT an ingestable file, so it must not mask the
+    # zero-record case. (Bugbot: unsafe manifest path resolution.)
+    src = tmp_path / "src"
+    (src / "sequences").mkdir(parents=True)
+    clean_env.setenv("SRC_PATH", str(src))
+    outside = tmp_path / "outside.txt"  # exists, but outside the dataset dir
+    outside.write_text("secret", encoding="utf-8")
+    path = make_csv(
+        [{"filename": str(outside)}, {"filename": "../../outside.txt"}]
+    )
+    result = IngestableRecordsValidator(file_subdir="sequences").validate(str(path))
+    assert not result.is_valid
+    assert "No referenced data files" in result.errors[0]
