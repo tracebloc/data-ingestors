@@ -134,3 +134,64 @@ def test_237_genuine_non_numeric_still_rejected_both_layers(tmp_path):
     p.write_text(csv_text)
     with pytest.raises(ValueError):
         list(_csv_ingestor(schema).read_data(str(p)))
+
+
+# ── #204: BOOL vocabulary is ONE shared set, honoured by all three layers ────
+#
+# The accepted boolean tokens used to live in three hand-synced copies (csv
+# cast ``_truthy``/``_falsy``, json ``_VALID_BOOL_STRINGS``, validator
+# ``valid_boolean_strings``) carrying "keep in lockstep" comments. P6 folded
+# them into a single source — ``coercion.BOOL_STRINGS`` — that all three read.
+# These cases pin that the set is well-formed AND that every layer agrees on
+# it, so a future private copy that drifts fails here instead of mid-ingest.
+
+
+def test_204_bool_vocabulary_is_well_formed():
+    assert (
+        coercion.BOOL_STRINGS
+        == coercion.BOOL_TRUE_STRINGS | coercion.BOOL_FALSE_STRINGS
+    )
+    # truthy and falsy must be disjoint — a token can't mean both.
+    assert not (coercion.BOOL_TRUE_STRINGS & coercion.BOOL_FALSE_STRINGS)
+    # Every token is already stripped + lower-case, so each layer's
+    # ``.strip().lower()`` normalisation matches by plain membership.
+    for tok in coercion.BOOL_STRINGS:
+        assert tok and tok == tok.strip().lower()
+
+
+def test_204_no_private_bool_vocab_copies():
+    """Single-source guarantee: the json layer no longer carries its own word
+    list (it reads ``coercion.BOOL_STRINGS``). If a private copy is
+    reintroduced this fails, flagging the drift risk P6 removed."""
+    import tracebloc_ingestor.ingestors.json_ingestor as j
+
+    assert not hasattr(j, "_VALID_BOOL_STRINGS")
+
+
+@pytest.mark.parametrize("token", sorted(coercion.BOOL_STRINGS))
+def test_204_shared_bool_token_accepted_by_all_layers(token, tmp_path):
+    """Every token in the shared set is blessed by the gate, the JSON
+    per-record check, AND cast to a real boolean (never NULL) by the CSV
+    ingest — the three layers agree by construction."""
+    schema = {"id": "INT", "flag": "BOOL"}
+    # 1) DataValidator gate
+    res = _validate(schema, f"id,flag\n1,{token}\n", tmp_path)
+    assert res.is_valid, (token, res.errors)
+    # 2) JSON per-record check — must not raise
+    _validate_value_against_dtype(token, "BOOL")
+    # 3) CSV cast — stores True/False, not NULL
+    p = tmp_path / "c.csv"
+    p.write_text(f"id,flag\n1,{token}\n")
+    rec = list(_csv_ingestor(schema).read_data(str(p)))[0]
+    assert rec["flag"] in (True, False), (token, rec["flag"])
+
+
+@pytest.mark.parametrize("token", ["banana", "maybe", "2", "yesno"])
+def test_204_non_bool_token_rejected_by_both_gates(token, tmp_path):
+    """A token outside the shared vocabulary (and not numeric-0/1) is rejected
+    by the gate and the JSON check alike — neither silently passes it."""
+    schema = {"id": "INT", "flag": "BOOL"}
+    res = _validate(schema, f"id,flag\n1,{token}\n", tmp_path)
+    assert not res.is_valid
+    with pytest.raises(ValueError):
+        _validate_value_against_dtype(token, "BOOL")
