@@ -39,8 +39,13 @@ env:
   REGISTRY: ghcr.io
   IMAGE_NAME: tracebloc/ingestor
 
+concurrency:
+  group: release-image-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   release:
+    timeout-minutes: 30
     runs-on: ubuntu-latest
 
     steps:
