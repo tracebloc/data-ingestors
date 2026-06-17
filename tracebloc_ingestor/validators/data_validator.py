@@ -77,13 +77,28 @@ class DataValidator(BaseValidator):
         super().__init__(name)
         self.schema = schema or {}
 
-        # Map database types to validation functions
+        # Map database types to validation functions. This vocabulary MUST
+        # match ``Database._get_sqlalchemy_type``'s ``type_mapping`` — if a
+        # type is accepted by the DB layer but missing here, the user gets
+        # a misleading "Unknown data type" preflight rejection AND the
+        # Levenshtein hint can suggest a wrong-but-close-spelled validator
+        # entry (e.g. BLOB → "Did you mean BOOL?", flagged by bugbot on
+        # PR #293).
         self.type_validators = {
             "VARCHAR": self._validate_varchar,
             "CHAR": self._validate_char,
             "TEXT": self._validate_text,
             "INT": self._validate_int,
             "INTEGER": self._validate_int,
+            # MySQL integer variants share the same per-value contract — any
+            # value pandas can coerce to int passes; range-check is handled at
+            # the DDL layer by SQLAlchemy. Without these entries a schema with
+            # TINYINT/SMALLINT/MEDIUMINT hit "Unknown data type" at preflight
+            # even though Database._get_sqlalchemy_type accepts them as
+            # Integer (bugbot #293).
+            "TINYINT": self._validate_int,
+            "SMALLINT": self._validate_int,
+            "MEDIUMINT": self._validate_int,
             "BIGINT": self._validate_bigint,
             "FLOAT": self._validate_float,
             "DOUBLE": self._validate_double,
@@ -101,6 +116,15 @@ class DataValidator(BaseValidator):
             "DATETIME": self._validate_datetime,
             "TIMESTAMP": self._validate_timestamp,
             "TIME": self._validate_time,
+            # Binary blob types — Database accepts them (BLOB / LONGBLOB map
+            # to SQLAlchemy BLOB/LONGBLOB). At the validator layer there's no
+            # meaningful per-value type check to do (any Python object can
+            # bind to a BLOB column), so accept-and-pass is the right
+            # behaviour. Bugbot #293 caught the prior gap: a valid BLOB
+            # schema was rejected as "Unknown data type" and the Levenshtein
+            # hint suggested BOOL (distance 2).
+            "BLOB": self._validate_passthrough,
+            "LONGBLOB": self._validate_passthrough,
         }
 
     def validate(self, data: Any, **kwargs) -> ValidationResult:
@@ -597,6 +621,17 @@ class DataValidator(BaseValidator):
                 )
 
         return {"is_valid": len(errors) == 0, "errors": errors, "warnings": warnings}
+
+    def _validate_passthrough(
+        self, series: pd.Series, column_name: str, expected_type: str
+    ) -> Dict[str, Any]:
+        """No-op per-value check for types where the validator has no
+        meaningful constraint to enforce (BLOB, LONGBLOB). The Database layer
+        binds whatever Python value is supplied as bytes; the user has
+        opted in to that contract by declaring the column blob-typed.
+        Returns ``is_valid=True`` so the type passes preflight (bugbot #293).
+        """
+        return {"is_valid": True, "errors": [], "warnings": []}
 
     def _validate_text(
         self, series: pd.Series, column_name: str, expected_type: str
