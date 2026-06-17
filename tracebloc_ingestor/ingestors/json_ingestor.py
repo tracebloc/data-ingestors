@@ -206,7 +206,6 @@ class JSONIngestor(BaseIngestor):
         api_client: APIClient,
         table_name: str,
         schema: Dict[str, str],
-        max_retries: int = 3,
         json_options: Optional[Dict[str, Any]] = None,
         unique_id_column: Optional[str] = None,
         label_column: Optional[str] = None,
@@ -225,7 +224,6 @@ class JSONIngestor(BaseIngestor):
             api_client: API client instance for data transmission
             table_name: Name of the target table
             schema: Database schema definition
-            max_retries: Maximum number of retry attempts
             json_options: Additional options for JSON processing
             unique_id_column: Name of the column to use as unique identifier
             label_column: Name of the column to use as label
@@ -247,7 +245,6 @@ class JSONIngestor(BaseIngestor):
             api_client,
             table_name,
             schema,
-            max_retries,
             unique_id_column,
             label_column,
             intent,

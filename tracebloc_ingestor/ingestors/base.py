@@ -107,7 +107,6 @@ class BaseIngestor(ABC):
         api_client: API client for sending data
         table_name: Name of the target database table
         schema: Database schema definition
-        max_retries: Maximum number of retry attempts
         unique_id_column: Column name for unique identifiers
         label_column: Column name for labels
         intent: Data intent (training/testing)
@@ -121,7 +120,6 @@ class BaseIngestor(ABC):
         api_client: APIClient,
         table_name: str,
         schema: Dict[str, str] = {},
-        max_retries: int = 3,
         unique_id_column: Optional[str] = None,
         label_column: Optional[str] = None,
         intent: Optional[str] = None,
@@ -138,7 +136,6 @@ class BaseIngestor(ABC):
             api_client: API client instance for data transmission
             table_name: Name of the target table
             schema: Database schema definition
-            max_retries: Maximum number of retry attempts
             unique_id_column: Name of the column to use as unique identifier
             label_column: Name of the column to use as label
             intent: Is the data for training or testing
@@ -162,7 +159,6 @@ class BaseIngestor(ABC):
         self.api_client = api_client
         self.table_name = table_name
         self.schema = schema
-        self.max_retries = max_retries
         self.unique_id_column = unique_id_column
         self.label_column = label_column
         self.intent = intent

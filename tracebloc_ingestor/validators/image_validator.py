@@ -71,7 +71,12 @@ class ImageResolutionValidator(BaseValidator):
         """Validate image resolution uniformity.
 
         Args:
-            data: Image file path, directory path, or list of image file paths to validate
+            path: Accepted for the ``BaseValidator.validate`` interface but
+                IGNORED — the images directory is always resolved from the run's
+                Config as ``<SRC_PATH>/images`` (see the first line of the body).
+                Callers pass the source through ``validate_data``; it has no
+                effect here. (Audit foot-gun note: do not "fix" this to honour
+                ``path`` without checking every call site.)
             **kwargs: Additional validation parameters
                 - recursive: Whether to search directories recursively (default: True)
                 - ignore_hidden: Whether to ignore hidden files (default: True)
