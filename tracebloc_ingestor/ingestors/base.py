@@ -3,17 +3,12 @@ from typing import Dict, Any, Generator, List, Optional, NamedTuple
 from sqlalchemy.orm import Session
 from sqlalchemy.engine import Engine
 import logging
-import os
-import pandas as pd
 from tqdm import tqdm
 import uuid
 
 from ..database import Database
 from ..api.client import APIClient
-from ..config import Config
 from ..utils.constants import (
-    Intent,
-    TaskCategory,
     RESET,
     BOLD,
     GREEN,
@@ -26,6 +21,8 @@ from ..utils.validators_mapping import map_validators
 from ..file_transfer import map_file_transfer
 from ..reporting import ConsoleRenderer
 from . import preflight
+from .record_processor import RecordProcessor
+from .table_lock import TableLock
 
 # Per-category behavior flags now live in the ModalityRegistry (the single
 # source of truth — backend#796, P3a), derived from one ModalitySpec per
@@ -221,333 +218,39 @@ class BaseIngestor(ABC):
         self.table = None
         self._table_schema = table_schema
 
-    def _map_unique_id(
-        self, record: Dict[str, Any], cleaned_record: Dict[str, Any]
-    ) -> Optional[Dict[str, Any]]:
-        """
-        Maps the unique ID from the source record to data_id in the cleaned record.
-
-        Args:
-            record: Original record with all fields
-            cleaned_record: Processed record with schema fields
-
-        Returns:
-            Updated cleaned record if valid, None if invalid unique ID
-        """
-
-        # validate intent is valid
-        if not self.intent or self.intent not in Intent.get_all_intents():
-            logger.warning(
-                f"Invalid intent: {self.intent}. Must be one of: {Intent.get_all_intents()}"
-            )
-            return None
-
-        # Validate label_column exists if specified
-        columns_to_validate = [
-            (self.label_column, "label_column"),
-            (self.annotation_column, "annotation_column"),
-        ]
-        columns_not_found = False
-        for column, column_name in columns_to_validate:
-            if column and column not in record:
-                logger.warning(
-                    f"Specified {column_name} '{column}' not found in record"
-                )
-                columns_not_found = True
-
-        if columns_not_found:
-            logger.warning(
-                f"Record {record} does not contain the required columns: {columns_not_found}"
-            )
-
-        if self.label_column:
-            # Apply the configured label policy at the latest possible moment
-            # before the API client builds its payload. For classification-class
-            # categories ``label_policy="passthrough"`` is a no-op; for
-            # regression-class categories ``"bucket"`` replaces the raw target
-            # with a stable hash-bucket ID so the value never leaks to the
-            # central backend (#44 / parent client#85).
-            #
-            # Coerce numpy / pandas scalar types to native Python before the
-            # policy runs. After the INT-cast switch to nullable ``Int64``,
-            # itertuples yields ``numpy.int64`` (the old ``downcast='integer'``
-            # incidentally produced plain ``int``) — and mysql-connector-python
-            # refuses to bind numpy scalars, failing the passthrough path with
-            # "Python type numpy.int64 cannot be converted" on every row of any
-            # INT label column (tabular_classification on the e2e job). The
-            # other policies (e.g. ``bucket``) stringify their output so they
-            # never hit this; the fix lives here so passthrough also yields a
-            # binder-friendly value.
-            label_val = record.get(self.label_column)
-            if hasattr(label_val, "item") and not isinstance(label_val, str):
-                try:
-                    label_val = label_val.item()
-                except (ValueError, AttributeError):
-                    pass
-            # Strip surrounding whitespace from string label values before
-            # the policy runs — protects against silent label-set
-            # corruption (issue #261) where ``"  A  "`` and ``"A"`` would
-            # otherwise land as distinct classes in MySQL. A user
-            # copy-pasting from Excel / another tool routinely has
-            # whitespace they can't see; the framework's contract for
-            # the label column is "the class identifier", and class
-            # identifiers don't carry whitespace semantics. The strip
-            # mirrors what the framework already does for the
-            # ``data_id`` column (line below) and for column headers
-            # (``chunk.columns.str.strip()`` in csv_ingestor).
-            #
-            # Non-string labels (INT class IDs, BIOLabelValidator's
-            # space-separated tags, etc.) pass through unchanged.
-            if isinstance(label_val, str):
-                label_val = label_val.strip()
-            cleaned_record["label"] = label_policy_module.apply(
-                label_val, self.label_policy
-            )
-
-        if self.intent:
-            cleaned_record["data_intent"] = self.intent
-
-        if self.annotation_column:
-            cleaned_record["annotation"] = record.get(self.annotation_column)
-
-        if not self.unique_id_column:
-            # logger.warning("No unique ID column specified, generating unique ID mapping")
-            cleaned_record["data_id"] = str(uuid.uuid4())
-            return cleaned_record
-
-        unique_id = record.get(self.unique_id_column)
-        if unique_id is not None and str(unique_id).strip():
-            cleaned_record["data_id"] = str(unique_id).strip()
-            return cleaned_record
-        else:
-            logger.warning(f"Missing or invalid unique ID for record: {record}")
-            return None
+    @property
+    def _record_processor(self) -> RecordProcessor:
+        """The ingestor's per-record transform collaborator (P5c). Built from
+        the run's column / label / intent config; a fresh instance per access
+        is fine — it just holds those refs. ``process_record`` delegates here."""
+        return RecordProcessor(
+            schema=self.schema,
+            intent=self.intent,
+            label_column=self.label_column,
+            annotation_column=self.annotation_column,
+            unique_id_column=self.unique_id_column,
+            label_policy=self.label_policy,
+            category=self.category,
+            ingestor_id=self.ingestor_id,
+        )
 
     def process_record(self, record: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Process a single record"""
-        try:
-            # Clean data according to schema, excluding label_column, annotation_column, and unique_id_column
-            # These are handled separately and should not be ingested as regular columns
-            columns_to_exclude = set()
-            if self.label_column:
-                columns_to_exclude.add(self.label_column)
-            if self.annotation_column:
-                columns_to_exclude.add(self.annotation_column)
-            if self.unique_id_column:
-                columns_to_exclude.add(self.unique_id_column)
-            # Preserve missing-data semantics: any null-like value becomes
-            # Python None so the DB binder writes SQL NULL. Treats four
-            # representations uniformly:
-            #   - Python None         (explicit absence, JSON null)
-            #   - float NaN / pd.NaT  (from pd.read_csv / pd.to_datetime)
-            #   - pd.NA               (from pandas StringDtype after #172)
-            #   - literal "" string   (JSON empty string — JSONIngestor reads
-            #                         via json.load, not pd.read_json, so ""
-            #                         survives to here; CSVs never hit this
-            #                         case because keep_default_na=True turns
-            #                         "" into NaN at read time)
-            # Mirrors the missing-data convention in
-            # JSONIngestor._validate_record (#170): `value is None or
-            # value == ""`. pd.isna returns False for ordinary
-            # strings/numbers/bools so existing values aren't touched.
-            # Booleans must NOT be stringified — mysql-connector-python writes
-            # True/False directly as TINYINT 1/0, but `str(True)` is the
-            # four-character string "True", which MySQL rejects against a BOOL
-            # column with `Incorrect integer value: 'True' for column 'active'
-            # at row 1`. This must catch BOTH Python `bool` AND `numpy.bool_`:
-            # a CSV BOOL column comes back from pandas/itertuples as numpy.bool_,
-            # and `isinstance(np.True_, bool)` is False — so the previous
-            # `isinstance(v, bool)` check missed it and every CSV boolean was
-            # stringified to "True"/"False" and rejected by MySQL. `is_bool`
-            # covers both; convert to a plain Python bool so the binder writes
-            # 1/0. Checked FIRST so a bool never reaches the `v == ""` compare
-            # (numpy scalar-vs-str comparison would warn) and pd.NA (is_bool
-            # False) falls through to the null branch. The rest of the pipeline
-            # expects strings, so everything non-bool/non-null is stringified.
-            cleaned_record = {
-                k.strip(): (
-                    bool(v)
-                    if pd.api.types.is_bool(v)
-                    else None if pd.isna(v) or v == "" else str(v).strip()
-                )
-                for k, v in record.items()
-                if k in self.schema and k not in columns_to_exclude
-            }
-            # Map unique ID if specified
-            cleaned_record = self._map_unique_id(record, cleaned_record)
+        """Process a single record into the cleaned, DB-ready dict.
 
-            logger.info(f"Cleaned record: {cleaned_record}")
-
-            if cleaned_record is None:
-                return None
-
-            # Add ingestor_id to the record
-            cleaned_record["ingestor_id"] = self.ingestor_id
-            cleaned_record["filename"] = record.get("filename")
-            cleaned_record["extension"] = record.get("extension")
-            # Preserve mask_id for semantic_segmentation ONLY. The
-            # cleaned_record comprehension above filters by ``k in
-            # self.schema``, but for the documented 8-line schema-less
-            # example yaml that filter drops every CSV column including
-            # mask_id — which file_transfer.py:401 needs to locate the
-            # per-row mask file. Without this, every record was skipped at
-            # file-transfer with "No mask_id found in record" despite
-            # #207's FilePairingValidator pass.
-            #
-            # Scoped to SEMANTIC_SEGMENTATION because mask_id is a runtime
-            # indirection only — there's no `mask_id` column on the
-            # standard tracebloc table (see database.py:standard_columns),
-            # so putting it on every category's cleaned_record would break
-            # SQL inserts on tables that don't have it (#212 bugbot).
-            # _process_batch additionally pops it before insert so even
-            # the semseg path doesn't try to bind it as a column.
-            if self.category == TaskCategory.SEMANTIC_SEGMENTATION:
-                cleaned_record["mask_id"] = record.get("mask_id")
-            return cleaned_record
-
-        except Exception as e:
-            logger.error(f"Error processing record: {str(e)}")
-            return None
-
-    # Stale-lock cutoff (seconds). A crashed ingest leaves the lock file
-    # behind; if the lock is older than this we log + remove + reacquire
-    # so a customer isn't blocked indefinitely waiting for the writer
-    # whose pod has long since been garbage-collected. 12h covers any
-    # reasonable ingest (including multi-GB proteomics).
-    _TABLE_LOCK_STALE_SECONDS = 12 * 3600
-
-    def _table_lock_path(self) -> Optional[str]:
-        """Where the lock file lives — at the top of STORAGE_PATH (the
-        parent of every per-table DEST_PATH), so it's durable across pod
-        restarts on the cluster PVC. Returns None when STORAGE_PATH is
-        unset or not a directory (test configs / local runs without a
-        staging dir) — caller treats that as "no lock available, skip".
+        Delegates to the :class:`RecordProcessor` collaborator (structural
+        refactor P5c); kept as the ingestor's method since the ingest loop and
+        tests call ``self.process_record`` / ``ing.process_record``.
         """
-        # Late import: keep this module free of a Config singleton at
-        # import time so unit tests can monkeypatch the env per test.
-        from ..config import Config
+        return self._record_processor.process(record)
 
-        storage = Config().STORAGE_PATH
-        if not storage or not os.path.isdir(storage):
-            return None
-        return os.path.join(storage, f".tracebloc-ingest-{self.table_name}.lock")
-
-    def _acquire_table_lock(self) -> Optional[str]:
-        """Acquire an exclusive lock for ``self.table_name`` (#772 P2).
-
-        Two ingests targeting the same table used to race
-        ``create_table`` / interleave upserts. Atomic ``O_EXCL`` create
-        either succeeds (lock acquired) or fails with ``FileExistsError``
-        (another ingest is in flight). On conflict, read the existing
-        lock's metadata and surface it in the error so ops can find the
-        other run; if the lock is older than the stale-cutoff, remove
-        and reacquire.
-
-        Returns the lock path (or None if no STORAGE_PATH is configured)
-        so ``_release_table_lock`` can remove the right file.
-        """
-        import json as _json
-        import socket as _socket
-        from datetime import datetime as _datetime
-
-        lock_path = self._table_lock_path()
-        if lock_path is None:
-            return None
-
-        lock_info = {
-            "ingestor_id": self.ingestor_id,
-            "table_name": self.table_name,
-            "pid": os.getpid(),
-            "hostname": _socket.gethostname(),
-            "started_at": _datetime.utcnow().isoformat() + "Z",
-        }
-        try:
-            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
-        except FileExistsError:
-            # Read the existing lock so the error names the holder. Also
-            # check staleness and self-recover if so.
-            existing_info: Dict[str, Any] = {}
-            try:
-                with open(lock_path, "r") as f:
-                    existing_info = _json.load(f)
-            except Exception:
-                pass
-            age = None
-            try:
-                started = _datetime.fromisoformat(
-                    existing_info.get("started_at", "").rstrip("Z")
-                )
-                age = (_datetime.utcnow() - started).total_seconds()
-            except Exception:
-                # Lock metadata is corrupt (truncated file, malformed
-                # JSON, missing/un-parseable started_at). Fall back to
-                # the file's mtime as the age signal (#221 bugbot: a
-                # corrupt lock used to never auto-expire because age
-                # stayed None). Use time.time() rather than
-                # _datetime.utcnow().timestamp() — the latter is
-                # timezone-broken (naive datetime treated as local) so
-                # the cutoff would shift by the local UTC offset on
-                # non-UTC systems.
-                import time as _time
-
-                try:
-                    mtime = os.path.getmtime(lock_path)
-                    age = _time.time() - mtime
-                except OSError:
-                    pass
-            if age is not None and age > self._TABLE_LOCK_STALE_SECONDS:
-                logger.warning(
-                    f"{YELLOW}Stale lock at {lock_path} (age={age:.0f}s, "
-                    f"holder={existing_info!r}) — removing and reacquiring. "
-                    f"The holder's pod likely crashed before its finally "
-                    f"could run.{RESET}"
-                )
-                try:
-                    os.remove(lock_path)
-                except FileNotFoundError:
-                    pass
-                return self._acquire_table_lock()
-            raise RuntimeError(
-                f"{RED}Another ingest is already running for table "
-                f"'{self.table_name}' (lock at {lock_path}). "
-                f"Holder: {existing_info!r}. Wait for it to finish, or — "
-                f"if its pod crashed — remove the lock file manually. "
-                f"(The lock auto-clears after "
-                f"{self._TABLE_LOCK_STALE_SECONDS}s.){RESET}"
-            )
-        try:
-            with os.fdopen(fd, "w") as f:
-                _json.dump(lock_info, f)
-        except Exception:
-            # Couldn't write the metadata — drop the lock so we don't
-            # block ourselves on a malformed file.
-            try:
-                os.remove(lock_path)
-            except FileNotFoundError:
-                pass
-            raise
-        logger.info(f"Acquired table lock for '{self.table_name}' at {lock_path}")
-        return lock_path
-
-    def _release_table_lock(self, lock_path: Optional[str]) -> None:
-        """Remove the lock file. No-op when ``_acquire_table_lock``
-        returned None (no STORAGE_PATH configured). Idempotent — a
-        double-release (e.g. exception path + finally path both call
-        it) silently swallows ``FileNotFoundError``.
-        """
-        if not lock_path:
-            return
-        try:
-            os.remove(lock_path)
-            logger.info(f"Released table lock for '{self.table_name}'")
-        except FileNotFoundError:
-            pass
-        except Exception as exc:
-            logger.warning(
-                f"Failed to remove table lock {lock_path}: {exc}. "
-                f"It will auto-clear after "
-                f"{self._TABLE_LOCK_STALE_SECONDS}s."
-            )
+    @property
+    def _table_lock(self) -> TableLock:
+        """The run's table lock (P5b). ``TableLock`` owns the file-lock
+        lifecycle — compute path, atomic acquire with stale-reclaim, release —
+        and the ingestor just composes it. A fresh instance per access is fine:
+        the lock state lives in the on-disk file, not the object (``acquire``
+        returns the path, ``release`` takes it back)."""
+        return TableLock(self.table_name, self.ingestor_id)
 
     def validate_data(self, source: Any) -> bool:
         """Validate data before ingestion using configured validators.
@@ -683,11 +386,12 @@ class BaseIngestor(ABC):
         # Fail fast on a config error (bad intent) before acquiring a table
         # lock or touching the DB — it would otherwise skip every row (#234).
         preflight.check_intent(self.intent)
-        _lock_path = self._acquire_table_lock()
+        lock = self._table_lock
+        _lock_path = lock.acquire()
         try:
             return self._ingest_with_lock(source, batch_size)
         finally:
-            self._release_table_lock(_lock_path)
+            lock.release(_lock_path)
 
     def _ingest_with_lock(
         self, source: Any, batch_size: int = 50

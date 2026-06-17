@@ -670,13 +670,13 @@ def test_acquire_table_lock_creates_lock_file(tmp_path):
 
     with patch.object(CfgCls, "STORAGE_PATH", str(tmp_path)):
         ing = make_ingestor(table_name="dataset_a", category=None)
-        lock_path = ing._acquire_table_lock()
+        lock_path = ing._table_lock.acquire()
         assert lock_path is not None
         assert lock_path.endswith(".tracebloc-ingest-dataset_a.lock")
         meta = json.loads(open(lock_path).read())
         assert meta["table_name"] == "dataset_a"
         assert meta["ingestor_id"] == ing.ingestor_id
-        ing._release_table_lock(lock_path)
+        ing._table_lock.release(lock_path)
         assert not __import__("os").path.exists(lock_path)
 
 
@@ -688,13 +688,13 @@ def test_acquire_table_lock_rejects_concurrent_ingest(tmp_path):
 
     with patch.object(CfgCls, "STORAGE_PATH", str(tmp_path)):
         ing_a = make_ingestor(table_name="dataset_a", category=None)
-        path_a = ing_a._acquire_table_lock()
+        path_a = ing_a._table_lock.acquire()
         try:
             ing_b = make_ingestor(table_name="dataset_a", category=None)
             with pytest.raises(RuntimeError, match="already running"):
-                ing_b._acquire_table_lock()
+                ing_b._table_lock.acquire()
         finally:
-            ing_a._release_table_lock(path_a)
+            ing_a._table_lock.release(path_a)
 
 
 def test_acquire_table_lock_different_tables_dont_conflict(tmp_path):
@@ -705,11 +705,11 @@ def test_acquire_table_lock_different_tables_dont_conflict(tmp_path):
     with patch.object(CfgCls, "STORAGE_PATH", str(tmp_path)):
         ing_a = make_ingestor(table_name="dataset_a", category=None)
         ing_b = make_ingestor(table_name="dataset_b", category=None)
-        path_a = ing_a._acquire_table_lock()
-        path_b = ing_b._acquire_table_lock()
+        path_a = ing_a._table_lock.acquire()
+        path_b = ing_b._table_lock.acquire()
         assert path_a != path_b
-        ing_a._release_table_lock(path_a)
-        ing_b._release_table_lock(path_b)
+        ing_a._table_lock.release(path_a)
+        ing_b._table_lock.release(path_b)
 
 
 def test_acquire_table_lock_reclaims_stale_lock(tmp_path):
@@ -722,16 +722,16 @@ def test_acquire_table_lock_reclaims_stale_lock(tmp_path):
 
     with patch.object(CfgCls, "STORAGE_PATH", str(tmp_path)):
         ing = make_ingestor(table_name="dataset_stale", category=None)
-        lock_path = ing._table_lock_path()
+        lock_path = ing._table_lock.path()
         old = (datetime.utcnow() - timedelta(days=2)).isoformat() + "Z"
         with open(lock_path, "w") as f:
             json.dump({"ingestor_id": "crashed-ingest", "started_at": old}, f)
         # Stale lock detected -> removed -> reacquired with the new holder.
-        path = ing._acquire_table_lock()
+        path = ing._table_lock.acquire()
         assert path == lock_path
         meta = json.loads(open(lock_path).read())
         assert meta["ingestor_id"] == ing.ingestor_id
-        ing._release_table_lock(lock_path)
+        ing._table_lock.release(lock_path)
 
 
 def test_acquire_table_lock_noop_when_storage_path_missing(tmp_path):
@@ -742,8 +742,8 @@ def test_acquire_table_lock_noop_when_storage_path_missing(tmp_path):
     missing = str(tmp_path / "never_exists")
     with patch.object(CfgCls, "STORAGE_PATH", missing):
         ing = make_ingestor(table_name="dataset_a", category=None)
-        assert ing._acquire_table_lock() is None
-        ing._release_table_lock(None)  # must not raise
+        assert ing._table_lock.acquire() is None
+        ing._table_lock.release(None)  # must not raise
 
 
 def test_release_table_lock_idempotent(tmp_path):
@@ -753,9 +753,9 @@ def test_release_table_lock_idempotent(tmp_path):
 
     with patch.object(CfgCls, "STORAGE_PATH", str(tmp_path)):
         ing = make_ingestor(table_name="dataset_a", category=None)
-        path = ing._acquire_table_lock()
-        ing._release_table_lock(path)
-        ing._release_table_lock(path)  # idempotent, no raise
+        path = ing._table_lock.acquire()
+        ing._table_lock.release(path)
+        ing._table_lock.release(path)  # idempotent, no raise
 
 
 # ---------------------------------------------------------------------------
@@ -776,7 +776,7 @@ def test_lock_released_when_validate_data_raises(tmp_path):
         with patch.object(ing, "validate_data", side_effect=RuntimeError("boom")):
             with pytest.raises(RuntimeError):
                 ing.ingest("src")
-        lock_path = ing._table_lock_path()
+        lock_path = ing._table_lock.path()
         assert lock_path is not None
         import os as _os
 
@@ -801,7 +801,7 @@ def test_lock_released_when_count_records_raises(tmp_path):
                 ing.ingest("src")
         import os as _os
 
-        assert not _os.path.exists(ing._table_lock_path()), "lock leaked"
+        assert not _os.path.exists(ing._table_lock.path()), "lock leaked"
 
 
 def test_acquire_table_lock_recovers_from_corrupt_lock_via_mtime(tmp_path):
@@ -815,16 +815,16 @@ def test_acquire_table_lock_recovers_from_corrupt_lock_via_mtime(tmp_path):
 
     with patch.object(CfgCls, "STORAGE_PATH", str(tmp_path)):
         ing = make_ingestor(table_name="dataset_corrupt", category=None)
-        lock_path = ing._table_lock_path()
+        lock_path = ing._table_lock.path()
         with open(lock_path, "w"):
             pass  # empty file -> JSON parse fails
         old = _os.path.getmtime(lock_path) - (13 * 3600)  # 13h ago
         _os.utime(lock_path, (old, old))
-        path = ing._acquire_table_lock()
+        path = ing._table_lock.acquire()
         assert path == lock_path
         meta = json.loads(open(lock_path).read())
         assert meta["ingestor_id"] == ing.ingestor_id
-        ing._release_table_lock(lock_path)
+        ing._table_lock.release(lock_path)
 
 
 def test_acquire_table_lock_corrupt_but_fresh_blocks(tmp_path):
@@ -835,11 +835,11 @@ def test_acquire_table_lock_corrupt_but_fresh_blocks(tmp_path):
 
     with patch.object(CfgCls, "STORAGE_PATH", str(tmp_path)):
         ing = make_ingestor(table_name="dataset_corrupt", category=None)
-        lock_path = ing._table_lock_path()
+        lock_path = ing._table_lock.path()
         with open(lock_path, "w"):
             pass  # empty, JSON parse fails, mtime is now (fresh)
         with pytest.raises(RuntimeError, match="already running"):
-            ing._acquire_table_lock()
+            ing._table_lock.acquire()
 
 
 # ---------------------------------------------------------------------------
