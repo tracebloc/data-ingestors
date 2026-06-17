@@ -28,7 +28,6 @@ from ..validators.time_before_today_validator import TimeBeforeTodayValidator
 from ..validators.time_format_validator import TimeFormatValidator
 from ..validators.time_ordered_validator import TimeOrderedValidator
 from ..validators.time_to_event_validator import TimeToEventValidator
-from ..validators.tokenizer_validator import TokenizerValidator
 from ..validators.xml_validator import PascalVOCXMLValidator
 
 
@@ -104,9 +103,6 @@ def text_classification(options: Dict[str, Any]) -> List[BaseValidator]:
             path="texts",
         ),
     )
-    # Optional user-supplied tokenizer.json — warn (don't fail) if absent;
-    # if present, it must contain [PAD] (text classification pads batches).
-    validators.append(TokenizerValidator(required_tokens=("[PAD]",), optional=True))
     # Add data validator if schema is provided
     if options.get("schema"):
         validators.append(DataValidator(schema=options["schema"]))
@@ -135,9 +131,6 @@ def token_classification(options: Dict[str, Any]) -> List[BaseValidator]:
             label_column=options.get("label_column") or "label",
         )
     )
-    # Optional user-supplied tokenizer.json — warn (don't fail) if absent;
-    # if present, it must contain [PAD].
-    validators.append(TokenizerValidator(required_tokens=("[PAD]",), optional=True))
     # Add data validator if schema is provided
     if options.get("schema"):
         validators.append(DataValidator(schema=options["schema"]))
@@ -244,8 +237,6 @@ def masked_language_modeling(options: Dict[str, Any]) -> List[BaseValidator]:
             path="sequences",
         ),
     )
-    # Validate tokenizer.json has required special tokens ([MASK], [PAD])
-    validators.append(TokenizerValidator())
     # Add data validator if schema is provided
     if options.get("schema"):
         validators.append(DataValidator(schema=options["schema"]))

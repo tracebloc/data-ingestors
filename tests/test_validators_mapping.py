@@ -24,7 +24,6 @@ from tracebloc_ingestor.validators.keypoint_annotation_validator import (
 from tracebloc_ingestor.validators.keypoint_visibility_validator import (
     KeypointVisibilityValidator,
 )
-from tracebloc_ingestor.validators.tokenizer_validator import TokenizerValidator
 from tracebloc_ingestor.validators.label_diversity_validator import (
     LabelDiversityValidator,
 )
@@ -211,24 +210,8 @@ def test_time_to_event_without_schema():
     assert DataValidator not in types
 
 
-def test_masked_language_modeling_includes_tokenizer():
-    v = map_validators(TaskCategory.MASKED_LANGUAGE_MODELING, {})
-    assert TokenizerValidator in _types(v)
-
-
 def test_unknown_category_returns_empty():
     assert map_validators("not_a_category", {}) == []
-
-
-def test_text_and_token_classification_include_optional_tokenizer_validator():
-    from tracebloc_ingestor.validators.tokenizer_validator import TokenizerValidator
-
-    for cat in (TaskCategory.TEXT_CLASSIFICATION, TaskCategory.TOKEN_CLASSIFICATION):
-        v = map_validators(cat, {})
-        tok = [x for x in v if isinstance(x, TokenizerValidator)]
-        assert tok, f"{cat}: expected an (optional) TokenizerValidator"
-        assert tok[0].optional is True
-        assert tok[0].required_tokens == {"[PAD]"}
 
 
 # --- P4b: config injection seam -------------------------------------------

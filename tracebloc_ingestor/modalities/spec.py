@@ -61,12 +61,10 @@ class ModalitySpec:
             targets at train time (e.g. masked language modeling). The backend
             stores no edge-label metadata, so the edge-label call is skipped
             (#213).
-        is_nlp: an NLP text category (text / token classification, MLM) that
-            ships a ``tokenizer.json``. When one is present, its 4-integer
-            fingerprint (vocab_size / mask_token_id / pad_token_id /
-            tokenizer_type) is registered on the global-metadata channel at
-            ingest for the contributor-tokenizer cross-check at dataset linking
-            (#805 Task 2). Image / tabular / time-series are False.
+        is_nlp: an NLP text category (text / token classification, MLM). Gates
+            NLP-specific ingest handling — e.g. the data-derived text profile
+            shipped on the global-metadata channel for tokenizer-fit checks
+            (#805). Image / tabular / time-series are False.
     """
 
     category: str

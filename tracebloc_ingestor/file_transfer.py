@@ -30,7 +30,6 @@ from tracebloc_ingestor.utils.constants import (
     FileExtension,
     TaskCategory,
 )
-from tracebloc_ingestor.validators.tokenizer_validator import load_tokenizer_metadata
 
 # Initialize config and configure logging
 config = Config()
@@ -365,60 +364,6 @@ def mask_transfer(
 
     except Exception as e:
         raise ValueError(f"{RED}Error processing mask file: {str(e)}{RESET}")
-
-
-def _copy_tokenizer_if_present(cfg: Optional[Config] = None) -> Optional[Dict[str, Any]]:
-    """Copy a user-shipped ``tokenizer.json`` from SRC_PATH to DEST_PATH (once)
-    and return its structural fingerprint.
-
-    Optional for NLP datasets: the training client looks for
-    ``DEST_PATH/tokenizer.json`` and uses it as a custom tokenizer; if it's
-    absent the client falls back to the HuggingFace tokenizer_id / default.
-    After the copy, the 4-integer fingerprint — ``vocab_size`` /
-    ``mask_token_id`` / ``pad_token_id`` / ``tokenizer_type`` — is extracted
-    and logged so it can be registered on the global-metadata channel for the
-    contributor-tokenizer cross-check at dataset linking (#805 Task 2). Only
-    those integers ever leave the cluster — never vocabulary content or a hash.
-
-    Returns the fingerprint dict on the call that performs the copy, and
-    ``None`` thereafter (already copied this run) or when no tokenizer.json was
-    shipped. The authoritative fingerprint for registration is read once,
-    post-ingest, via :func:`get_shipped_tokenizer_metadata`.
-    """
-    cfg = cfg or config
-    tokenizer_src = os.path.join(cfg.SRC_PATH, "tokenizer.json")
-    tokenizer_dest = os.path.join(cfg.DEST_PATH, "tokenizer.json")
-    if not os.path.isfile(tokenizer_src) or os.path.exists(tokenizer_dest):
-        return None
-    _copy_file_with_retry(tokenizer_src, tokenizer_dest)
-    metadata = load_tokenizer_metadata(tokenizer_dest)
-    logger.info(
-        f"{GREEN}Copied tokenizer.json to {cfg.DEST_PATH} "
-        f"(fingerprint: {metadata}){RESET}"
-    )
-    return metadata
-
-
-def get_shipped_tokenizer_metadata(
-    cfg: Optional[Config] = None,
-) -> Optional[Dict[str, Any]]:
-    """Return the structural fingerprint of the staged ``tokenizer.json``.
-
-    Reads ``DEST_PATH/tokenizer.json`` — the file the training client actually
-    loads — NOT ``SRC_PATH``. ``_copy_tokenizer_if_present`` copies the source
-    only once (it skips when a DEST copy already exists), so on a re-ingest
-    that ships a changed source the client keeps training on the existing DEST
-    file; fingerprinting DEST keeps the registered metadata matched to what is
-    trained on (else the contributor cross-check at linking would compare
-    against a tokenizer the site never used). Returns the 4 structural integers,
-    or ``None`` when no tokenizer was staged. Called once after ingestion to
-    register the fingerprint on the existing global-metadata channel (#805
-    Task 2); only these integers cross the cluster boundary. ``cfg`` is the
-    run's resolved Config (threaded from the ingestor); ``None`` falls back to
-    the module-global ``config``.
-    """
-    cfg = cfg or config
-    return load_tokenizer_metadata(os.path.join(cfg.DEST_PATH, "tokenizer.json"))
 
 
 # Per-row sidecar pointers that live on the RAW source record (not table
