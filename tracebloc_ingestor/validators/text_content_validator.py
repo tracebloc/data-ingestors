@@ -91,10 +91,15 @@ class TextContentValidator(BaseValidator):
                 str(v).strip() for v in df[filename_col].tolist() if str(v).strip()
             ]
 
-            errors: List[str] = []
-            warnings: List[str] = []
-            checked = 0
-            for filename in _sample(filenames, self.sample_size):
+            # Existence-filter FIRST, then sample the files that ACTUALLY exist.
+            # Sampling the raw manifest first (then skipping the missing ones)
+            # let a handful of present files fall outside the sample when most
+            # rows reference absent files — content went unread and binary files
+            # slipped through (Bugbot: content sample skips existing files). The
+            # cheap part (a stat per row) walks the manifest; the expensive part
+            # (reading + decoding content) stays bounded to ``sample_size``.
+            present = []
+            for filename in filenames:
                 resolved = (
                     filename
                     if _has_extension(filename)
@@ -103,15 +108,18 @@ class TextContentValidator(BaseValidator):
                 # Resolve as the transfer does (``_safe_join`` under SRC_PATH):
                 # an absolute / ``..`` manifest value is rejected by the transfer
                 # (#239), so we neither read nor flag a file outside the dataset
-                # dir — skip it (its missing-ness is the records validator's job).
+                # dir — its missing-ness is the records validator's job.
                 try:
                     text_path = _safe_join(src_root, self.texts_path, resolved)
                 except ValueError:
                     continue
-                if not os.path.isfile(text_path):
-                    # A missing referenced file is surfaced by
-                    # IngestableRecordsValidator / the transfer path, not here.
-                    continue
+                if os.path.isfile(text_path):
+                    present.append((text_path, resolved))
+
+            errors: List[str] = []
+            warnings: List[str] = []
+            checked = 0
+            for text_path, resolved in _sample(present, self.sample_size):
                 checked += 1
                 level, message = self._inspect(text_path, resolved)
                 if level == "error":

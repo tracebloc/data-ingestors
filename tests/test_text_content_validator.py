@@ -162,3 +162,20 @@ def test_truncated_trailing_multibyte_in_small_file_is_rejected(staged):
     result = TextContentValidator(texts_path="sequences").validate(str(path))
     assert not result.is_valid
     assert any("not valid UTF-8" in e for e in result.errors)
+
+
+def test_existing_binary_file_caught_even_amid_many_missing(staged):
+    # Many rows reference absent files; one real binary file sits in the middle.
+    # Existence-filtering before sampling ensures the present file is inspected
+    # and the binary content is caught (Bugbot: content sample skips existing).
+    _, seq, make_csv = staged
+    (seq / "real.txt").write_bytes(b"\x00\xff binary")
+    names = [f"missing{i}" for i in range(50)]
+    names.insert(25, "real")  # not at a strided-sample position of the raw list
+    path = make_csv(names)
+    result = TextContentValidator(texts_path="sequences", sample_size=5).validate(
+        str(path)
+    )
+    assert not result.is_valid
+    assert result.metadata["docs_checked"] >= 1
+    assert any("real.txt" in e for e in result.errors)
