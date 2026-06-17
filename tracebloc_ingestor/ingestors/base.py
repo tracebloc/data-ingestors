@@ -19,6 +19,7 @@ from ..utils.constants import (
 from ..utils import label_policy as label_policy_module
 from ..utils.validators_mapping import map_validators
 from ..file_transfer import map_file_transfer
+from ..text_profile import compute_text_profile
 from ..reporting import ConsoleRenderer
 from . import preflight
 from .batch_writer import BatchWriter
@@ -32,6 +33,7 @@ from .table_lock import TableLock
 # (and their None/unknown -> False semantics are preserved).
 from ..modalities.registry import (
     FILE_BEARING_CATEGORIES as _FILE_BEARING_CATEGORIES,
+    NLP_CATEGORIES as _NLP_CATEGORIES,
     TABULAR_FAMILY_CATEGORIES as _TABULAR_FAMILY_CATEGORIES,
 )
 
@@ -573,6 +575,16 @@ class BaseIngestor(ABC):
                         "NOT registered (its rows are already in the database). "
                         "See the logged API error above."
                     )
+
+                # Ship a data-derived text profile for NLP datasets (#805):
+                # Unicode-script mix + length distribution, computed from the
+                # staged text with NO tokenizer. The backend uses it for a
+                # warn-only tokenizer-fit check at linking. Only aggregate
+                # statistics cross the boundary — never raw text or vocabulary.
+                if self.category in _NLP_CATEGORIES:
+                    text_profile = compute_text_profile(self.database.config)
+                    if text_profile:
+                        self.file_options["text_profile"] = text_profile
 
                 schema_dict = self.database.get_table_schema(self.table_name)
                 if not self.api_client.send_global_meta_meta(
