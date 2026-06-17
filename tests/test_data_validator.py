@@ -253,11 +253,60 @@ def test_unknown_type_fails():
     assert "Unknown data type" in result.errors[0]
 
 
-def test_schema_column_not_in_df_is_ignored():
-    df = pd.DataFrame({"a": [1]})
-    result = DataValidator(schema={"b": "INT"}).validate(df)
-    # 'b' isn't in df.columns, so nothing is validated -> valid.
-    assert result.is_valid
+def test_csv_schema_column_not_in_header_now_fails(make_csv):
+    """Issue #289: a schema column absent from a CSV header used to pass the
+    DataValidator silently — the read-time check in CSVIngestor caught it
+    later, AFTER ``create_table`` had run, leaving an orphan empty table.
+    The streaming CSV validator now fails fast at preflight so
+    ``create_table`` is never reached and no table is created.
+    """
+    path = make_csv({"a": [1, 2, 3]})  # header is just "a"
+    result = DataValidator(schema={"a": "INT", "b": "INT"}).validate(str(path))
+    assert not result.is_valid
+    assert any("Schema columns not present in CSV" in e for e in result.errors)
+    assert any("b" in e for e in result.errors)
+
+
+def test_csv_schema_missing_lists_all_missing_columns(make_csv):
+    """When multiple schema columns are absent, all are named in the error so
+    a user can fix the CSV in one pass instead of one column at a time."""
+    path = make_csv({"present": [1]})
+    result = DataValidator(
+        schema={"present": "INT", "missing1": "INT", "missing2": "FLOAT"}
+    ).validate(str(path))
+    assert not result.is_valid
+    err = " ".join(result.errors)
+    assert "missing1" in err and "missing2" in err
+
+
+def test_json_sparse_schema_field_still_passes(tmp_path):
+    """JSON ingestion is intentionally permissive: JSONIngestor._validate_record
+    only WARNS when a schema field is absent from a record and proceeds. A
+    JSON file where one schema field never appears in any record (so pandas
+    omits the column from the DataFrame) must NOT be rejected at preflight —
+    otherwise the validator rejects inputs the ingestor would have accepted
+    (bugbot, PR #292).
+
+    The CSV missing-column gate is scoped to ``_validate_csv_streaming`` so
+    only file-shape mismatches in tabular CSV input fail fast at preflight.
+    """
+    p = tmp_path / "sparse.json"
+    # 'optional' is in the schema but absent from every record
+    p.write_text('[{"id": 1, "label": "A"}, {"id": 2, "label": "B"}]')
+    result = DataValidator(
+        schema={"id": "INT", "label": "VARCHAR(8)", "optional": "FLOAT"}
+    ).validate(str(p))
+    assert result.is_valid, f"expected valid for sparse JSON; errors={result.errors}"
+
+
+def test_dataframe_sparse_schema_field_still_passes():
+    """A DataFrame passed directly (the JSON-loaded path) with a column
+    absent from the schema-vs-df comparison must also still pass — the
+    missing-column gate is CSV-only (bugbot, PR #292). Mirrors the
+    JSONIngestor warn-and-proceed contract."""
+    df = pd.DataFrame({"a": [1]})  # schema has 'b' but df doesn't
+    result = DataValidator(schema={"a": "INT", "b": "INT"}).validate(df)
+    assert result.is_valid, f"expected valid for sparse DF; errors={result.errors}"
 
 
 # ---------------------------------------------------------------------------
