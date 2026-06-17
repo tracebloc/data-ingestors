@@ -1004,3 +1004,87 @@ def test_check_src_path_required_for_token_classification():
     from tracebloc_ingestor.ingestors.base import _FILE_BEARING_CATEGORIES
 
     assert TaskCategory.TOKEN_CLASSIFICATION in _FILE_BEARING_CATEGORIES
+
+
+# ---------------------------------------------------------------------------
+# #805: data-derived text profile on the global-metadata channel
+# ---------------------------------------------------------------------------
+
+_TEXT_PROFILE = {
+    "schema_version": 1,
+    "docs_sampled": 3,
+    "scripts": {"Latin": 1.0},
+}
+
+
+@pytest.mark.parametrize(
+    "category",
+    ["MASKED_LANGUAGE_MODELING", "TEXT_CLASSIFICATION", "TOKEN_CLASSIFICATION"],
+)
+def test_ingest_attaches_text_profile_for_nlp(category):
+    """For every NLP category, the data-derived text profile is attached to
+    file_options so it rides the existing global-metadata channel."""
+    from tracebloc_ingestor.utils.constants import TaskCategory
+
+    cat = getattr(TaskCategory, category)
+    records = [{"a": "1", "filename": "f1"}]
+    ing = make_ingestor(records=records, category=cat, label_column=None)
+    with patch.object(base_mod, "Session") as Sess, patch.object(
+        ing, "validate_data", return_value=True
+    ), patch.object(
+        base_mod, "map_file_transfer", side_effect=lambda c, r, o, cfg=None: r
+    ), patch.object(
+        base_mod, "compute_text_profile", return_value=_TEXT_PROFILE
+    ):
+        Sess.return_value.__enter__.return_value = MagicMock()
+        ing.ingest("src", batch_size=10)
+    args, _ = ing.api_client.send_global_meta_meta.call_args
+    assert args[2].get("text_profile") == _TEXT_PROFILE
+
+
+def test_ingest_omits_text_profile_when_none_for_nlp():
+    """No readable staged text -> profiler returns None -> field omitted; the
+    ingest still registers cleanly."""
+    from tracebloc_ingestor.utils.constants import TaskCategory
+
+    records = [{"a": "1", "filename": "f1"}]
+    ing = make_ingestor(
+        records=records,
+        category=TaskCategory.TEXT_CLASSIFICATION,
+        label_column="a",
+    )
+    with patch.object(base_mod, "Session") as Sess, patch.object(
+        ing, "validate_data", return_value=True
+    ), patch.object(
+        base_mod, "map_file_transfer", side_effect=lambda c, r, o, cfg=None: r
+    ), patch.object(
+        base_mod, "compute_text_profile", return_value=None
+    ):
+        Sess.return_value.__enter__.return_value = MagicMock()
+        ing.ingest("src", batch_size=10)
+    args, _ = ing.api_client.send_global_meta_meta.call_args
+    assert "text_profile" not in args[2]
+
+
+def test_ingest_does_not_profile_non_nlp():
+    """Non-NLP categories never touch the text-profile path."""
+    from tracebloc_ingestor.utils.constants import TaskCategory
+
+    records = [{"a": "1", "filename": "f1"}]
+    ing = make_ingestor(
+        records=records,
+        category=TaskCategory.IMAGE_CLASSIFICATION,
+        label_column="a",
+    )
+    with patch.object(base_mod, "Session") as Sess, patch.object(
+        ing, "validate_data", return_value=True
+    ), patch.object(
+        base_mod, "map_file_transfer", side_effect=lambda c, r, o, cfg=None: r
+    ), patch.object(
+        base_mod, "compute_text_profile"
+    ) as profile:
+        Sess.return_value.__enter__.return_value = MagicMock()
+        ing.ingest("src", batch_size=10)
+    profile.assert_not_called()
+    args, _ = ing.api_client.send_global_meta_meta.call_args
+    assert "text_profile" not in args[2]
