@@ -534,12 +534,20 @@ def test_ingest_fails_loud_when_backend_registration_step_fails(failing_step):
     ing.api_client.create_dataset.assert_not_called()
 
 
-def test_ingest_skips_edge_label_call_for_self_supervised_categories():
-    """Issue #213: self-supervised categories (MLM, …) have no `label` column,
-    so the backend's edge-label endpoint returns a misleading HTTP 400
-    ('No data found') even though the table has rows. Gate the call so it
-    only runs for label-carrying categories. The remaining registration
-    steps (send_global_meta_meta, prepare_dataset, create_dataset) still run."""
+def test_ingest_calls_edge_label_for_self_supervised_categories():
+    """Self-supervised categories (MLM, …) MUST call the edge-label endpoint
+    like every other category.
+
+    Originally (#213) the call was SKIPPED for self-supervised categories
+    because they carry no `label` and the old backend rejected blank labels,
+    returning a misleading HTTP 400. Backend PR #683 ('allow blank label for
+    self-supervised categories') fixed that: GenerateEdgeLabelsMeta now buckets
+    the single '' label into ``edge_labels_meta = {"": N}`` (HTTP 200). The
+    skip was the only thing left blocking self-supervised registration —
+    without an ``edge_labels_meta`` document the backend's get_edges finds no
+    candidate edges and ``prepare`` returns 'No edges found', so the dataset
+    never registers and stays invisible in the app. The call must now run for
+    self-supervised too; the remaining registration steps still run."""
     from tracebloc_ingestor.utils.constants import TaskCategory
 
     records = [{"a": "1", "filename": "f1"}]
@@ -549,7 +557,7 @@ def test_ingest_skips_edge_label_call_for_self_supervised_categories():
         label_column=None,
     )
     # Patch validate_data + map_file_transfer to skip real-filesystem checks;
-    # the gate we're testing lives at the registration block AFTER ingest.
+    # the behaviour we're testing lives at the registration block AFTER ingest.
     with patch.object(base_mod, "Session") as Sess, patch.object(
         ing, "validate_data", return_value=True
     ), patch.object(
@@ -559,10 +567,39 @@ def test_ingest_skips_edge_label_call_for_self_supervised_categories():
     ):
         Sess.return_value.__enter__.return_value = MagicMock()
         ing.ingest("src", batch_size=10)
-    ing.api_client.send_generate_edge_label_meta.assert_not_called()
+    ing.api_client.send_generate_edge_label_meta.assert_called_once()
     ing.api_client.send_global_meta_meta.assert_called_once()
     ing.api_client.prepare_dataset.assert_called_once()
     ing.api_client.create_dataset.assert_called_once()
+
+
+def test_ingest_fails_loud_when_edge_label_fails_for_self_supervised():
+    """A False return from the edge-label call for a self-supervised category
+    must RAISE (it is no longer skipped — see the test above), leaving the
+    dataset unregistered rather than silently exiting 0. Mirrors the
+    label-carrying fail-loud guard for the self-supervised path."""
+    from tracebloc_ingestor.utils.constants import TaskCategory
+
+    records = [{"a": "1", "filename": "f1"}]
+    ing = make_ingestor(
+        records=records,
+        category=TaskCategory.MASKED_LANGUAGE_MODELING,
+        label_column=None,
+    )
+    ing.api_client.send_generate_edge_label_meta.return_value = False
+    with patch.object(base_mod, "Session") as Sess, patch.object(
+        ing, "validate_data", return_value=True
+    ), patch.object(
+        base_mod,
+        "map_file_transfer",
+        side_effect=lambda c, r, o, cfg=None, source_record=None: r,
+    ):
+        Sess.return_value.__enter__.return_value = MagicMock()
+        with pytest.raises(RuntimeError, match="NOT registered"):
+            ing.ingest("src", batch_size=10)
+    ing.api_client.send_generate_edge_label_meta.assert_called_once()
+    # The chain must stop — create_dataset is never reached on a failed step.
+    ing.api_client.create_dataset.assert_not_called()
 
 
 def test_ingest_still_calls_edge_label_for_label_carrying_categories():

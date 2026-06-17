@@ -33,7 +33,6 @@ from .table_lock import TableLock
 from ..modalities.registry import (
     FILE_BEARING_CATEGORIES as _FILE_BEARING_CATEGORIES,
     NLP_CATEGORIES as _NLP_CATEGORIES,
-    SELF_SUPERVISED_CATEGORIES as _SELF_SUPERVISED_CATEGORIES,
     TABULAR_FAMILY_CATEGORIES as _TABULAR_FAMILY_CATEGORIES,
 )
 
@@ -44,11 +43,11 @@ logger = logging.getLogger(__name__)
 __all__ = ["BaseIngestor", "IngestionSummary"]
 
 
-# NOTE: _TABULAR_FAMILY_CATEGORIES, _FILE_BEARING_CATEGORIES and
-# _SELF_SUPERVISED_CATEGORIES are imported above from modalities.registry
-# (derived from the per-category ModalitySpec flags — backend#796 P3a). The
-# ``self.category in <set>`` checks throughout this module use them unchanged;
-# the rationale for each set now lives on ModalitySpec's field docstrings.
+# NOTE: _TABULAR_FAMILY_CATEGORIES and _FILE_BEARING_CATEGORIES are imported
+# above from modalities.registry (derived from the per-category ModalitySpec
+# flags — backend#796 P3a). The ``self.category in <set>`` checks throughout
+# this module use them unchanged; the rationale for each set now lives on
+# ModalitySpec's field docstrings.
 
 
 class IngestionSummary(NamedTuple):
@@ -545,26 +544,36 @@ class BaseIngestor(ABC):
                 # the failure surfaces (the CLI streams these logs live and marks
                 # the Job failed). The api_client has already logged the
                 # underlying HTTP detail before returning False.
-                # Skip the edge-label backend call for self-supervised
-                # categories (#213). They have no `label` column on the rows;
-                # the backend's edge-label endpoint then returns a misleading
-                # HTTP 400 ("No data found for table X" — wrong, the table HAS
-                # rows, it just has no edge labels). Combined with PR #187's
-                # fail-loud behaviour, the user saw a registration crash that
-                # had nothing to do with the actual misconfiguration. The
-                # schema now rejects `label:` on these categories at
-                # submission, but this gate is the defensive in-ingestor half
-                # so script-driven / older-schema runs don't trip the same
-                # trap.
-                if self.category not in _SELF_SUPERVISED_CATEGORIES:
-                    if not self.api_client.send_generate_edge_label_meta(
-                        self.table_name, self.ingestor_id, self.intent
-                    ):
-                        raise RuntimeError(
-                            "Backend rejected edge-label metadata; the dataset was "
-                            "NOT registered (its rows are already in the database). "
-                            "See the logged API error above."
-                        )
+                # Generate edge-label metadata for EVERY category, including
+                # self-supervised ones (MLM / text / token). The backend's
+                # get_edges discovers candidate edges only via the
+                # `edge_labels_meta` collection, so a dataset with no
+                # edge_labels_meta document can never be prepared/registered —
+                # it stays invisible in the app even though its rows are in
+                # MySQL.
+                #
+                # History: this call used to be skipped for self-supervised
+                # categories (#213) because those rows carry no `label` and the
+                # old backend rejected blank labels — the edge-label endpoint
+                # returned a misleading HTTP 400 ("No data found for table X"),
+                # which combined with PR #187's fail-loud behaviour to surface a
+                # registration crash unrelated to the real cause. Backend
+                # PR #683 ("allow blank label for self-supervised categories")
+                # fixed that: blank `label` is accepted, GenerateEdgeLabelsMeta
+                # buckets the single "" label into `edge_labels_meta = {"": N}`
+                # (truthy → inserted → HTTP 200), and PrepareDatasetMeta uses
+                # min_labels=0 for these categories. So the skip is now the only
+                # thing blocking self-supervised registration — remove it and
+                # let generate run for all categories, still failing loud (the
+                # RuntimeError below) on a False return.
+                if not self.api_client.send_generate_edge_label_meta(
+                    self.table_name, self.ingestor_id, self.intent
+                ):
+                    raise RuntimeError(
+                        "Backend rejected edge-label metadata; the dataset was "
+                        "NOT registered (its rows are already in the database). "
+                        "See the logged API error above."
+                    )
 
                 # Register the contributor tokenizer fingerprint for NLP
                 # datasets (#805 Task 2). When a tokenizer.json was shipped
