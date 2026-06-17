@@ -24,6 +24,7 @@ self-supervised categories (masked_language_modeling) which have no
 label column at all.
 """
 
+import json
 import logging
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -235,7 +236,17 @@ class LabelDiversityValidator(BaseValidator):
                     **self._label_read_kwargs(actual),
                 )
             if path.suffix.lower() == ".json":
-                return pd.read_json(path, orient="records")
+                # Parse failures on a .json input (malformed JSON, a JSONL file
+                # mis-extensioned as .json, etc.) belong to ``DataValidator`` —
+                # it surfaces the clean JSONL detection + fix message (#263).
+                # If this validator ALSO bubbles the raw pandas error
+                # ("Trailing data" or similar) the user sees the noise
+                # alongside the actionable message (#267). Swallow into a
+                # benign skip so only the upstream clean message surfaces.
+                try:
+                    return pd.read_json(path, orient="records")
+                except (ValueError, json.JSONDecodeError):
+                    return None
         return None
 
     def _label_read_kwargs(self, actual: str) -> Dict[str, Any]:

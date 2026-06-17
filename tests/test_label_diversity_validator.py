@@ -320,3 +320,43 @@ def test_custom_label_column_name():
     assert LabelDiversityValidator(label_column="target").validate(df).is_valid
     # The default `label` column is single-value here — should fail.
     assert not LabelDiversityValidator(label_column="label").validate(df).is_valid
+
+
+# ---------------------------------------------------------------------------
+# .json input — JSONL must be a benign skip, not a duplicate error
+# ---------------------------------------------------------------------------
+
+def test_jsonl_input_is_benign_skip_not_noisy_error(tmp_path):
+    """Issue #267: a .json file containing JSONL content (one JSON object per
+    line, no enclosing ``[...]``) used to crash ``pd.read_json`` here with a
+    raw "Trailing data" exception. That bubbled to the user alongside the
+    DataValidator's clean JSONL-detection message (#263), producing a
+    duplicated/noisy error block.
+
+    The clean JSONL fix message belongs to DataValidator — this validator
+    should fail silently to a None DataFrame so only the upstream actionable
+    message reaches the user.
+    """
+    p = tmp_path / "data.json"
+    p.write_text(
+        '{"id": 1, "label": "A"}\n'
+        '{"id": 2, "label": "B"}\n'
+        '{"id": 3, "label": "A"}\n'
+    )
+    # The validator should treat this as a benign skip (no rows to check),
+    # not surface a raw pandas exception in errors.
+    result = LabelDiversityValidator().validate(str(p))
+    assert result.is_valid
+    assert not any(
+        "Trailing data" in e or "Extra data" in e for e in (result.errors or [])
+    )
+
+
+def test_malformed_json_input_also_skipped(tmp_path):
+    """A genuinely malformed .json file (not JSONL — just broken) also gets
+    the benign-skip treatment. DataValidator surfaces the appropriate parse
+    error; this validator must not duplicate it."""
+    p = tmp_path / "broken.json"
+    p.write_text('{"id": 1, "label":  ')  # truncated, unparseable
+    result = LabelDiversityValidator().validate(str(p))
+    assert result.is_valid
