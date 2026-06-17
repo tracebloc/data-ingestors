@@ -25,10 +25,10 @@ from tracebloc_ingestor.utils.label_policy import (
     PASSTHROUGH,
 )
 
-
 # ---------------------------------------------------------------------------
 # Pure function: apply()
 # ---------------------------------------------------------------------------
+
 
 class TestPassthroughPolicy:
     def test_string_value_unchanged(self):
@@ -96,20 +96,24 @@ def test_unknown_policy_raises():
 # can construct BaseIngestor subclass-shape directly and exercise
 # _map_unique_id which is where the label-policy hook lives.
 
-class _TestIngestor:
-    """Minimal stand-in mimicking the BaseIngestor surface needed for
-    _map_unique_id, without invoking BaseIngestor.__init__ (which calls
-    Database.create_table)."""
 
-    def __init__(self, label_column, label_policy_value, intent="train"):
-        from tracebloc_ingestor.ingestors.base import BaseIngestor
-        # Bind the unbound method so `self` works.
-        self._map_unique_id = BaseIngestor._map_unique_id.__get__(self)
-        self.label_column = label_column
-        self.label_policy = label_policy_value
-        self.intent = intent
-        self.annotation_column = None
-        self.unique_id_column = None  # → UUID generation
+def _TestIngestor(label_column, label_policy_value, intent="train"):
+    """A RecordProcessor configured for the label-policy hook, which lives in
+    ``_map_unique_id``. P5c moved that method off BaseIngestor into
+    RecordProcessor, so the tests exercise it there directly (no DB / no
+    BaseIngestor.__init__ needed)."""
+    from tracebloc_ingestor.ingestors.record_processor import RecordProcessor
+
+    return RecordProcessor(
+        schema={},  # _map_unique_id doesn't read schema
+        intent=intent,
+        label_column=label_column,
+        annotation_column=None,
+        unique_id_column=None,  # → UUID generation
+        label_policy=label_policy_value,
+        category=None,
+        ingestor_id="test",
+    )
 
 
 def test_base_ingestor_passthrough_does_not_mutate_label():
@@ -150,6 +154,7 @@ def test_base_ingestor_bucket_missing_label_uses_sentinel():
 # Entrypoint integration: regression YAML config flows through with bucket
 # ---------------------------------------------------------------------------
 
+
 def test_entrypoint_passes_bucket_policy_for_regression(tmp_path, monkeypatch):
     """End-to-end-ish: a tabular_regression YAML reaches CSVIngestor with
     label_policy='bucket' as kwarg, regardless of resolver internals."""
@@ -159,11 +164,13 @@ def test_entrypoint_passes_bucket_policy_for_regression(tmp_path, monkeypatch):
     examples_dir = Path(__file__).resolve().parent.parent / "examples" / "yaml"
     monkeypatch.setenv("INGEST_CONFIG", str(examples_dir / "tabular_regression.yaml"))
 
-    with patch("tracebloc_ingestor.cli.run.Config") as mock_config_cls, \
-         patch("tracebloc_ingestor.cli.run.Database"), \
-         patch("tracebloc_ingestor.cli.run.APIClient"), \
-         patch("tracebloc_ingestor.cli.run.CSVIngestor") as mock_csv_cls, \
-         patch("tracebloc_ingestor.cli.run.setup_logging"):
+    with patch("tracebloc_ingestor.cli.run.Config") as mock_config_cls, patch(
+        "tracebloc_ingestor.cli.run.Database"
+    ), patch("tracebloc_ingestor.cli.run.APIClient"), patch(
+        "tracebloc_ingestor.cli.run.CSVIngestor"
+    ) as mock_csv_cls, patch(
+        "tracebloc_ingestor.cli.run.setup_logging"
+    ):
         mock_config = MagicMock()
         mock_config.BATCH_SIZE = 4000
         mock_config_cls.return_value = mock_config
@@ -174,6 +181,7 @@ def test_entrypoint_passes_bucket_policy_for_regression(tmp_path, monkeypatch):
         mock_csv_cls.return_value = instance
 
         from tracebloc_ingestor.cli.run import main
+
         rc = main()
 
     assert rc == 0
@@ -189,11 +197,13 @@ def test_entrypoint_passes_passthrough_policy_for_classification(tmp_path, monke
     examples_dir = Path(__file__).resolve().parent.parent / "examples" / "yaml"
     monkeypatch.setenv("INGEST_CONFIG", str(examples_dir / "image_classification.yaml"))
 
-    with patch("tracebloc_ingestor.cli.run.Config") as mock_config_cls, \
-         patch("tracebloc_ingestor.cli.run.Database"), \
-         patch("tracebloc_ingestor.cli.run.APIClient"), \
-         patch("tracebloc_ingestor.cli.run.CSVIngestor") as mock_csv_cls, \
-         patch("tracebloc_ingestor.cli.run.setup_logging"):
+    with patch("tracebloc_ingestor.cli.run.Config") as mock_config_cls, patch(
+        "tracebloc_ingestor.cli.run.Database"
+    ), patch("tracebloc_ingestor.cli.run.APIClient"), patch(
+        "tracebloc_ingestor.cli.run.CSVIngestor"
+    ) as mock_csv_cls, patch(
+        "tracebloc_ingestor.cli.run.setup_logging"
+    ):
         mock_config = MagicMock()
         mock_config.BATCH_SIZE = 4000
         mock_config_cls.return_value = mock_config
@@ -204,6 +214,7 @@ def test_entrypoint_passes_passthrough_policy_for_classification(tmp_path, monke
         mock_csv_cls.return_value = instance
 
         from tracebloc_ingestor.cli.run import main
+
         main()
 
     _, kwargs = mock_csv_cls.call_args
