@@ -27,17 +27,23 @@ def _special_token_id(tokenizer_data: dict, token: str) -> Optional[int]:
     id), then falls back to the ``model.vocab`` mapping. Returns ``None`` when
     the token isn't present — e.g. classification tokenizers have no ``[MASK]``.
     """
-    for entry in tokenizer_data.get("added_tokens", []) or []:
-        if isinstance(entry, dict) and entry.get("content") == token:
-            token_id = entry.get("id")
-            # Only trust an added_tokens entry that actually carries an id;
-            # a malformed entry without one must not shadow the model.vocab
-            # mapping below (which may still hold the id).
-            if token_id is not None:
-                return token_id
-    vocab = (tokenizer_data.get("model") or {}).get("vocab")
+    added = tokenizer_data.get("added_tokens", [])
+    if isinstance(added, list):
+        for entry in added:
+            if isinstance(entry, dict) and entry.get("content") == token:
+                token_id = entry.get("id")
+                # Only trust an added_tokens entry that carries a real integer
+                # id (bool excluded — JSON true/false is not a token id). A
+                # missing or non-int id must not shadow the model.vocab mapping
+                # below, nor let a non-scalar value reach the backend.
+                if isinstance(token_id, int) and not isinstance(token_id, bool):
+                    return token_id
+    model = tokenizer_data.get("model")
+    vocab = model.get("vocab") if isinstance(model, dict) else None
     if isinstance(vocab, dict):
-        return vocab.get(token)
+        vid = vocab.get(token)
+        if isinstance(vid, int) and not isinstance(vid, bool):
+            return vid
     return None
 
 
@@ -61,13 +67,23 @@ def extract_tokenizer_metadata(tokenizer_data: dict) -> Dict[str, Any]:
       - ``tokenizer_type``: ``model.type`` (``WordLevel`` / ``WordPiece`` /
                             ``BPE`` / ``Unigram``), or ``None``.
     """
+    # Totality: a tokenizer.json that is valid JSON but not an object (e.g.
+    # ``[]`` / ``"x"`` / ``null``) must not crash the post-ingest registration —
+    # treat it as empty. The TokenizerValidator gate already rejects such files
+    # upstream; this keeps the public helper safe for any caller.
+    if not isinstance(tokenizer_data, dict):
+        tokenizer_data = {}
     vocab = TokenizerValidator._extract_vocab(tokenizer_data) or set()
-    model = tokenizer_data.get("model") or {}
+    model = tokenizer_data.get("model")
+    tok_type = model.get("type") if isinstance(model, dict) else None
+    # FL guardrail at the source: only scalar values ever leave the cluster.
+    # Coerce a malformed non-int id / non-string type to None so a hand-crafted
+    # tokenizer.json can't smuggle a nested object into the backend metadata.
     return {
         "vocab_size": len(vocab),
         "mask_token_id": _special_token_id(tokenizer_data, "[MASK]"),
         "pad_token_id": _special_token_id(tokenizer_data, "[PAD]"),
-        "tokenizer_type": model.get("type"),
+        "tokenizer_type": tok_type if isinstance(tok_type, str) else None,
     }
 
 
@@ -86,6 +102,12 @@ def load_tokenizer_metadata(tokenizer_path: str) -> Optional[Dict[str, Any]]:
             tokenizer_data = json.load(f)
     except (OSError, ValueError) as e:
         logger.warning(f"Could not read tokenizer.json at {tokenizer_path}: {e}")
+        return None
+    if not isinstance(tokenizer_data, dict):
+        logger.warning(
+            f"tokenizer.json at {tokenizer_path} is not a JSON object "
+            f"({type(tokenizer_data).__name__}); no fingerprint registered."
+        )
         return None
     return extract_tokenizer_metadata(tokenizer_data)
 
@@ -222,13 +244,16 @@ class TokenizerValidator(BaseValidator):
         Returns:
             Set of token strings, or None if the structure is unrecognised.
         """
+        if not isinstance(tokenizer_data, dict):
+            return None
+
         tokens = set()
 
         # model.vocab — the main vocabulary mapping
         # WordLevel/WordPiece/BPE store vocab as {token: id} dict.
         # Unigram stores vocab as [[token, score], ...] list.
-        model = tokenizer_data.get("model", {})
-        vocab = model.get("vocab")
+        model = tokenizer_data.get("model")
+        vocab = model.get("vocab") if isinstance(model, dict) else None
         if isinstance(vocab, dict):
             tokens.update(vocab.keys())
         elif isinstance(vocab, list):
@@ -236,12 +261,14 @@ class TokenizerValidator(BaseValidator):
                 if isinstance(entry, (list, tuple)) and len(entry) >= 1:
                     tokens.add(str(entry[0]))
 
-        # added_tokens — special tokens registered separately
+        # added_tokens — special tokens registered separately. Only count a
+        # string ``content`` — a malformed non-string would be unhashable
+        # (dict/list) or pollute the vocab count.
         added_tokens = tokenizer_data.get("added_tokens", [])
         if isinstance(added_tokens, list):
             for entry in added_tokens:
-                if isinstance(entry, dict) and "content" in entry:
-                    tokens.update([entry["content"]])
+                if isinstance(entry, dict) and isinstance(entry.get("content"), str):
+                    tokens.add(entry["content"])
                 elif isinstance(entry, str):
                     tokens.add(entry)
 
