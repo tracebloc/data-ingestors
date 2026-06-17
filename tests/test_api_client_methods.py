@@ -21,8 +21,13 @@ from tracebloc_ingestor.utils.constants import TaskCategory
 def _client(**overrides):
     # TITLE=None by default so create_dataset's title-generation path is
     # deterministic regardless of any TITLE exported in the host/CI env.
-    defaults = dict(BACKEND_TOKEN="tok", CLIENT_USERNAME=None,
-                    CLIENT_PASSWORD=None, EDGE_ENV="prod", TITLE=None)
+    defaults = dict(
+        BACKEND_TOKEN="tok",
+        CLIENT_USERNAME=None,
+        CLIENT_PASSWORD=None,
+        EDGE_ENV="prod",
+        TITLE=None,
+    )
     defaults.update(overrides)
     return APIClient(Config(**defaults))
 
@@ -39,9 +44,11 @@ def _resp(status=200, json_body=None, text=""):
 # authenticate() error path
 # ---------------------------------------------------------------------------
 
+
 def test_authenticate_http_error_raises():
-    cfg = Config(BACKEND_TOKEN=None, CLIENT_USERNAME="u",
-                 CLIENT_PASSWORD="p", EDGE_ENV="prod")
+    cfg = Config(
+        BACKEND_TOKEN=None, CLIENT_USERNAME="u", CLIENT_PASSWORD="p", EDGE_ENV="prod"
+    )
     with patch("requests.Session.post", return_value=_resp(403, text="forbidden")):
         with pytest.raises(ValueError) as exc:
             APIClient(cfg)
@@ -53,6 +60,7 @@ def test_authenticate_http_error_raises():
 # ---------------------------------------------------------------------------
 # send_batch
 # ---------------------------------------------------------------------------
+
 
 def test_send_batch_success():
     client = _client()
@@ -80,6 +88,7 @@ def test_send_batch_local_mode_skips_network():
 # send_global_meta_meta
 # ---------------------------------------------------------------------------
 
+
 def test_send_global_meta_success():
     client = _client()
     with patch.object(client.session, "post", return_value=_resp(200, {"ok": 1})):
@@ -102,6 +111,7 @@ def test_send_global_meta_local_mode():
 # ---------------------------------------------------------------------------
 # send_generate_edge_label_meta
 # ---------------------------------------------------------------------------
+
 
 def test_generate_edge_label_success():
     client = _client()
@@ -127,12 +137,16 @@ def test_generate_edge_label_local_mode():
 # prepare_dataset
 # ---------------------------------------------------------------------------
 
+
 def test_prepare_dataset_success():
     client = _client()
     with patch.object(client.session, "get", return_value=_resp(200, {"ok": 1})):
-        assert client.prepare_dataset(
-            TaskCategory.IMAGE_CLASSIFICATION, "ing", "image", "train"
-        ) is True
+        assert (
+            client.prepare_dataset(
+                TaskCategory.IMAGE_CLASSIFICATION, "ing", "image", "train"
+            )
+            is True
+        )
 
 
 def test_prepare_dataset_invalid_category_returns_false():
@@ -145,9 +159,12 @@ def test_prepare_dataset_invalid_category_returns_false():
 def test_prepare_dataset_error_returns_false():
     client = _client()
     with patch.object(client.session, "get", return_value=_resp(500, text="x")):
-        assert client.prepare_dataset(
-            TaskCategory.IMAGE_CLASSIFICATION, "ing", "image", "train"
-        ) is False
+        assert (
+            client.prepare_dataset(
+                TaskCategory.IMAGE_CLASSIFICATION, "ing", "image", "train"
+            )
+            is False
+        )
 
 
 def test_prepare_dataset_local_mode():
@@ -208,6 +225,7 @@ def test_prepare_dataset_network_error_captures_string():
 # create_dataset
 # ---------------------------------------------------------------------------
 
+
 def test_create_dataset_success_generates_title():
     client = _client()
     captured = {}
@@ -227,18 +245,30 @@ def test_create_dataset_success_generates_title():
 def test_create_dataset_tabular_allows_feature_modification():
     client = _client()
     captured = {}
-    with patch.object(client.session, "post",
-                      side_effect=lambda url, data=None, **k: captured.update(data=data) or _resp(200, {"id": 1})):
-        client.create_dataset(ingestor_id="ing", category=TaskCategory.TABULAR_CLASSIFICATION)
+    with patch.object(
+        client.session,
+        "post",
+        side_effect=lambda url, data=None, **k: captured.update(data=data)
+        or _resp(200, {"id": 1}),
+    ):
+        client.create_dataset(
+            ingestor_id="ing", category=TaskCategory.TABULAR_CLASSIFICATION
+        )
     assert '"allow_feature_modification": true' in captured["data"]
 
 
 def test_create_dataset_uses_config_title():
     client = _client(TITLE="My Title")
     captured = {}
-    with patch.object(client.session, "post",
-                      side_effect=lambda url, data=None, **k: captured.update(data=data) or _resp(200, {"id": 1})):
-        client.create_dataset(ingestor_id="ing", category=TaskCategory.IMAGE_CLASSIFICATION)
+    with patch.object(
+        client.session,
+        "post",
+        side_effect=lambda url, data=None, **k: captured.update(data=data)
+        or _resp(200, {"id": 1}),
+    ):
+        client.create_dataset(
+            ingestor_id="ing", category=TaskCategory.IMAGE_CLASSIFICATION
+        )
     assert "My Title" in captured["data"]
 
 
@@ -246,7 +276,9 @@ def test_create_dataset_error_raises():
     client = _client()
     with patch.object(client.session, "post", return_value=_resp(500, text="err")):
         with pytest.raises(requests.exceptions.RequestException):
-            client.create_dataset(ingestor_id="ing", category=TaskCategory.IMAGE_CLASSIFICATION)
+            client.create_dataset(
+                ingestor_id="ing", category=TaskCategory.IMAGE_CLASSIFICATION
+            )
 
 
 def test_create_dataset_local_mode():
@@ -260,6 +292,7 @@ def test_create_dataset_local_mode():
 # ---------------------------------------------------------------------------
 # 401 auto-refresh (backend/#772 P2)
 # ---------------------------------------------------------------------------
+
 
 def test_authed_request_refreshes_token_on_401():
     """A 401 on an authenticated call triggers ONE refresh + retry. The
@@ -282,9 +315,12 @@ def test_authed_request_refreshes_token_on_401():
         client.token = "new_token"
         return True
 
-    with patch.object(client.session, "post", side_effect=fake_post), \
-         patch.object(client, "_refresh_token", side_effect=fake_refresh):
-        client.create_dataset(ingestor_id="ing", category=TaskCategory.IMAGE_CLASSIFICATION)
+    with patch.object(client.session, "post", side_effect=fake_post), patch.object(
+        client, "_refresh_token", side_effect=fake_refresh
+    ):
+        client.create_dataset(
+            ingestor_id="ing", category=TaskCategory.IMAGE_CLASSIFICATION
+        )
 
     assert len(calls) == 2, "expected one 401 + one retry"
     assert calls[0] == "TOKEN old_token"
@@ -319,8 +355,12 @@ def test_authed_request_passes_through_non_401_unchanged():
     path. Refresh logic must NOT engage on success or on a non-auth
     failure — the per-call error handling already covers those."""
     client = _client()
-    with patch.object(client.session, "post", return_value=_resp(200, {"id": 1})) as post:
-        client.create_dataset(ingestor_id="ing", category=TaskCategory.IMAGE_CLASSIFICATION)
+    with patch.object(
+        client.session, "post", return_value=_resp(200, {"id": 1})
+    ) as post:
+        client.create_dataset(
+            ingestor_id="ing", category=TaskCategory.IMAGE_CLASSIFICATION
+        )
     # Exactly one call — no refresh, no retry on the happy path.
     assert post.call_count == 1
 
@@ -331,3 +371,56 @@ def test_refresh_token_noop_in_local_mode():
     client = _client(EDGE_ENV="local")
     assert client._refresh_token() is False
     assert client.token == "mock_token"
+
+
+# ---------------------------------------------------------------------------
+# _refresh_token body (#772 mid-run token rotation). The 401-retry WRAPPER is
+# tested above with _refresh_token STUBBED, so the rotation body itself was
+# never executed (audit gap H1 — it's the code preventing the "rows committed,
+# never registered" incident on long runs). These exercise the real body.
+# ---------------------------------------------------------------------------
+
+
+def test_refresh_token_picks_up_rotated_backend_token(monkeypatch):
+    """When BACKEND_TOKEN is rotated in env mid-run, the next _refresh_token()
+    re-reads it from Config (which reads env on each access) and updates the
+    in-memory token, returning True."""
+    monkeypatch.setenv("CLIENT_ENV", "prod")  # EDGE_ENV != local
+    monkeypatch.setenv("BACKEND_TOKEN", "old_token")
+    client = APIClient(Config())  # token from env; no network (BACKEND_TOKEN branch)
+    assert client.token == "old_token"
+
+    monkeypatch.setenv("BACKEND_TOKEN", "new_token")  # rotation
+    assert client._refresh_token() is True
+    assert client.token == "new_token"
+
+
+def test_refresh_token_false_when_backend_token_unchanged(monkeypatch):
+    """No rotation -> refresh is a no-op returning False, so the caller treats
+    the next 401 as terminal instead of retrying forever."""
+    monkeypatch.setenv("CLIENT_ENV", "prod")
+    monkeypatch.setenv("BACKEND_TOKEN", "same_token")
+    client = APIClient(Config())
+    assert client._refresh_token() is False
+    assert client.token == "same_token"
+
+
+def test_refresh_token_reauthenticates_on_creds_path():
+    """CLIENT_ID/PASSWORD path: _refresh_token re-mints via authenticate() and
+    returns True iff the token changed."""
+    with patch.object(APIClient, "authenticate", return_value="init_token"):
+        client = _client(BACKEND_TOKEN=None, CLIENT_USERNAME="u", CLIENT_PASSWORD="p")
+    client.token = "old_token"
+    with patch.object(client, "authenticate", return_value="fresh_token"):
+        assert client._refresh_token() is True
+    assert client.token == "fresh_token"
+
+
+def test_refresh_token_false_when_reauth_raises():
+    """If re-auth itself raises, _refresh_token swallows it and returns False
+    (terminal) — the original 401 then surfaces through the caller unchanged."""
+    with patch.object(APIClient, "authenticate", return_value="init_token"):
+        client = _client(BACKEND_TOKEN=None, CLIENT_USERNAME="u", CLIENT_PASSWORD="p")
+    client.token = "old_token"
+    with patch.object(client, "authenticate", side_effect=RuntimeError("auth down")):
+        assert client._refresh_token() is False

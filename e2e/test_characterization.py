@@ -212,6 +212,28 @@ CASES = [
         sidecars=[str(T / "masked_language_modeling/data/sequences")],
         roundtrip_col=None,
     ),
+    # semantic_segmentation: the one file-bearing modality the harness never
+    # characterized (audit gap). mask_id is DECLARED in schema so it's stored
+    # (the training client SELECTs it to locate masks — backend#816); the masks
+    # dir is a sidecar so the manifest assertion pins that the per-row mask
+    # files land in DEST_PATH (the real semseg invariant, related to #136).
+    dict(
+        id="semantic_segmentation",
+        cfg=_cfg(
+            table="char_seg",
+            category="semantic_segmentation",
+            csv=str(T / "semantic_segmentation/semantic_data/labels_file_sample.csv"),
+            images=str(T / "semantic_segmentation/semantic_data/images"),
+            masks=str(T / "semantic_segmentation/semantic_data/masks"),
+            label="image_label",
+            schema={"mask_id": "VARCHAR(255)"},
+        ),
+        sidecars=[
+            str(T / "semantic_segmentation/semantic_data/images"),
+            str(T / "semantic_segmentation/semantic_data/masks"),
+        ],
+        roundtrip_col=None,
+    ),
 ]
 
 
