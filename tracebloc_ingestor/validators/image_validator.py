@@ -43,6 +43,7 @@ class ImageResolutionValidator(BaseValidator):
         self,
         expected_resolution: Optional[Tuple[int, int]] = None,
         name: str = "Image Resolution Validator",
+        subdir: str = "images",
     ):
         """Initialize the image resolution validator.
 
@@ -50,9 +51,15 @@ class ImageResolutionValidator(BaseValidator):
             expected_resolution: Expected image resolution as (width, height)
             supported_formats: Set of supported image formats (e.g., {'.jpg', '.png'})
             name: Human-readable name of the validator
+            subdir: The ``<SRC_PATH>`` subdirectory whose images this instance
+                validates (default ``"images"``). Set to ``"masks"`` to validate
+                semantic-segmentation masks — pixel-wise label maps that must be
+                readable and share the images' resolution; the default instance
+                only ever scans ``<SRC_PATH>/images``.
         """
         super().__init__(name)
         self.expected_resolution = expected_resolution
+        self.subdir = subdir
         self.tolerance = 0  # Whether to enforce strict file type checking . we can later make this configurable
         self.supported_formats = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif"}
 
@@ -86,7 +93,7 @@ class ImageResolutionValidator(BaseValidator):
             ValidationResult containing validation status and messages
         """
         try:
-            data = f"{(self._config or config).SRC_PATH}/images"
+            data = f"{(self._config or config).SRC_PATH}/{self.subdir}"
             if not PIL_AVAILABLE:
                 return self._create_result(
                     is_valid=False,

@@ -59,10 +59,32 @@ def _label_diversity_validator(options: Dict[str, Any]) -> LabelDiversityValidat
     )
 
 
+def _zero_record_validator(
+    options: Dict[str, Any], subdir: str = "images"
+) -> IngestableRecordsValidator:
+    """0-record fail-fast guard for file-bearing vision categories — the #303
+    pattern extended from NLP to vision. Rejects a header-only / empty CSV (and
+    a manifest whose every referenced file is missing) BEFORE the table is
+    created, so a zero-record vision dataset fails early with a clear message
+    instead of an orphan empty table + a late, misleading registration error.
+    ``subdir`` mirrors the category's image ``FileTypeValidator(path=...)``."""
+    return IngestableRecordsValidator(
+        file_subdir=subdir, extension=options.get("extension", FileExtension.JPG)
+    )
+
+
 def image_classification(options: Dict[str, Any]) -> List[BaseValidator]:
     return [
         FileTypeValidator(allowed_extension=options["extension"], path="images"),
+        _zero_record_validator(options),
         ImageResolutionValidator(expected_resolution=options["target_size"]),
+        # Fail fast when the configured label column is absent from the CSV
+        # (else every record cleans to label=None and the backend rejects each
+        # row with HTTP 400 "label: may not be null"). image_classification is
+        # the only vision category whose label is a CSV column — object
+        # detection / segmentation / keypoint source labels from XML / masks /
+        # annotation files, so they do NOT get this validator.
+        LabelColumnValidator(label_column=options.get("label_column") or "label"),
         _label_diversity_validator(options),
         TableNameValidator(),
         DuplicateValidator(),
@@ -73,6 +95,7 @@ def object_detection(options: Dict[str, Any]) -> List[BaseValidator]:
     return [
         FileTypeValidator(allowed_extension=options["extension"], path="images"),
         FileTypeValidator(allowed_extension=".xml", path="annotations"),
+        _zero_record_validator(options),
         PascalVOCXMLValidator(),
         FilePairingValidator(
             image_path="images",
@@ -225,6 +248,7 @@ def semantic_segmentation(options: Dict[str, Any]) -> List[BaseValidator]:
     return [
         FileTypeValidator(allowed_extension=options["extension"], path="images"),
         FileTypeValidator(allowed_extension=FileExtension.PNG, path="masks"),
+        _zero_record_validator(options),
         FilePairingValidator(
             image_path="images",
             sidecar_path="masks",
@@ -236,6 +260,15 @@ def semantic_segmentation(options: Dict[str, Any]) -> List[BaseValidator]:
             sidecar_suffix="_mask",
         ),
         ImageResolutionValidator(expected_resolution=options["target_size"]),
+        # Masks are pixel-wise label maps: validate they're readable PNGs and
+        # share the images' resolution. The default ImageResolution instance only
+        # scans <SRC>/images, so without this a corrupt mask, or a mask whose size
+        # differs from its image, would slip through to training.
+        ImageResolutionValidator(
+            expected_resolution=options["target_size"],
+            name="Mask Resolution Validator",
+            subdir="masks",
+        ),
         _label_diversity_validator(options),
         TableNameValidator(),
         DuplicateValidator(),
@@ -250,8 +283,14 @@ def keypoint_detection(options: Dict[str, Any]) -> List[BaseValidator]:
     # rejects datasets whose annotations drift from the declared K.
     return [
         FileTypeValidator(allowed_extension=options["extension"], path="images"),
+        _zero_record_validator(options),
         ImageResolutionValidator(expected_resolution=options["target_size"]),
-        KeypointAnnotationValidator(num_keypoints=options.get("number_of_keypoints")),
+        KeypointAnnotationValidator(
+            num_keypoints=options.get("number_of_keypoints"),
+            # Bound keypoint coords by the declared image size (images are
+            # enforced to target_size by ImageResolutionValidator above).
+            expected_resolution=options.get("target_size"),
+        ),
         KeypointVisibilityValidator(),
         _label_diversity_validator(options),
         TableNameValidator(),

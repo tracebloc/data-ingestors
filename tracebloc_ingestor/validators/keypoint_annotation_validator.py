@@ -51,10 +51,15 @@ class KeypointAnnotationValidator(BaseValidator):
         annotation_column: str = "Annotation",
         num_keypoints: Optional[int] = None,
         name: str = "Keypoint Annotation",
+        expected_resolution: Optional[Tuple[int, int]] = None,
     ):
         super().__init__(name)
         self.annotation_column = annotation_column
         self.num_keypoints = num_keypoints
+        # Declared image size (width, height) — when known, keypoint coordinates
+        # are bounded by it (coords are already checked non-negative; without an
+        # upper bound a coord past the image edge reaches training).
+        self.expected_resolution = expected_resolution
 
     def validate(self, data: Any, **kwargs) -> ValidationResult:
         try:
@@ -143,9 +148,7 @@ class KeypointAnnotationValidator(BaseValidator):
         x_coords = []
         y_coords = []
         for kp_name, value in annotation.items():
-            kp_errors, x, y = self._validate_keypoint_value(
-                kp_name, value, row_label
-            )
+            kp_errors, x, y = self._validate_keypoint_value(kp_name, value, row_label)
             errors.extend(kp_errors)
             if x is not None and y is not None:
                 x_coords.append(x)
@@ -182,7 +185,7 @@ class KeypointAnnotationValidator(BaseValidator):
         else:
             errors.append(
                 f"{row_label}: Keypoint '{kp_name}' must be [x, y] list or "
-                f"{{\"x\": x, \"y\": y}} dict"
+                f'{{"x": x, "y": y}} dict'
             )
             return errors, None, None
 
@@ -192,11 +195,27 @@ class KeypointAnnotationValidator(BaseValidator):
             )
             return errors, None, None
 
+        # Lower- and upper-bound checks run INDEPENDENTLY (not elif) so a row
+        # like (-1, 9999) reports both the negative x AND the out-of-bounds y in
+        # one pass, instead of hiding the second issue until a re-ingest (bugbot,
+        # PR #314).
         if x < 0 or y < 0:
             errors.append(
                 f"{row_label}: Keypoint '{kp_name}' has negative coordinates "
                 f"({x}, {y})"
             )
+        if self.expected_resolution is not None:
+            width, height = self.expected_resolution
+            # Valid coordinates lie in the half-open range [0, width) / [0, height)
+            # — consistent with the inclusive-0 lower bound. A coordinate equal to
+            # width/height is the first index PAST the last pixel (0..W-1), so it
+            # is out of bounds.
+            if x >= width or y >= height:
+                errors.append(
+                    f"{row_label}: Keypoint '{kp_name}' ({x}, {y}) lies outside "
+                    f"the image bounds ({width}x{height}) — coordinates must be "
+                    f"within [0, {width}) x [0, {height})."
+                )
 
         return errors, float(x), float(y)
 
