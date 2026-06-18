@@ -260,6 +260,15 @@ def semantic_segmentation(options: Dict[str, Any]) -> List[BaseValidator]:
             sidecar_suffix="_mask",
         ),
         ImageResolutionValidator(expected_resolution=options["target_size"]),
+        # Masks are pixel-wise label maps: validate they're readable PNGs and
+        # share the images' resolution. The default ImageResolution instance only
+        # scans <SRC>/images, so without this a corrupt mask, or a mask whose size
+        # differs from its image, would slip through to training.
+        ImageResolutionValidator(
+            expected_resolution=options["target_size"],
+            name="Mask Resolution Validator",
+            subdir="masks",
+        ),
         _label_diversity_validator(options),
         TableNameValidator(),
         DuplicateValidator(),
@@ -276,7 +285,12 @@ def keypoint_detection(options: Dict[str, Any]) -> List[BaseValidator]:
         FileTypeValidator(allowed_extension=options["extension"], path="images"),
         _zero_record_validator(options),
         ImageResolutionValidator(expected_resolution=options["target_size"]),
-        KeypointAnnotationValidator(num_keypoints=options.get("number_of_keypoints")),
+        KeypointAnnotationValidator(
+            num_keypoints=options.get("number_of_keypoints"),
+            # Bound keypoint coords by the declared image size (images are
+            # enforced to target_size by ImageResolutionValidator above).
+            expected_resolution=options.get("target_size"),
+        ),
         KeypointVisibilityValidator(),
         _label_diversity_validator(options),
         TableNameValidator(),

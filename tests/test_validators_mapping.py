@@ -413,3 +413,28 @@ def test_text_classification_content_validators_target_texts_subdir():
     txt = next(x for x in v if isinstance(x, TextContentValidator))
     assert rec.file_subdir == "texts"
     assert txt.texts_path == "texts"
+
+
+def test_semantic_segmentation_validates_masks_resolution():
+    """Seg masks get their own ImageResolutionValidator(subdir="masks") so a
+    corrupt or wrong-sized mask is rejected (the default instance only scans
+    images). PR #314."""
+    v = map_validators(TaskCategory.SEMANTIC_SEGMENTATION, IMAGE_OPTS)
+    res = [x for x in v if isinstance(x, ImageResolutionValidator)]
+    subdirs = sorted(x.subdir for x in res)
+    assert subdirs == ["images", "masks"], subdirs
+
+
+def test_keypoint_annotation_validator_gets_image_bounds():
+    """KeypointAnnotationValidator is given the declared target_size so it can
+    reject keypoints past the image edge. PR #314."""
+    from tracebloc_ingestor.validators.keypoint_annotation_validator import (
+        KeypointAnnotationValidator,
+    )
+
+    v = map_validators(
+        TaskCategory.KEYPOINT_DETECTION,
+        {**IMAGE_OPTS, "number_of_keypoints": 5},
+    )
+    kp = next(x for x in v if isinstance(x, KeypointAnnotationValidator))
+    assert kp.expected_resolution == IMAGE_OPTS["target_size"]

@@ -73,6 +73,7 @@ def test_nonexistent_src_path_fails(clean_env):
 
 # ---- helpers --------------------------------------------------------------
 
+
 def test_is_image_file():
     v = ImageResolutionValidator()
     assert v._is_image_file(Path("a.JPG"))
@@ -119,7 +120,9 @@ def test_validate_image_resolutions_empty_list():
 def test_validate_image_resolutions_unprocessable(tmp_path):
     bad = tmp_path / "a.jpg"
     bad.write_text("nope")
-    res = ImageResolutionValidator(expected_resolution=(10, 10))._validate_image_resolutions([bad])
+    res = ImageResolutionValidator(
+        expected_resolution=(10, 10)
+    )._validate_image_resolutions([bad])
     assert not res.is_valid
     assert any("could not be processed" in e for e in res.errors)
     # the per-file reason is now surfaced, not just the bare path
@@ -127,6 +130,7 @@ def test_validate_image_resolutions_unprocessable(tmp_path):
 
 
 # --- _diagnose_image_error: distinct, actionable reasons --------------------
+
 
 def test_diagnose_empty_file(tmp_path):
     p = tmp_path / "empty.jpg"
@@ -141,4 +145,50 @@ def test_diagnose_corrupt_file(tmp_path):
 
 
 def test_diagnose_missing_file(tmp_path):
-    assert "not found" in ImageResolutionValidator._diagnose_image_error(tmp_path / "nope.jpg")
+    assert "not found" in ImageResolutionValidator._diagnose_image_error(
+        tmp_path / "nope.jpg"
+    )
+
+
+# --- masks subdir (semantic segmentation mask validation, PR #314) -----------
+
+
+def _make_png(directory, name, size):
+    from PIL import Image
+
+    directory.mkdir(exist_ok=True)
+    Image.new("L", size, 1).save(directory / name)
+
+
+def test_masks_subdir_validates_masks_directory(clean_env, tmp_path):
+    _make_png(tmp_path / "masks", "a_mask.png", (64, 64))
+    _make_png(tmp_path / "masks", "b_mask.png", (64, 64))
+    clean_env.setenv("SRC_PATH", str(tmp_path))
+    result = ImageResolutionValidator(
+        expected_resolution=(64, 64), subdir="masks"
+    ).validate(None)
+    assert result.is_valid, result.errors
+
+
+def test_masks_subdir_rejects_mask_resolution_mismatch(clean_env, tmp_path):
+    _make_png(tmp_path / "masks", "a_mask.png", (32, 32))  # != expected 64x64
+    clean_env.setenv("SRC_PATH", str(tmp_path))
+    result = ImageResolutionValidator(
+        expected_resolution=(64, 64), subdir="masks"
+    ).validate(None)
+    assert not result.is_valid
+
+
+def test_masks_subdir_rejects_corrupt_mask(clean_env, tmp_path):
+    (tmp_path / "masks").mkdir()
+    (tmp_path / "masks" / "a_mask.png").write_bytes(b"not a png \x00\xff")
+    clean_env.setenv("SRC_PATH", str(tmp_path))
+    result = ImageResolutionValidator(
+        expected_resolution=(64, 64), subdir="masks"
+    ).validate(None)
+    assert not result.is_valid
+
+
+def test_default_subdir_is_images(clean_env, tmp_path):
+    # The default instance must still scan <SRC>/images, not masks.
+    assert ImageResolutionValidator().subdir == "images"
