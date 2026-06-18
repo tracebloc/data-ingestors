@@ -195,17 +195,21 @@ class KeypointAnnotationValidator(BaseValidator):
             )
             return errors, None, None
 
+        # Lower- and upper-bound checks run INDEPENDENTLY (not elif) so a row
+        # like (-1, 9999) reports both the negative x AND the out-of-bounds y in
+        # one pass, instead of hiding the second issue until a re-ingest (bugbot,
+        # PR #314).
         if x < 0 or y < 0:
             errors.append(
                 f"{row_label}: Keypoint '{kp_name}' has negative coordinates "
                 f"({x}, {y})"
             )
-        elif self.expected_resolution is not None:
+        if self.expected_resolution is not None:
             width, height = self.expected_resolution
             # Valid coordinates lie in the half-open range [0, width) / [0, height)
-            # — consistent with the inclusive-0 lower bound above. A coordinate
-            # equal to width/height is the first index PAST the last pixel
-            # (indices run 0..W-1), so it's out of bounds (bugbot, PR #314).
+            # — consistent with the inclusive-0 lower bound. A coordinate equal to
+            # width/height is the first index PAST the last pixel (0..W-1), so it
+            # is out of bounds.
             if x >= width or y >= height:
                 errors.append(
                     f"{row_label}: Keypoint '{kp_name}' ({x}, {y}) lies outside "

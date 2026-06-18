@@ -227,3 +227,14 @@ def test_keypoint_at_exact_width_is_out_of_bounds():
     result = v.validate(df)
     assert not result.is_valid
     assert any("outside the image bounds" in e for e in result.errors)
+
+
+def test_keypoint_negative_and_out_of_bounds_both_reported():
+    # (-1, 9999) on 64x64: independent checks must report BOTH the negative x
+    # and the out-of-bounds y in one pass (bugbot PR #314).
+    v = KeypointAnnotationValidator(expected_resolution=(64, 64))
+    df = _df([{"nose": [-1, 9999], "left_eye": [20, 15]}])
+    result = v.validate(df)
+    assert not result.is_valid
+    assert any("negative coordinates" in e for e in result.errors)
+    assert any("outside the image bounds" in e for e in result.errors)
