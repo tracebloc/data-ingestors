@@ -36,14 +36,67 @@ def _types(validators):
 
 
 def test_image_classification():
+    from tracebloc_ingestor.validators.ingestable_records_validator import (
+        IngestableRecordsValidator,
+    )
+    from tracebloc_ingestor.validators.label_column_validator import (
+        LabelColumnValidator,
+    )
+
     v = map_validators(TaskCategory.IMAGE_CLASSIFICATION, IMAGE_OPTS)
     assert _types(v) == [
         FileTypeValidator,
+        IngestableRecordsValidator,
         ImageResolutionValidator,
+        LabelColumnValidator,
         LabelDiversityValidator,
         TableNameValidator,
         DuplicateValidator,
     ]
+
+
+def test_vision_categories_have_zero_record_guard():
+    """0-record fail-fast (header-only / empty CSV) is wired into every
+    file-bearing vision category — image/object/semantic/keypoint — so a
+    zero-record vision dataset is rejected at preflight instead of creating an
+    orphan empty table (extends #303 from NLP to vision)."""
+    from tracebloc_ingestor.validators.ingestable_records_validator import (
+        IngestableRecordsValidator,
+    )
+
+    for cat in (
+        TaskCategory.IMAGE_CLASSIFICATION,
+        TaskCategory.OBJECT_DETECTION,
+        TaskCategory.SEMANTIC_SEGMENTATION,
+        TaskCategory.KEYPOINT_DETECTION,
+    ):
+        rec = [
+            x
+            for x in map_validators(cat, IMAGE_OPTS)
+            if isinstance(x, IngestableRecordsValidator)
+        ]
+        assert len(rec) == 1, cat
+        assert rec[0].file_subdir == "images", cat
+
+
+def test_label_column_guard_is_image_classification_only():
+    """LabelColumnValidator gates only image_classification among vision
+    categories — object detection / segmentation / keypoint source labels from
+    XML / masks / annotation files, not a CSV label column, so adding it there
+    would wrongly reject every such dataset."""
+    from tracebloc_ingestor.validators.label_column_validator import (
+        LabelColumnValidator,
+    )
+
+    assert LabelColumnValidator in _types(
+        map_validators(TaskCategory.IMAGE_CLASSIFICATION, IMAGE_OPTS)
+    )
+    for cat in (
+        TaskCategory.OBJECT_DETECTION,
+        TaskCategory.SEMANTIC_SEGMENTATION,
+        TaskCategory.KEYPOINT_DETECTION,
+    ):
+        assert LabelColumnValidator not in _types(map_validators(cat, IMAGE_OPTS)), cat
 
 
 def test_classification_categories_include_label_diversity():
@@ -289,8 +342,11 @@ def test_map_validators_without_config_falls_back_to_module_global(monkeypatch):
 
 
 def test_nlp_categories_include_content_hygiene_validators():
-    """The text categories (text/token classification, MLM) gain the
-    zero-record and text-content validators; image/tabular do NOT."""
+    """The text categories (text/token classification, MLM) gain BOTH the
+    zero-record guard and the (text-only) UTF-8 content validator. The
+    zero-record guard now also covers file-bearing vision categories, but
+    TextContentValidator stays NLP-only (it decodes UTF-8 text, meaningless for
+    images); tabular has neither."""
     from tracebloc_ingestor.validators.ingestable_records_validator import (
         IngestableRecordsValidator,
     )
@@ -309,10 +365,22 @@ def test_nlp_categories_include_content_hygiene_validators():
         # FileTypeValidator stays first (the content validators come after it).
         assert types[0] is FileTypeValidator, cat
 
-    for cat in (TaskCategory.IMAGE_CLASSIFICATION, TaskCategory.TABULAR_CLASSIFICATION):
+    # Vision file-bearing categories get the zero-record guard but NOT the
+    # text-content validator.
+    for cat in (
+        TaskCategory.IMAGE_CLASSIFICATION,
+        TaskCategory.OBJECT_DETECTION,
+        TaskCategory.SEMANTIC_SEGMENTATION,
+        TaskCategory.KEYPOINT_DETECTION,
+    ):
         types = _types(map_validators(cat, IMAGE_OPTS))
-        assert IngestableRecordsValidator not in types, cat
+        assert IngestableRecordsValidator in types, cat
         assert TextContentValidator not in types, cat
+
+    # Tabular has neither (no files, not text).
+    types = _types(map_validators(TaskCategory.TABULAR_CLASSIFICATION, IMAGE_OPTS))
+    assert IngestableRecordsValidator not in types
+    assert TextContentValidator not in types
 
 
 def test_mlm_content_validators_target_sequences_subdir():
