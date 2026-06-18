@@ -192,6 +192,23 @@ class BaseIngestor(ABC):
         if self.unique_id_column and self.unique_id_column in table_schema:
             del table_schema[self.unique_id_column]
 
+        # Canonical feature-column ordering (#763, mode A). Tabular-family
+        # trainers read features positionally and the averaging service sums
+        # weights by tensor position, so every edge must agree on which feature
+        # lives at which position. Left alone, the order is whatever each edge's
+        # template ``schema`` dict happened to declare, so two sites can
+        # silently average misaligned features (pos 0 = "age" at one site,
+        # "bmi" at another) with no error. Sorting the cleaned feature columns
+        # into one deterministic order *here* -- the ingest layer, the single
+        # point that defines the stored table schema every edge's trainer later
+        # reads back via its schema-ordered SELECT -- makes the cross-site
+        # contract hold by construction, with no runtime feature_columns
+        # broadcast/reindex needed. Only tabular-family categories are
+        # reordered; image/keypoint schemas (e.g. a "Visibility" column) keep
+        # their declared order.
+        if self.category in _TABULAR_FAMILY_CATEGORIES:
+            table_schema = {key: table_schema[key] for key in sorted(table_schema)}
+
         # Add cleaned schema to file_options for validators / downstream metadata.
         # Always overwrite so a schema passed in by the template (which may still
         # contain the label/annotation/unique_id columns) is sanitized before
