@@ -16,10 +16,8 @@ from typing import Any, Set
 
 from .base import BaseValidator, ValidationResult
 from ..config import Config
-from ..utils.logging import setup_logging
 
 config = Config()
-setup_logging(config)
 logger = logging.getLogger(__name__)
 logger.setLevel(config.LOG_LEVEL)
 
@@ -67,7 +65,7 @@ class FilePairingValidator(BaseValidator):
 
     def validate(self, data: Any, **kwargs) -> ValidationResult:
         try:
-            src = Path(config.SRC_PATH)
+            src = Path((self._config or config).SRC_PATH)
             image_dir = src / self.image_path
             sidecar_dir = src / self.sidecar_path
 

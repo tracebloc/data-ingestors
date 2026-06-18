@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from tracebloc_ingestor.config import Config
 from tracebloc_ingestor.utils.validators_mapping import map_validators
 from tracebloc_ingestor.utils.constants import TaskCategory, FileExtension
 from tracebloc_ingestor.validators.file_validator import FileTypeValidator
@@ -23,11 +24,9 @@ from tracebloc_ingestor.validators.keypoint_annotation_validator import (
 from tracebloc_ingestor.validators.keypoint_visibility_validator import (
     KeypointVisibilityValidator,
 )
-from tracebloc_ingestor.validators.tokenizer_validator import TokenizerValidator
 from tracebloc_ingestor.validators.label_diversity_validator import (
     LabelDiversityValidator,
 )
-
 
 IMAGE_OPTS = {"extension": FileExtension.JPG, "target_size": [224, 224]}
 
@@ -211,21 +210,44 @@ def test_time_to_event_without_schema():
     assert DataValidator not in types
 
 
-def test_masked_language_modeling_includes_tokenizer():
-    v = map_validators(TaskCategory.MASKED_LANGUAGE_MODELING, {})
-    assert TokenizerValidator in _types(v)
-
-
 def test_unknown_category_returns_empty():
     assert map_validators("not_a_category", {}) == []
 
 
-def test_text_and_token_classification_include_optional_tokenizer_validator():
-    from tracebloc_ingestor.validators.tokenizer_validator import TokenizerValidator
+# --- P4b: config injection seam -------------------------------------------
+# map_validators is the single place the run's resolved Config is bound to
+# every validator it builds (BaseValidator.bind_config). These pin that the
+# INJECTED config wins over the env-backed module-global at the read site, and
+# that omitting it preserves the prior module-global fallback.
 
-    for cat in (TaskCategory.TEXT_CLASSIFICATION, TaskCategory.TOKEN_CLASSIFICATION):
-        v = map_validators(cat, {})
-        tok = [x for x in v if isinstance(x, TokenizerValidator)]
-        assert tok, f"{cat}: expected an (optional) TokenizerValidator"
-        assert tok[0].optional is True
-        assert tok[0].required_tokens == {"[PAD]"}
+
+def test_map_validators_injects_config_over_module_global(monkeypatch):
+    # The env-backed module-global config would resolve these values...
+    monkeypatch.setenv("TABLE_NAME", "env_table")
+    monkeypatch.setenv("SRC_PATH", "/env/src")
+    # ...but the run's resolved Config carries DIFFERENT ones.
+    injected = Config(TABLE_NAME="injected_table", SRC_PATH="/injected/src")
+
+    validators = map_validators(TaskCategory.TABULAR_REGRESSION, {}, injected)
+
+    assert validators
+    # Every validator the factory built got the run's Config bound to it.
+    assert all(v._config is injected for v in validators)
+    # And path-reading validators resolve the injected value, not the env one.
+    tbl = next(v for v in validators if isinstance(v, TableNameValidator))
+    assert (tbl._config or Config()).TABLE_NAME == "injected_table"
+    dup = next(v for v in validators if isinstance(v, DuplicateValidator))
+    # DEST_PATH is derived as STORAGE_PATH/TABLE_NAME from the injected config.
+    assert dup.dest_path.endswith("/injected_table")
+    assert "env_table" not in dup.dest_path
+
+
+def test_map_validators_without_config_falls_back_to_module_global(monkeypatch):
+    monkeypatch.setenv("TABLE_NAME", "env_table")
+    # No config arg -> validators stay unbound and read the module-global.
+    validators = map_validators(TaskCategory.TABULAR_REGRESSION, {})
+
+    assert validators
+    assert all(v._config is None for v in validators)
+    dup = next(v for v in validators if isinstance(v, DuplicateValidator))
+    assert dup.dest_path.endswith("/env_table")

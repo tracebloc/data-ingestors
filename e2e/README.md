@@ -25,10 +25,14 @@ The suite **auto-skips when no MySQL is reachable**, so the default `pytest`
 
 ## Known gaps (currently `xfail`)
 
-| Modality | Why | Ticket |
-|---|---|---|
-| object_detection | bundled VisDrone XML uses `difficult=2`; validator only accepts `0/1` | #135 |
-| semantic_segmentation | mask sidecar column not wired through the declarative path | #136 |
-| masked_language_modeling | template missing the required `tokenizer.json` | #137 |
+None — all 11 supported modalities ingest cleanly and are covered. The earlier
+xfails have all landed: object_detection (#135), masked_language_modeling
+(#137), and semantic_segmentation (#136, fixed by the P5 mask_id work). The
+semantic_segmentation end-to-end contract (masks land in DEST_PATH + `mask_id`
+stored for the training client) is pinned in
+`test_characterization.py::test_characterization[semantic_segmentation]`; the
+cross-repo client contract is tracked for sign-off in backend#816.
 
-When a fix lands, the corresponding test XPASSes — drop the `xfail` mark.
+When a future gap arises, add an `xfail(strict=True)` row tied to its ticket so
+a landed fix surfaces loudly — an XPASS fails the suite, forcing the mark's
+removal (the prior `strict=False` let fixes land silently).

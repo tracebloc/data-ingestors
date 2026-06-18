@@ -11,10 +11,8 @@ import logging
 
 from .base import BaseValidator, ValidationResult
 from ..config import Config
-from ..utils.logging import setup_logging
 
 config = Config()
-setup_logging(config)
 logger = logging.getLogger(__name__)
 logger.setLevel(config.LOG_LEVEL)
 
@@ -83,9 +81,11 @@ class PascalVOCXMLValidator(BaseValidator):
         try:
             recursive = kwargs.get("recursive", True)
             ignore_hidden = kwargs.get("ignore_hidden", True)
-    
+
             # Get list of XML files to validate
-            files_to_validate = self._get_xml_files(config.SRC_PATH, recursive, ignore_hidden)
+            files_to_validate = self._get_xml_files(
+                (self._config or config).SRC_PATH, recursive, ignore_hidden
+            )
 
             if not files_to_validate:
                 return self._create_result(
@@ -535,7 +535,9 @@ class PascalVOCXMLValidator(BaseValidator):
         if difficult_elem is not None:
             try:
                 difficult_val = (
-                    int(difficult_elem.text) if difficult_elem.text is not None else None
+                    int(difficult_elem.text)
+                    if difficult_elem.text is not None
+                    else None
                 )
             except (ValueError, TypeError):
                 difficult_val = None

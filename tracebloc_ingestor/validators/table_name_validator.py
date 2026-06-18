@@ -11,10 +11,8 @@ import logging
 
 from .base import BaseValidator, ValidationResult
 from ..config import Config
-from ..utils.logging import setup_logging
 
 config = Config()
-setup_logging(config)
 logger = logging.getLogger(__name__)
 logger.setLevel(config.LOG_LEVEL)
 
@@ -58,7 +56,7 @@ class TableNameValidator(BaseValidator):
         """
         try:
             # Get table name from config
-            table_name = config.TABLE_NAME
+            table_name = (self._config or config).TABLE_NAME
 
             if not table_name:
                 return self._create_result(

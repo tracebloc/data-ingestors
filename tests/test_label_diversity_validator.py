@@ -320,3 +320,112 @@ def test_custom_label_column_name():
     assert LabelDiversityValidator(label_column="target").validate(df).is_valid
     # The default `label` column is single-value here — should fail.
     assert not LabelDiversityValidator(label_column="label").validate(df).is_valid
+
+
+# ---------------------------------------------------------------------------
+# .json input — JSONL must be a benign skip, not a duplicate error
+# ---------------------------------------------------------------------------
+
+def test_jsonl_input_is_benign_skip_not_noisy_error(tmp_path):
+    """Issue #267: a .json file containing JSONL content (one JSON object per
+    line, no enclosing ``[...]``) used to crash ``pd.read_json`` here with a
+    raw "Trailing data" exception. That bubbled to the user alongside the
+    DataValidator's clean JSONL-detection message (#263), producing a
+    duplicated/noisy error block.
+
+    The clean JSONL fix message belongs to DataValidator — this validator
+    should fail silently to a None DataFrame so only the upstream actionable
+    message reaches the user.
+    """
+    p = tmp_path / "data.json"
+    p.write_text(
+        '{"id": 1, "label": "A"}\n'
+        '{"id": 2, "label": "B"}\n'
+        '{"id": 3, "label": "A"}\n'
+    )
+    # The validator should treat this as a benign skip (no rows to check),
+    # not surface a raw pandas exception in errors.
+    result = LabelDiversityValidator().validate(str(p))
+    assert result.is_valid
+    assert not any(
+        "Trailing data" in e or "Extra data" in e for e in (result.errors or [])
+    )
+
+
+def test_malformed_json_input_also_skipped(tmp_path):
+    """A genuinely malformed .json file (not JSONL — just broken) also gets
+    the benign-skip treatment. DataValidator surfaces the appropriate parse
+    error; this validator must not duplicate it."""
+    p = tmp_path / "broken.json"
+    p.write_text('{"id": 1, "label":  ')  # truncated, unparseable
+    result = LabelDiversityValidator().validate(str(p))
+    assert result.is_valid
+
+
+# ---------------------------------------------------------------------------
+# Bugbot regression guards (PR #294)
+# ---------------------------------------------------------------------------
+
+def test_single_dict_json_runs_diversity_check_not_skipped(tmp_path):
+    """Bugbot #294 (HIGH): the previous swallow-all ``pd.read_json`` catch
+    turned a top-level single-dict JSON file (the format
+    ``JSONIngestor.read_data`` and ``DataValidator`` both accept, #232) into
+    a silent benign-skip. A single-label single-dict JSON would then pass the
+    diversity gate at preflight, re-opening the #251 hole the validator
+    exists to close.
+
+    The loader must accept the single-dict shape (wrap as one record) so the
+    diversity check actually runs against the labels found.
+    """
+    p = tmp_path / "single.json"
+    # Valid single-dict JSON — DataValidator + ingestor both accept this,
+    # the diversity gate must too.
+    p.write_text('{"id": 1, "label": "X"}')
+    result = LabelDiversityValidator().validate(str(p))
+    # Single record → one distinct label → must FAIL the diversity gate, NOT
+    # silently pass. (Before the fix, this returned is_valid=True because
+    # pd.read_json raised ValueError on the dict and the catch swallowed it.)
+    assert not result.is_valid
+    assert any("distinct" in e for e in result.errors)
+
+
+def test_array_of_records_json_diversity_still_runs(tmp_path):
+    """Sanity: the standard top-level-array case must still load and run the
+    diversity check. Pairs with the single-dict test to pin both supported
+    JSON shapes against the diversity gate."""
+    p = tmp_path / "arr.json"
+    # Single-label array of 3 records — must FAIL diversity.
+    p.write_text(
+        '[{"id": 1, "label": "X"}, {"id": 2, "label": "X"}, {"id": 3, "label": "X"}]'
+    )
+    result = LabelDiversityValidator().validate(str(p))
+    assert not result.is_valid
+    assert any("distinct" in e for e in result.errors)
+
+
+def test_two_class_json_array_passes(tmp_path):
+    """Two distinct labels in a JSON array → diversity gate must pass."""
+    p = tmp_path / "ok.json"
+    p.write_text(
+        '[{"id": 1, "label": "X"}, {"id": 2, "label": "Y"}, {"id": 3, "label": "X"}]'
+    )
+    result = LabelDiversityValidator().validate(str(p))
+    assert result.is_valid
+
+
+def test_top_level_scalar_json_benign_skipped(tmp_path):
+    """A non-records-shape JSON (a bare string, number, scalar array)
+    benign-skips here — DataValidator surfaces the appropriate rejection."""
+    p = tmp_path / "bare.json"
+    p.write_text('"just a string"')
+    result = LabelDiversityValidator().validate(str(p))
+    assert result.is_valid  # benign skip
+
+
+def test_scalar_array_json_benign_skipped(tmp_path):
+    """A top-level array of scalars (no dicts) has no labels to check —
+    benign-skip; DataValidator catches the misshape elsewhere."""
+    p = tmp_path / "scalars.json"
+    p.write_text('[1, 2, 3]')
+    result = LabelDiversityValidator().validate(str(p))
+    assert result.is_valid  # benign skip

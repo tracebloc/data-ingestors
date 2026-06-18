@@ -14,10 +14,8 @@ import logging
 from tqdm import tqdm
 
 from tracebloc_ingestor.config import Config
-from tracebloc_ingestor.utils.logging import setup_logging
 
 config = Config()
-setup_logging(config)
 logger = logging.getLogger(__name__)
 logger.setLevel(config.LOG_LEVEL)
 
@@ -50,6 +48,16 @@ class BaseValidator(ABC):
         name: Human-readable name of the validator
     """
 
+    # The run's resolved Config, injected by ``map_validators`` (which calls
+    # ``bind_config`` on every validator it builds) — structural refactor
+    # backend#796, P4b. Class-level default ``None`` so a validator constructed
+    # outside the registry flow (e.g. directly in a test) keeps working: its
+    # path-reading sites fall back to the module-global ``config`` while
+    # ``_config`` is unset. This is the seam that lets the ingestor's
+    # explicitly-resolved Config replace the env-driven global — the ``cli/run``
+    # env-var bridge the globals relied on is removed in the P4c slice.
+    _config: Optional[Config] = None
+
     def __init__(self, name: str):
         """Initialize the base validator.
 
@@ -58,6 +66,16 @@ class BaseValidator(ABC):
         """
         self.name = name
         self.validator_id = f"{name.lower().replace(' ', '_')}_validator"
+
+    def bind_config(self, config: Config) -> None:
+        """Bind the run's resolved :class:`Config` to this validator (P4b).
+
+        Called by ``map_validators`` for every validator in a category's set so
+        the path-reading validators (SRC_PATH / DEST_PATH / TABLE_NAME) read the
+        ingestor's resolved Config instead of a module-global ``Config()`` that
+        snapshots ``os.environ`` at import time.
+        """
+        self._config = config
 
     @abstractmethod
     def validate(self, data: Any, **kwargs) -> ValidationResult:
@@ -126,9 +144,7 @@ class BaseValidator(ABC):
             if isinstance(data, pd.DataFrame):
                 return data
             elif isinstance(data, (str, Path)):
-                return pd.read_csv(
-                    data, encoding="utf-8", on_bad_lines="warn"
-                )
+                return pd.read_csv(data, encoding="utf-8", on_bad_lines="warn")
             return None
         except Exception as e:
             logger.error(f"Error loading data: {str(e)}")

@@ -9,7 +9,6 @@ from typing import Any, List, Optional, Tuple
 import logging
 
 from tracebloc_ingestor.config import Config
-from tracebloc_ingestor.utils.logging import setup_logging
 
 try:
     from PIL import Image, UnidentifiedImageError
@@ -22,10 +21,8 @@ except ImportError:
 
 from .base import BaseValidator, ValidationResult
 
-
 # Configure unified logging with config
 config = Config()
-setup_logging(config)
 logger = logging.getLogger(__name__)
 logger.setLevel(config.LOG_LEVEL)
 
@@ -74,7 +71,12 @@ class ImageResolutionValidator(BaseValidator):
         """Validate image resolution uniformity.
 
         Args:
-            data: Image file path, directory path, or list of image file paths to validate
+            path: Accepted for the ``BaseValidator.validate`` interface but
+                IGNORED — the images directory is always resolved from the run's
+                Config as ``<SRC_PATH>/images`` (see the first line of the body).
+                Callers pass the source through ``validate_data``; it has no
+                effect here. (Audit foot-gun note: do not "fix" this to honour
+                ``path`` without checking every call site.)
             **kwargs: Additional validation parameters
                 - recursive: Whether to search directories recursively (default: True)
                 - ignore_hidden: Whether to ignore hidden files (default: True)
@@ -84,7 +86,7 @@ class ImageResolutionValidator(BaseValidator):
             ValidationResult containing validation status and messages
         """
         try:
-            data = f"{config.SRC_PATH}/images"
+            data = f"{(self._config or config).SRC_PATH}/images"
             if not PIL_AVAILABLE:
                 return self._create_result(
                     is_valid=False,

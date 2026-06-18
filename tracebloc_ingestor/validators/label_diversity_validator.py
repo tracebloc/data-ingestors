@@ -24,6 +24,7 @@ self-supervised categories (masked_language_modeling) which have no
 label column at all.
 """
 
+import json
 import logging
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -33,10 +34,8 @@ import pandas as pd
 from .base import BaseValidator, ValidationResult
 from ..config import Config
 from ..utils import coercion
-from ..utils.logging import setup_logging
 
 config = Config()
-setup_logging(config)
 logger = logging.getLogger(__name__)
 logger.setLevel(config.LOG_LEVEL)
 
@@ -237,7 +236,42 @@ class LabelDiversityValidator(BaseValidator):
                     **self._label_read_kwargs(actual),
                 )
             if path.suffix.lower() == ".json":
-                return pd.read_json(path, orient="records")
+                # Mirror ``DataValidator._load_data``'s JSON branch (and
+                # ``JSONIngestor.read_data``'s contract): both a top-level
+                # array of records AND a top-level single dict are accepted —
+                # ``pd.read_json(orient="records")`` rejects the single-dict
+                # case and would otherwise turn a perfectly valid input into
+                # a silent benign-skip that lets a single-label dataset
+                # bypass the diversity gate (bugbot, PR #294 — re-opens #251).
+                #
+                # Use ``json.load`` directly so the loader accepts the same
+                # shapes the ingestor and DataValidator do. Genuinely broken
+                # JSON / JSONL (mis-extensioned as ``.json``) still benign-
+                # skips here: the actionable error belongs to DataValidator's
+                # JSONL detection (#263), and surfacing the raw pandas
+                # ``Trailing data`` here would just duplicate the noise
+                # (#267).
+                try:
+                    with open(path, "r", encoding="utf-8") as fh:
+                        raw = json.load(fh)
+                except (ValueError, json.JSONDecodeError, OSError):
+                    return None
+                # Mirror JSONIngestor.read_data: a bare dict is one record;
+                # a top-level array stays as-is.
+                if isinstance(raw, dict):
+                    raw = [raw]
+                elif not isinstance(raw, list):
+                    # Top-level scalar / non-object / non-array — not a
+                    # records shape. DataValidator surfaces a clear rejection;
+                    # benign-skip here.
+                    return None
+                # Mirror JSONIngestor._iter_validated_records, which drops
+                # non-dict elements (so a top-level scalar array doesn't
+                # become a 1-column DataFrame that fools the diversity check).
+                records = [item for item in raw if isinstance(item, dict)]
+                if not records:
+                    return None
+                return pd.DataFrame(records)
         return None
 
     def _label_read_kwargs(self, actual: str) -> Dict[str, Any]:

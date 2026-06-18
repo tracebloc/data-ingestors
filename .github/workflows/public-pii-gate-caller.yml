@@ -1,0 +1,14 @@
+name: Public PII gate
+
+# Per-repo caller for the public-repo PII gate. Blocks PRs whose title/body/
+# commits contain a denylisted customer/partner name or known secret.
+# Logic lives in tracebloc/.github/.github/workflows/public-pii-gate.yml.
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize, labeled, unlabeled]
+
+jobs:
+  pii-gate:
+    uses: tracebloc/.github/.github/workflows/public-pii-gate.yml@main
+    secrets: inherit

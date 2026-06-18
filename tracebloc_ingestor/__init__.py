@@ -7,6 +7,13 @@ ingestors, along with built-in support for common data formats.
 
 from .config import Config
 from .database import Database
+from .identifiers import (
+    MAX_COLUMN_IDENTIFIER_LENGTH,
+    InvalidColumnIdentifierError,
+    is_valid_column_identifier,
+    quote_column_identifier,
+    validate_column_identifier,
+)
 from .api.client import APIClient
 from .ingestors import BaseIngestor, CSVIngestor, JSONIngestor
 from .utils.template_runner import run_ingestion
@@ -21,7 +28,7 @@ from .validators import (
 # Single source of truth for the package version. setup.py parses this literal
 # (see _read_version in setup.py) so the two can't drift again (#175). Bump here
 # only — setup.py picks it up automatically.
-__version__ = "0.3.10"
+__version__ = "0.3.12"
 
 __all__ = [
     "Config",
@@ -36,4 +43,9 @@ __all__ = [
     "ImageResolutionValidator",
     "TableNameValidator",
     "run_ingestion",
+    "MAX_COLUMN_IDENTIFIER_LENGTH",
+    "InvalidColumnIdentifierError",
+    "is_valid_column_identifier",
+    "quote_column_identifier",
+    "validate_column_identifier",
 ]

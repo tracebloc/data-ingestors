@@ -19,10 +19,9 @@ import pandas as pd
 from .base import BaseValidator, ValidationResult
 from ..config import Config
 from ..utils import coercion
-from ..utils.logging import setup_logging
+from ..utils.typo_suggest import suggest_type as _suggest_type
 
 config = Config()
-setup_logging(config)
 logger = logging.getLogger(__name__)
 logger.setLevel(config.LOG_LEVEL)
 
@@ -78,13 +77,28 @@ class DataValidator(BaseValidator):
         super().__init__(name)
         self.schema = schema or {}
 
-        # Map database types to validation functions
+        # Map database types to validation functions. This vocabulary MUST
+        # match ``Database._get_sqlalchemy_type``'s ``type_mapping`` — if a
+        # type is accepted by the DB layer but missing here, the user gets
+        # a misleading "Unknown data type" preflight rejection AND the
+        # Levenshtein hint can suggest a wrong-but-close-spelled validator
+        # entry (e.g. BLOB → "Did you mean BOOL?", flagged by bugbot on
+        # PR #293).
         self.type_validators = {
             "VARCHAR": self._validate_varchar,
             "CHAR": self._validate_char,
             "TEXT": self._validate_text,
             "INT": self._validate_int,
             "INTEGER": self._validate_int,
+            # MySQL integer variants share the same per-value contract — any
+            # value pandas can coerce to int passes; range-check is handled at
+            # the DDL layer by SQLAlchemy. Without these entries a schema with
+            # TINYINT/SMALLINT/MEDIUMINT hit "Unknown data type" at preflight
+            # even though Database._get_sqlalchemy_type accepts them as
+            # Integer (bugbot #293).
+            "TINYINT": self._validate_int,
+            "SMALLINT": self._validate_int,
+            "MEDIUMINT": self._validate_int,
             "BIGINT": self._validate_bigint,
             "FLOAT": self._validate_float,
             "DOUBLE": self._validate_double,
@@ -102,6 +116,15 @@ class DataValidator(BaseValidator):
             "DATETIME": self._validate_datetime,
             "TIMESTAMP": self._validate_timestamp,
             "TIME": self._validate_time,
+            # Binary blob types — Database accepts them (BLOB / LONGBLOB map
+            # to SQLAlchemy BLOB/LONGBLOB). At the validator layer there's no
+            # meaningful per-value type check to do (any Python object can
+            # bind to a BLOB column), so accept-and-pass is the right
+            # behaviour. Bugbot #293 caught the prior gap: a valid BLOB
+            # schema was rejected as "Unknown data type" and the Levenshtein
+            # hint suggested BOOL (distance 2).
+            "BLOB": self._validate_passthrough,
+            "LONGBLOB": self._validate_passthrough,
         }
 
     def validate(self, data: Any, **kwargs) -> ValidationResult:
@@ -205,6 +228,36 @@ class DataValidator(BaseValidator):
                     ],
                     metadata={"rows_checked": 0},
                 )
+
+            # Fail fast when a schema column is absent from the CSV header (#289).
+            # The same check exists at row-read time in CSVIngestor._validate_data_types
+            # but that fires AFTER ``create_table`` has run, leaving an empty
+            # orphaned table behind that the next retry's stale-table guard
+            # trips on (the #260 failure mode, at a different gate). Mirror
+            # the CSVIngestor wording so a user who has previously hit the
+            # read-time version sees the same message at preflight.
+            #
+            # Scoped to the CSV streaming path on purpose: JSON ingestion is
+            # intentionally permissive about sparse records — JSONIngestor.
+            # _validate_record only warns when a schema field is absent and
+            # proceeds with ingestion. Putting this check on the shared
+            # ``_validate_schema`` would reject JSON inputs the ingestor would
+            # have accepted (bugbot, PR #292).
+            if _stripped:  # only run when the header probe succeeded
+                missing_schema_cols = set(self.schema) - set(_stripped)
+                if missing_schema_cols:
+                    return self._create_result(
+                        is_valid=False,
+                        errors=[
+                            f"Schema columns not present in CSV: "
+                            f"{', '.join(sorted(missing_schema_cols))}."
+                        ],
+                        metadata={
+                            "schema_columns": list(self.schema.keys()),
+                            "file_columns": list(_stripped),
+                            "missing_schema_columns": sorted(missing_schema_cols),
+                        },
+                    )
         except (OSError, UnicodeDecodeError, _csv.Error, TypeError, StopIteration):
             # Header probe failed; let pd.read_csv surface the real error below.
             pass
@@ -443,9 +496,29 @@ class DataValidator(BaseValidator):
         if base_type in self.type_validators:
             return self.type_validators[base_type](series, column_name, expected_type)
         else:
+            # Surface a "Did you mean …?" hint when the customer has typed a
+            # close variant of a real type (INTERGER → INTEGER, BIGINTEGER →
+            # INTEGER, NUMRIC → NUMERIC). Without this the preflight error was
+            # just "Unknown data type: INTERGER" — the suggestion machinery
+            # existed in ``Database._get_sqlalchemy_type`` (#264) but the
+            # validator rejects unknown types FIRST, so that code path never
+            # ran for a typo'd schema (#266). Share the helper so both layers
+            # offer the same fix.
+            suggestion = _suggest_type(base_type, self.type_validators.keys())
+            if suggestion:
+                msg = (
+                    f"Unknown data type: {expected_type}. Did you mean "
+                    f"'{suggestion}'? Supported types: "
+                    f"{sorted(self.type_validators.keys())}"
+                )
+            else:
+                msg = (
+                    f"Unknown data type: {expected_type}. Supported types: "
+                    f"{sorted(self.type_validators.keys())}"
+                )
             return {
                 "is_valid": False,
-                "errors": [f"Unknown data type: {expected_type}"],
+                "errors": [msg],
                 "warnings": [],
             }
 
@@ -548,6 +621,17 @@ class DataValidator(BaseValidator):
                 )
 
         return {"is_valid": len(errors) == 0, "errors": errors, "warnings": warnings}
+
+    def _validate_passthrough(
+        self, series: pd.Series, column_name: str, expected_type: str
+    ) -> Dict[str, Any]:
+        """No-op per-value check for types where the validator has no
+        meaningful constraint to enforce (BLOB, LONGBLOB). The Database layer
+        binds whatever Python value is supplied as bytes; the user has
+        opted in to that contract by declaring the column blob-typed.
+        Returns ``is_valid=True`` so the type passes preflight (bugbot #293).
+        """
+        return {"is_valid": True, "errors": [], "warnings": []}
 
     def _validate_text(
         self, series: pd.Series, column_name: str, expected_type: str
@@ -803,13 +887,14 @@ class DataValidator(BaseValidator):
                 # Check which values are valid numeric booleans (0, 1, 0.0, 1.0)
                 numeric_valid = numeric_series.isin([0, 1, 0.0, 1.0])
                 
-                # For non-numeric values, check against valid boolean strings
-                valid_boolean_strings = {
-                    "true", "false", "yes", "no", "y", "n", 
-                    "t", "f", "TRUE", "FALSE", "YES", "NO"
-                }
+                # For non-numeric values, check against the shared boolean
+                # vocabulary (coercion.BOOL_STRINGS) — the same set the CSV
+                # cast and JSON check read, so the layers can't drift. The
+                # digit forms it adds ("1"/"0"/"1.0"/"0.0") are already
+                # covered by numeric_valid above, so membership here is inert
+                # for them; this only supplies the letter forms (true/yes/…).
                 string_lower = string_series.str.lower()
-                string_valid = string_lower.isin(valid_boolean_strings)
+                string_valid = string_lower.isin(coercion.BOOL_STRINGS)
                 
                 # A value is valid if it's either a valid numeric boolean OR a valid boolean string
                 # (NaN from to_numeric means it wasn't numeric, so check string_valid for those)

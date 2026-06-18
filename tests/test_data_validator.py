@@ -253,11 +253,120 @@ def test_unknown_type_fails():
     assert "Unknown data type" in result.errors[0]
 
 
-def test_schema_column_not_in_df_is_ignored():
+def test_unknown_type_suggests_closest_match():
+    """Issue #266: when the user types a typo'd type (INTERGER), the
+    DataValidator rejects FIRST — before ``Database._get_sqlalchemy_type``'s
+    suggestion (#264) ever runs. Surface the same hint at this layer."""
     df = pd.DataFrame({"a": [1]})
-    result = DataValidator(schema={"b": "INT"}).validate(df)
-    # 'b' isn't in df.columns, so nothing is validated -> valid.
+    result = DataValidator(schema={"a": "INTERGER"}).validate(df)
+    assert not result.is_valid
+    err = result.errors[0]
+    assert "Did you mean 'INTEGER'" in err
+    assert "Supported types" in err
+
+
+def test_unknown_type_no_suggestion_for_distant_input():
+    """A genuinely off-vocabulary type (no close match) gets the supported-types
+    list but no "Did you mean" hint — otherwise we'd surface noisy guesses."""
+    df = pd.DataFrame({"a": [1]})
+    result = DataValidator(schema={"a": "QUATERNION"}).validate(df)
+    assert not result.is_valid
+    err = result.errors[0]
+    assert "Did you mean" not in err
+    assert "Supported types" in err
+
+
+@pytest.mark.parametrize("dbtype", ["TINYINT", "SMALLINT", "MEDIUMINT", "BIGINT"])
+def test_integer_variants_pass_preflight(dbtype):
+    """Bugbot #293: TINYINT/SMALLINT/MEDIUMINT are accepted by
+    ``Database._get_sqlalchemy_type`` (all map to Integer) but were missing
+    from the validator's ``type_validators`` — preflight rejected them as
+    "Unknown data type" before ingestion even ran. BIGINT was already
+    covered; the rest now share the same per-value INT check."""
+    df = pd.DataFrame({"n": [1, 2, 3]})
+    result = DataValidator(schema={"n": dbtype}).validate(df)
+    assert result.is_valid, f"{dbtype} should pass; errors={result.errors}"
+
+
+@pytest.mark.parametrize("dbtype", ["BLOB", "LONGBLOB"])
+def test_blob_types_pass_preflight(dbtype):
+    """Bugbot #293: BLOB and LONGBLOB are valid MySQL types accepted by
+    Database._get_sqlalchemy_type, but the validator rejected them as
+    "Unknown data type". Worse, the new Levenshtein hint suggested BOOL
+    (distance 2 from BLOB), framing a correctly-spelled type as a typo.
+    Add a passthrough validator so the preflight gate matches the DB
+    layer's vocabulary."""
+    df = pd.DataFrame({"payload": [b"x", b"y", b"z"]})
+    result = DataValidator(schema={"payload": dbtype}).validate(df)
+    assert result.is_valid, f"{dbtype} should pass; errors={result.errors}"
+
+
+def test_typo_suggest_does_not_mislabel_blob_as_bool():
+    """Bugbot #293 (regression guard): for a CORRECTLY spelled BLOB schema
+    the user must NEVER see "Did you mean 'BOOL'?". The fix above makes
+    BLOB a known type; this test pins the contract so future deletions of
+    BLOB from ``type_validators`` reproduce the bugbot finding immediately."""
+    df = pd.DataFrame({"payload": [b"x"]})
+    result = DataValidator(schema={"payload": "BLOB"}).validate(df)
     assert result.is_valid
+    # And the suggestion machinery never runs because the type is known.
+    assert not any("Did you mean" in e for e in (result.errors or []))
+
+
+def test_csv_schema_column_not_in_header_now_fails(make_csv):
+    """Issue #289: a schema column absent from a CSV header used to pass the
+    DataValidator silently — the read-time check in CSVIngestor caught it
+    later, AFTER ``create_table`` had run, leaving an orphan empty table.
+    The streaming CSV validator now fails fast at preflight so
+    ``create_table`` is never reached and no table is created.
+    """
+    path = make_csv({"a": [1, 2, 3]})  # header is just "a"
+    result = DataValidator(schema={"a": "INT", "b": "INT"}).validate(str(path))
+    assert not result.is_valid
+    assert any("Schema columns not present in CSV" in e for e in result.errors)
+    assert any("b" in e for e in result.errors)
+
+
+def test_csv_schema_missing_lists_all_missing_columns(make_csv):
+    """When multiple schema columns are absent, all are named in the error so
+    a user can fix the CSV in one pass instead of one column at a time."""
+    path = make_csv({"present": [1]})
+    result = DataValidator(
+        schema={"present": "INT", "missing1": "INT", "missing2": "FLOAT"}
+    ).validate(str(path))
+    assert not result.is_valid
+    err = " ".join(result.errors)
+    assert "missing1" in err and "missing2" in err
+
+
+def test_json_sparse_schema_field_still_passes(tmp_path):
+    """JSON ingestion is intentionally permissive: JSONIngestor._validate_record
+    only WARNS when a schema field is absent from a record and proceeds. A
+    JSON file where one schema field never appears in any record (so pandas
+    omits the column from the DataFrame) must NOT be rejected at preflight —
+    otherwise the validator rejects inputs the ingestor would have accepted
+    (bugbot, PR #292).
+
+    The CSV missing-column gate is scoped to ``_validate_csv_streaming`` so
+    only file-shape mismatches in tabular CSV input fail fast at preflight.
+    """
+    p = tmp_path / "sparse.json"
+    # 'optional' is in the schema but absent from every record
+    p.write_text('[{"id": 1, "label": "A"}, {"id": 2, "label": "B"}]')
+    result = DataValidator(
+        schema={"id": "INT", "label": "VARCHAR(8)", "optional": "FLOAT"}
+    ).validate(str(p))
+    assert result.is_valid, f"expected valid for sparse JSON; errors={result.errors}"
+
+
+def test_dataframe_sparse_schema_field_still_passes():
+    """A DataFrame passed directly (the JSON-loaded path) with a column
+    absent from the schema-vs-df comparison must also still pass — the
+    missing-column gate is CSV-only (bugbot, PR #292). Mirrors the
+    JSONIngestor warn-and-proceed contract."""
+    df = pd.DataFrame({"a": [1]})  # schema has 'b' but df doesn't
+    result = DataValidator(schema={"a": "INT", "b": "INT"}).validate(df)
+    assert result.is_valid, f"expected valid for sparse DF; errors={result.errors}"
 
 
 # ---------------------------------------------------------------------------

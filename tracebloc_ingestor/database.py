@@ -24,7 +24,7 @@ from sqlalchemy.dialects.mysql import insert, LONGBLOB, BLOB
 from sqlalchemy.exc import OperationalError, InterfaceError, DBAPIError
 import logging
 from urllib.parse import quote
-from typing import Iterable, List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional
 from datetime import datetime
 from tenacity import (
     retry,
@@ -34,11 +34,11 @@ from tenacity import (
     before_sleep_log,
 )
 from .config import Config
-from .utils.logging import setup_logging
+from .identifiers import MAX_COLUMN_IDENTIFIER_LENGTH
+from .utils.typo_suggest import suggest_type as _suggest_type
 
 # Configure unified logging with config
 config = Config()
-setup_logging(config)
 logger = logging.getLogger(__name__)
 
 
@@ -97,58 +97,6 @@ def _execute_with_retry(connection, stmt):
                 f"connection.rollback() failed between retries: {rb_exc}"
             )
         raise
-
-
-def _suggest_type(unknown: str, known: Iterable[str]) -> Optional[str]:
-    """Return the closest match from ``known`` to ``unknown`` if any
-    candidate is within edit distance 3 (Levenshtein), else None.
-
-    Used by ``_get_sqlalchemy_type`` to surface a "Did you mean BIGINT?"
-    hint when a customer types BIGINTEGER, BOOLEAN→BOOL, NUMRIC→NUMERIC,
-    etc. Distance 3 is the empirical sweet spot — close enough to catch
-    every realistic typo we've seen in the wild (single-letter swaps,
-    common prefix/suffix confusion like INT-vs-INTEGER, missing or
-    duplicated letters), wide enough to fail-silently on entries that
-    are genuinely different vocabulary (no false "Did you mean DATE?"
-    for a GEOMETRY).
-
-    Returns the FIRST best match at the minimum distance — type_mapping
-    has stable insertion order so the deterministic result is fine for
-    tests.
-    """
-    if not unknown:
-        return None
-
-    def _levenshtein(a: str, b: str) -> int:
-        if a == b:
-            return 0
-        if not a:
-            return len(b)
-        if not b:
-            return len(a)
-        # Two-row DP — O(len(a)*len(b)) time, O(min(a,b)) space.
-        prev = list(range(len(b) + 1))
-        for i, ca in enumerate(a, start=1):
-            curr = [i] + [0] * len(b)
-            for j, cb in enumerate(b, start=1):
-                cost = 0 if ca == cb else 1
-                curr[j] = min(
-                    prev[j] + 1,
-                    curr[j - 1] + 1,
-                    prev[j - 1] + cost,
-                )
-            prev = curr
-        return prev[-1]
-
-    target = unknown.upper()
-    best: Optional[str] = None
-    best_d = 99
-    for candidate in known:
-        d = _levenshtein(target, candidate)
-        if d < best_d:
-            best = candidate
-            best_d = d
-    return best if best_d <= 3 else None
 
 
 class Database:
@@ -289,7 +237,13 @@ class Database:
         # before CREATE TABLE turns it into a raw MySQL 1059 error. CSV headers are
         # used verbatim as column names, so long proteomics/genomics headers (e.g. a
         # semicolon-joined isoform list) blow the limit; name the offenders clearly.
-        _MAX_IDENTIFIER = 64
+        # The 64-char cap is the only column-name restriction enforced at ingest:
+        # every other shape (digit-leading, '|'/'.'/'-', spaces, unicode, even
+        # backticks) is deliberately accepted and backtick-quoted downstream
+        # (see identifiers.py — the canonical grammar shared with the trainer,
+        # ISSUE #382). MySQL's identifier limit is the one thing quoting can't
+        # rescue, so it stays a hard, actionable failure here.
+        _MAX_IDENTIFIER = MAX_COLUMN_IDENTIFIER_LENGTH
         _too_long = sorted(c for c in schema if len(str(c)) > _MAX_IDENTIFIER)
         if _too_long:
             preview = "; ".join(f"'{c[:40]}…' ({len(c)} chars)" for c in _too_long[:5])

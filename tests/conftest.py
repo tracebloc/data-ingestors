@@ -17,12 +17,22 @@ from unittest.mock import MagicMock
 import pandas as pd
 import pytest
 
-
 _ENV_VARS = (
-    "SRC_PATH", "LABEL_FILE", "TABLE_NAME", "TITLE",
-    "BACKEND_TOKEN", "CLIENT_ID", "CLIENT_PASSWORD",
-    "CLIENT_ENV", "LOG_LEVEL", "BATCH_SIZE",
-    "MYSQL_HOST", "MYSQL_PORT", "DB_USER", "DB_PASSWORD", "DB_NAME",
+    "SRC_PATH",
+    "LABEL_FILE",
+    "TABLE_NAME",
+    "TITLE",
+    "BACKEND_TOKEN",
+    "CLIENT_ID",
+    "CLIENT_PASSWORD",
+    "CLIENT_ENV",
+    "LOG_LEVEL",
+    "BATCH_SIZE",
+    "MYSQL_HOST",
+    "MYSQL_PORT",
+    "DB_USER",
+    "DB_PASSWORD",
+    "DB_NAME",
 )
 
 
@@ -97,39 +107,6 @@ def make_voc_xml(tmp_path):
 </annotation>"""
         path.write_text(xml, encoding="utf-8")
         return path
-
-    return _make
-
-
-@pytest.fixture
-def make_tokenizer(tmp_path):
-    """Write a HuggingFace-style tokenizer.json into a dir, return that dir.
-
-    ``vocab`` is the model.vocab token list; ``added`` is the added_tokens
-    content list. Pass ``raw=`` to write invalid JSON.
-    """
-
-    def _make(
-        vocab: Optional[Sequence[str]] = ("hello", "world", "[MASK]", "[PAD]"),
-        added: Optional[Sequence[str]] = None,
-        *,
-        subdir: str = "src",
-        raw: Optional[str] = None,
-    ) -> Path:
-        src = tmp_path / subdir
-        src.mkdir(parents=True, exist_ok=True)
-        path = src / "tokenizer.json"
-        if raw is not None:
-            path.write_text(raw, encoding="utf-8")
-            return src
-
-        body: Dict[str, Any] = {"model": {}}
-        if vocab is not None:
-            body["model"]["vocab"] = {tok: i for i, tok in enumerate(vocab)}
-        if added is not None:
-            body["added_tokens"] = [{"content": t} for t in added]
-        path.write_text(json.dumps(body), encoding="utf-8")
-        return src
 
     return _make
 

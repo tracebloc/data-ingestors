@@ -67,14 +67,6 @@ logger = logging.getLogger(__name__)
 __all__ = ["JSONIngestor"]
 
 
-# Boolean string forms DataValidator._validate_boolean accepts. Keep this list
-# in lockstep with that validator so the JSON per-record check and the CSV
-# preflight agree.
-_VALID_BOOL_STRINGS = {
-    "true", "false", "yes", "no", "y", "n", "t", "f", "1", "0", "1.0", "0.0"
-}
-
-
 def _validate_value_against_dtype(value: Any, dtype_upper: str) -> None:
     """Raise ValueError if ``value`` doesn't fit the declared MySQL dtype.
 
@@ -110,7 +102,7 @@ def _validate_value_against_dtype(value: Any, dtype_upper: str) -> None:
             return
         if isinstance(value, str):
             s = value.strip().lower()
-            if s in _VALID_BOOL_STRINGS:
+            if s in coercion.BOOL_STRINGS:
                 return
             # Numeric-coercible strings ("00", "01", "1.0", "0.0", "1e0", …)
             # that resolve to 0 or 1 are accepted by DataValidator; mirror that.
@@ -214,7 +206,6 @@ class JSONIngestor(BaseIngestor):
         api_client: APIClient,
         table_name: str,
         schema: Dict[str, str],
-        max_retries: int = 3,
         json_options: Optional[Dict[str, Any]] = None,
         unique_id_column: Optional[str] = None,
         label_column: Optional[str] = None,
@@ -233,7 +224,6 @@ class JSONIngestor(BaseIngestor):
             api_client: API client instance for data transmission
             table_name: Name of the target table
             schema: Database schema definition
-            max_retries: Maximum number of retry attempts
             json_options: Additional options for JSON processing
             unique_id_column: Name of the column to use as unique identifier
             label_column: Name of the column to use as label
@@ -255,7 +245,6 @@ class JSONIngestor(BaseIngestor):
             api_client,
             table_name,
             schema,
-            max_retries,
             unique_id_column,
             label_column,
             intent,

@@ -35,7 +35,6 @@ from tracebloc_ingestor import file_transfer
 from tracebloc_ingestor.ingestors.base import BaseIngestor, IngestionSummary
 from tracebloc_ingestor.utils.constants import TaskCategory
 
-
 # ---------------------------------------------------------------------------
 # Unit: single-file transfer functions return None on missing source
 # ---------------------------------------------------------------------------
@@ -212,8 +211,8 @@ def test_banner_total_correct_with_mixed_failure_modes():
     s = _summary(
         total_records=100,
         processed_records=95,  # 5 generic skips (not failures)
-        inserted_records=80,   # 15 DB failures
-        api_sent_records=70,   # 10 API-only failures
+        inserted_records=80,  # 15 DB failures
+        api_sent_records=70,  # 10 API-only failures
         failed_records=15,
         file_transfer_failures=5,
     )
@@ -277,7 +276,7 @@ def test_ingest_counts_file_transfer_failures_separately(monkeypatch):
     # Force every map_file_transfer call to fail.
     monkeypatch.setattr(
         "tracebloc_ingestor.ingestors.base.map_file_transfer",
-        lambda category, record, options: None,
+        lambda category, record, options, cfg=None, source_record=None: None,
     )
 
     # Replace tqdm with a stub that records update() calls so we can

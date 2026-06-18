@@ -20,8 +20,13 @@ table: energy_demand_train
 intent: train
 csv: /data/shared/energy/demand.csv
 schema:
-  timestamp: VARCHAR(64)
-  region: VARCHAR(32)
+  # Required: TimeFormatValidator pins the timestamp column to the SQL
+  # TIMESTAMP type. Anything else (VARCHAR, DATE, INT epoch) is rejected.
+  timestamp: TIMESTAMP
+  # All non-timestamp feature columns must be numeric — NumericColumnsValidator
+  # rejects strings outside the timestamp column. Encode categorical features
+  # (region, segment, …) as INT codes upstream before ingest, or as INT
+  # one-hot columns.
   temperature_c: FLOAT
   is_holiday: INT
   demand_mw: FLOAT
