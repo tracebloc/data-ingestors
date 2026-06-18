@@ -123,6 +123,42 @@ def test_init_injects_number_of_columns_for_tabular():
     assert ing.file_options["number_of_columns"] == 2
 
 
+def test_init_canonical_orders_tabular_schema():
+    """#763 mode A: tabular feature columns are stored in one deterministic
+    (sorted) order so every edge agrees on feature positions, regardless of the
+    order the template declared them in. This is what lets the trainer's
+    schema-ordered SELECT align edges without a runtime feature_columns
+    broadcast."""
+    from tracebloc_ingestor.utils.constants import TaskCategory
+
+    ing = make_ingestor(
+        schema={"charlie": "INT", "alpha": "FLOAT", "bravo": "INT"},
+        category=TaskCategory.TABULAR_CLASSIFICATION,
+    )
+    assert list(ing.file_options["schema"].keys()) == ["alpha", "bravo", "charlie"]
+    assert list(ing._table_schema.keys()) == ["alpha", "bravo", "charlie"]
+    # label/unique-id stripping still happens before the sort
+    ing2 = make_ingestor(
+        schema={"charlie": "INT", "alpha": "FLOAT", "target": "INT"},
+        category=TaskCategory.TABULAR_REGRESSION,
+        label_column="target",
+    )
+    assert list(ing2._table_schema.keys()) == ["alpha", "charlie"]
+    assert ing2.file_options["number_of_columns"] == 2
+
+
+def test_init_does_not_reorder_non_tabular_schema():
+    """Only tabular-family categories are canonicalised; image/keypoint schemas
+    keep their declared order (their columns aren't averaged by position)."""
+    from tracebloc_ingestor.utils.constants import TaskCategory
+
+    ing = make_ingestor(
+        schema={"charlie": "INT", "alpha": "FLOAT", "bravo": "INT"},
+        category=TaskCategory.IMAGE_CLASSIFICATION,
+    )
+    assert list(ing._table_schema.keys()) == ["charlie", "alpha", "bravo"]
+
+
 # ---------------------------------------------------------------------------
 # process_record / _map_unique_id
 # ---------------------------------------------------------------------------
