@@ -317,12 +317,14 @@ def test_bbox_within_declared_size_passes(clean_env, tmp_path, validator):
 # --- declared <size> cross-checked against the actual image -------------------
 
 
-def _setup_with_image(tmp_path, declared_wh, image_wh, image_name="img.jpg"):
+def _setup_with_image(tmp_path, declared_wh, image_wh):
     from PIL import Image
 
     (tmp_path / "annotations").mkdir()
     (tmp_path / "images").mkdir()
-    Image.new("RGB", image_wh, (120, 120, 120)).save(tmp_path / "images" / image_name)
+    # The image is located by XML STEM (matching the ingestor's pairing), so the
+    # annotation "ann.xml" pairs with the image "ann.<ext>".
+    Image.new("RGB", image_wh, (120, 120, 120)).save(tmp_path / "images" / "ann.jpg")
     # bbox kept small so it fits inside the declared sizes used by callers —
     # we're exercising the size<->image cross-check, not the bbox-bounds check.
     xml = _voc_xml(

@@ -282,7 +282,6 @@ class PascalVOCXMLValidator(BaseValidator):
             errors.extend(
                 self._validate_size_matches_image(
                     file_path,
-                    root_validation["metadata"].get("filename"),
                     declared_w,
                     declared_h,
                 )
@@ -711,17 +710,24 @@ class PascalVOCXMLValidator(BaseValidator):
     def _validate_size_matches_image(
         self,
         file_path: Path,
-        image_name: Optional[str],
         declared_w: Optional[int],
         declared_h: Optional[int],
     ) -> List[str]:
         """Cross-check the annotation's declared ``<size>`` against the ACTUAL
         image dimensions.
 
-        The XML lives at ``<SRC>/annotations/<name>.xml`` and its image at
-        ``<SRC>/images/<filename>``; a declared size that disagrees with the real
-        image silently corrupts coordinate scaling at training (and lets a bbox
-        that's "within" a too-large declared size sit outside the real image).
+        The XML lives at ``<SRC>/annotations/<stem>.xml`` and its image at
+        ``<SRC>/images/<stem>.<imgext>``; a declared size that disagrees with the
+        real image silently corrupts coordinate scaling at training (and lets a
+        bbox that's "within" a too-large declared size sit outside the real
+        image).
+
+        The image is located by the XML **stem** — NOT the annotation's
+        ``<filename>`` element — because the ingestor pairs images to annotations
+        by stem (``FilePairingValidator``). A stale / wrong ``<filename>`` could
+        otherwise point the check at a different on-disk image that happens to
+        match the declared size, while the actually-paired image still disagrees
+        (bugbot, PR #314).
 
         Best-effort — returns no error (a benign skip) when the declared size is
         unknown, the image can't be located, or it can't be read: the
@@ -736,13 +742,11 @@ class PascalVOCXMLValidator(BaseValidator):
             return []
 
         images_dir = file_path.parent.parent / "images"
-        candidates = []
-        if image_name:
-            candidates.append(images_dir / image_name)
-        # Fall back to the XML stem with the common image extensions, mirroring
-        # how the dataset pairs <stem>.xml with <stem>.<imgext>.
-        for ext in (".jpg", ".jpeg", ".png"):
-            candidates.append(images_dir / f"{file_path.stem}{ext}")
+        # Match the stem-based pairing the ingestor uses; the image extension is
+        # whatever's on disk (datasets ship .jpg / .jpeg / .png).
+        candidates = [
+            images_dir / f"{file_path.stem}{ext}" for ext in (".jpg", ".jpeg", ".png")
+        ]
         img_path = next((c for c in candidates if c.is_file()), None)
         if img_path is None:
             return []
