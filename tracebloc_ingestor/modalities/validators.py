@@ -22,6 +22,7 @@ from ..validators.image_validator import ImageResolutionValidator
 from ..validators.ingestable_records_validator import IngestableRecordsValidator
 from ..validators.keypoint_annotation_validator import KeypointAnnotationValidator
 from ..validators.keypoint_visibility_validator import KeypointVisibilityValidator
+from ..validators.label_column_validator import LabelColumnValidator
 from ..validators.label_diversity_validator import LabelDiversityValidator
 from ..validators.numeric_columns_validator import NumericColumnsValidator
 from ..validators.table_name_validator import TableNameValidator
@@ -123,6 +124,14 @@ def text_classification(options: Dict[str, Any]) -> List[BaseValidator]:
     )
     # Reject a zero-record manifest and binary/empty text content up front.
     validators.extend(_nlp_content_validators(options, "texts"))
+    # Fail fast when the configured label column is absent from the CSV header
+    # (otherwise every record cleans to label=None and the backend rejects each
+    # row with HTTP 400 "label: may not be null" — a late, confusing failure).
+    # Token classification already covers this via BIOLabelValidator, which
+    # resolves and rejects a missing label column itself.
+    validators.append(
+        LabelColumnValidator(label_column=options.get("label_column") or "label")
+    )
     # Add data validator if schema is provided
     if options.get("schema"):
         validators.append(DataValidator(schema=options["schema"]))
