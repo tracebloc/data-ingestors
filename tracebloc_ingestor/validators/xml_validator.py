@@ -268,8 +268,29 @@ class PascalVOCXMLValidator(BaseValidator):
             warnings.extend(size_validation["warnings"])
             metadata.update(size_validation["metadata"])
 
-            # Validate objects
-            objects_validation = self._validate_objects(root)
+            # Declared image dimensions (only when they parsed cleanly as
+            # positive ints) — used to bound bbox coordinates and to cross-check
+            # against the actual image below.
+            declared_w = size_validation["metadata"].get("width")
+            declared_h = size_validation["metadata"].get("height")
+
+            # Cross-check the declared <size> against the ACTUAL image: a wrong
+            # declared size silently corrupts coordinate scaling at training
+            # (and would let a bbox that's "within" a too-large declared size sit
+            # outside the real image). Best-effort — skips when the image can't
+            # be located/read (FilePairing/FileType own the missing-image case).
+            errors.extend(
+                self._validate_size_matches_image(
+                    file_path,
+                    root_validation["metadata"].get("filename"),
+                    declared_w,
+                    declared_h,
+                )
+            )
+
+            # Validate objects (bbox coordinates are bounded by the declared
+            # image size when it's known).
+            objects_validation = self._validate_objects(root, declared_w, declared_h)
             errors.extend(objects_validation["errors"])
             warnings.extend(objects_validation["warnings"])
             metadata.update(objects_validation["metadata"])
@@ -440,11 +461,20 @@ class PascalVOCXMLValidator(BaseValidator):
 
         return {"errors": errors, "warnings": warnings, "metadata": metadata}
 
-    def _validate_objects(self, root: ET.Element) -> Dict[str, Any]:
+    def _validate_objects(
+        self,
+        root: ET.Element,
+        declared_w: Optional[int] = None,
+        declared_h: Optional[int] = None,
+    ) -> Dict[str, Any]:
         """Validate object elements and their sub-elements.
 
         Args:
             root: Root XML element
+            declared_w: Declared image width (from <size>), or None — used to
+                bound each bbox's xmax.
+            declared_h: Declared image height (from <size>), or None — used to
+                bound each bbox's ymax.
 
         Returns:
             Dictionary containing validation results
@@ -461,19 +491,29 @@ class PascalVOCXMLValidator(BaseValidator):
             return {"errors": errors, "warnings": warnings, "metadata": metadata}
 
         for i, obj in enumerate(objects):
-            obj_validation = self._validate_single_object(obj, i)
+            obj_validation = self._validate_single_object(
+                obj, i, declared_w, declared_h
+            )
             errors.extend(obj_validation["errors"])
             warnings.extend(obj_validation["warnings"])
             metadata["objects"].append(obj_validation["metadata"])
 
         return {"errors": errors, "warnings": warnings, "metadata": metadata}
 
-    def _validate_single_object(self, obj: ET.Element, index: int) -> Dict[str, Any]:
+    def _validate_single_object(
+        self,
+        obj: ET.Element,
+        index: int,
+        declared_w: Optional[int] = None,
+        declared_h: Optional[int] = None,
+    ) -> Dict[str, Any]:
         """Validate a single object element.
 
         Args:
             obj: Object XML element
             index: Index of the object in the list
+            declared_w: Declared image width, or None.
+            declared_h: Declared image height, or None.
 
         Returns:
             Dictionary containing validation results
@@ -557,19 +597,29 @@ class PascalVOCXMLValidator(BaseValidator):
             errors.append(f"Object {index}: Missing required 'difficult' element")
 
         # Validate bndbox element
-        bndbox_validation = self._validate_bndbox_element(obj, index)
+        bndbox_validation = self._validate_bndbox_element(
+            obj, index, declared_w, declared_h
+        )
         errors.extend(bndbox_validation["errors"])
         warnings.extend(bndbox_validation["warnings"])
         metadata.update(bndbox_validation["metadata"])
 
         return {"errors": errors, "warnings": warnings, "metadata": metadata}
 
-    def _validate_bndbox_element(self, obj: ET.Element, index: int) -> Dict[str, Any]:
+    def _validate_bndbox_element(
+        self,
+        obj: ET.Element,
+        index: int,
+        declared_w: Optional[int] = None,
+        declared_h: Optional[int] = None,
+    ) -> Dict[str, Any]:
         """Validate bndbox element and its coordinates.
 
         Args:
             obj: Object XML element
             index: Index of the object in the list
+            declared_w: Declared image width, or None — bounds xmax.
+            declared_h: Declared image height, or None — bounds ymax.
 
         Returns:
             Dictionary containing validation results
@@ -639,7 +689,73 @@ class PascalVOCXMLValidator(BaseValidator):
                     f"Object {index}: Very small bounding box (area: {area})"
                 )
 
+            # Bound the box by the declared image size: a bbox extending past the
+            # image edge is malformed and crashes / corrupts training. (xmin/ymin
+            # are already checked non-negative above.)
+            if declared_w is not None and coords["xmax"] > declared_w:
+                errors.append(
+                    f"Object {index}: xmax ({coords['xmax']}) exceeds image width "
+                    f"({declared_w}) — bounding box extends past the image edge."
+                )
+            if declared_h is not None and coords["ymax"] > declared_h:
+                errors.append(
+                    f"Object {index}: ymax ({coords['ymax']}) exceeds image height "
+                    f"({declared_h}) — bounding box extends past the image edge."
+                )
+
             metadata["bbox"] = coords
             metadata["area"] = area
 
         return {"errors": errors, "warnings": warnings, "metadata": metadata}
+
+    def _validate_size_matches_image(
+        self,
+        file_path: Path,
+        image_name: Optional[str],
+        declared_w: Optional[int],
+        declared_h: Optional[int],
+    ) -> List[str]:
+        """Cross-check the annotation's declared ``<size>`` against the ACTUAL
+        image dimensions.
+
+        The XML lives at ``<SRC>/annotations/<name>.xml`` and its image at
+        ``<SRC>/images/<filename>``; a declared size that disagrees with the real
+        image silently corrupts coordinate scaling at training (and lets a bbox
+        that's "within" a too-large declared size sit outside the real image).
+
+        Best-effort — returns no error (a benign skip) when the declared size is
+        unknown, the image can't be located, or it can't be read: the
+        FilePairing / FileType validators own the missing-image case, and Pillow
+        may be unavailable. Returns a one-item error list on a real mismatch.
+        """
+        if declared_w is None or declared_h is None:
+            return []
+        try:
+            from PIL import Image, UnidentifiedImageError
+        except ImportError:  # pragma: no cover - Pillow is a runtime dep
+            return []
+
+        images_dir = file_path.parent.parent / "images"
+        candidates = []
+        if image_name:
+            candidates.append(images_dir / image_name)
+        # Fall back to the XML stem with the common image extensions, mirroring
+        # how the dataset pairs <stem>.xml with <stem>.<imgext>.
+        for ext in (".jpg", ".jpeg", ".png"):
+            candidates.append(images_dir / f"{file_path.stem}{ext}")
+        img_path = next((c for c in candidates if c.is_file()), None)
+        if img_path is None:
+            return []
+        try:
+            with Image.open(img_path) as im:
+                actual_w, actual_h = im.size
+        except (OSError, UnidentifiedImageError):  # corrupt/unreadable image
+            return []
+
+        if (actual_w, actual_h) != (declared_w, declared_h):
+            return [
+                f"declared <size> {declared_w}x{declared_h} does not match the "
+                f"actual image '{img_path.name}' ({actual_w}x{actual_h}); fix the "
+                f"annotation's <size> or the image."
+            ]
+        return []

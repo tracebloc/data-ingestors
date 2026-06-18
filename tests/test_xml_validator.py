@@ -8,14 +8,20 @@ import pytest
 
 from tracebloc_ingestor.validators.xml_validator import PascalVOCXMLValidator
 
-
 # ---------------------------------------------------------------------------
 # Builders for valid / customizable VOC XML.
 # ---------------------------------------------------------------------------
 
+
 def _object_xml(
-    name="cat", pose="Unspecified", truncated="0", difficult="0",
-    xmin=10, ymin=10, xmax=100, ymax=100,
+    name="cat",
+    pose="Unspecified",
+    truncated="0",
+    difficult="0",
+    xmin=10,
+    ymin=10,
+    xmax=100,
+    ymax=100,
 ):
     return f"""
   <object>
@@ -61,6 +67,7 @@ def validator():
 # validate() flow (reads config.SRC_PATH directory)
 # ---------------------------------------------------------------------------
 
+
 def test_valid_file_passes(clean_env, tmp_path, validator):
     (tmp_path / "ann.xml").write_text(_voc_xml(), encoding="utf-8")
     clean_env.setenv("SRC_PATH", str(tmp_path))
@@ -95,6 +102,7 @@ def test_nonexistent_src_path_fails(clean_env, validator):
 # _get_xml_files
 # ---------------------------------------------------------------------------
 
+
 def test_get_xml_files_single_file(tmp_path, validator):
     f = tmp_path / "a.xml"
     f.write_text(_voc_xml(), encoding="utf-8")
@@ -105,7 +113,9 @@ def test_get_xml_files_single_file(tmp_path, validator):
 def test_get_xml_files_list_input(tmp_path, validator):
     f = tmp_path / "a.xml"
     f.write_text(_voc_xml(), encoding="utf-8")
-    files = validator._get_xml_files([str(f), str(tmp_path / "missing.xml")], True, True)
+    files = validator._get_xml_files(
+        [str(f), str(tmp_path / "missing.xml")], True, True
+    )
     assert files == [f]
 
 
@@ -126,6 +136,7 @@ def test_get_xml_files_ignores_hidden(tmp_path, validator):
 # ---------------------------------------------------------------------------
 # _validate_single_xml + sub-validators
 # ---------------------------------------------------------------------------
+
 
 def test_single_xml_valid(tmp_path, validator):
     f = tmp_path / "a.xml"
@@ -163,7 +174,9 @@ def test_root_elements_missing():
 
 def test_root_empty_filename_fails():
     v = PascalVOCXMLValidator()
-    root = _root(_voc_xml().replace("<filename>img.jpg</filename>", "<filename></filename>"))
+    root = _root(
+        _voc_xml().replace("<filename>img.jpg</filename>", "<filename></filename>")
+    )
     res = v._validate_root_elements(root)
     assert any("Filename element must have non-empty" in e for e in res["errors"])
 
@@ -184,7 +197,9 @@ def test_source_missing_fails():
 
 def test_source_empty_database_fails():
     v = PascalVOCXMLValidator()
-    root = _root(_voc_xml().replace("<database>Unknown</database>", "<database></database>"))
+    root = _root(
+        _voc_xml().replace("<database>Unknown</database>", "<database></database>")
+    )
     res = v._validate_source_element(root)
     assert any("Database element must have non-empty" in e for e in res["errors"])
 
@@ -262,3 +277,82 @@ def test_bndbox_small_area_warns():
     obj = _root(_object_xml(xmin=10, ymin=10, xmax=12, ymax=12))  # area 4 < 10
     res = v._validate_bndbox_element(obj, 0)
     assert any("Very small bounding box" in w for w in res["warnings"])
+
+
+# --- bbox bounded by declared <size> (#314 vision-hardening follow-up) --------
+
+
+def test_bbox_exceeding_declared_width_fails(clean_env, tmp_path, validator):
+    xml = _voc_xml(
+        width=64, height=64, objects=[_object_xml(xmin=5, ymin=5, xmax=9999, ymax=30)]
+    )
+    (tmp_path / "ann.xml").write_text(xml, encoding="utf-8")
+    clean_env.setenv("SRC_PATH", str(tmp_path))
+    result = validator.validate(str(tmp_path))
+    assert not result.is_valid
+    assert any("exceeds image width" in e for e in result.errors)
+
+
+def test_bbox_exceeding_declared_height_fails(clean_env, tmp_path, validator):
+    xml = _voc_xml(
+        width=64, height=64, objects=[_object_xml(xmin=5, ymin=5, xmax=30, ymax=9999)]
+    )
+    (tmp_path / "ann.xml").write_text(xml, encoding="utf-8")
+    clean_env.setenv("SRC_PATH", str(tmp_path))
+    result = validator.validate(str(tmp_path))
+    assert not result.is_valid
+    assert any("exceeds image height" in e for e in result.errors)
+
+
+def test_bbox_within_declared_size_passes(clean_env, tmp_path, validator):
+    xml = _voc_xml(
+        width=64, height=64, objects=[_object_xml(xmin=5, ymin=5, xmax=60, ymax=60)]
+    )
+    (tmp_path / "ann.xml").write_text(xml, encoding="utf-8")
+    clean_env.setenv("SRC_PATH", str(tmp_path))
+    result = validator.validate(str(tmp_path))
+    assert result.is_valid, result.errors
+
+
+# --- declared <size> cross-checked against the actual image -------------------
+
+
+def _setup_with_image(tmp_path, declared_wh, image_wh, image_name="img.jpg"):
+    from PIL import Image
+
+    (tmp_path / "annotations").mkdir()
+    (tmp_path / "images").mkdir()
+    Image.new("RGB", image_wh, (120, 120, 120)).save(tmp_path / "images" / image_name)
+    # bbox kept small so it fits inside the declared sizes used by callers —
+    # we're exercising the size<->image cross-check, not the bbox-bounds check.
+    xml = _voc_xml(
+        width=declared_wh[0],
+        height=declared_wh[1],
+        objects=[_object_xml(xmin=5, ymin=5, xmax=40, ymax=40)],
+    )
+    (tmp_path / "annotations" / "ann.xml").write_text(xml, encoding="utf-8")
+
+
+def test_declared_size_matching_actual_image_passes(clean_env, tmp_path, validator):
+    _setup_with_image(tmp_path, declared_wh=(64, 64), image_wh=(64, 64))
+    clean_env.setenv("SRC_PATH", str(tmp_path))
+    result = validator.validate(str(tmp_path))
+    assert result.is_valid, result.errors
+
+
+def test_declared_size_mismatching_actual_image_fails(clean_env, tmp_path, validator):
+    _setup_with_image(tmp_path, declared_wh=(128, 128), image_wh=(64, 64))
+    clean_env.setenv("SRC_PATH", str(tmp_path))
+    result = validator.validate(str(tmp_path))
+    assert not result.is_valid
+    assert any("does not match the actual image" in e for e in result.errors)
+
+
+def test_size_check_skipped_when_image_absent(clean_env, tmp_path, validator):
+    # No images/ dir -> the size cross-check is a benign skip (FilePairing /
+    # FileType own the missing-image case), so a lone valid XML still passes.
+    xml = _voc_xml(width=128, height=128)
+    (tmp_path / "ann.xml").write_text(xml, encoding="utf-8")
+    clean_env.setenv("SRC_PATH", str(tmp_path))
+    result = validator.validate(str(tmp_path))
+    assert result.is_valid, result.errors
