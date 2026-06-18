@@ -377,9 +377,10 @@ def test_nlp_categories_include_content_hygiene_validators():
         assert IngestableRecordsValidator in types, cat
         assert TextContentValidator not in types, cat
 
-    # Tabular has neither (no files, not text).
+    # Tabular gets the 0-record guard (file_subdir=None -> header-only / empty
+    # CSV row check) but NOT the text-content validator.
     types = _types(map_validators(TaskCategory.TABULAR_CLASSIFICATION, IMAGE_OPTS))
-    assert IngestableRecordsValidator not in types
+    assert IngestableRecordsValidator in types
     assert TextContentValidator not in types
 
 
@@ -438,3 +439,21 @@ def test_keypoint_annotation_validator_gets_image_bounds():
     )
     kp = next(x for x in v if isinstance(x, KeypointAnnotationValidator))
     assert kp.expected_resolution == IMAGE_OPTS["target_size"]
+
+
+def test_tabular_categories_have_zero_record_guard():
+    """Tabular classification + regression get IngestableRecordsValidator with
+    file_subdir=None (header-only / empty CSV row check only) so a no-schema
+    tabular ingest can't slip an empty manifest past preflight. PR #314."""
+    from tracebloc_ingestor.validators.ingestable_records_validator import (
+        IngestableRecordsValidator,
+    )
+
+    for cat in (TaskCategory.TABULAR_CLASSIFICATION, TaskCategory.TABULAR_REGRESSION):
+        rec = [
+            x
+            for x in map_validators(cat, {})
+            if isinstance(x, IngestableRecordsValidator)
+        ]
+        assert len(rec) == 1, cat
+        assert rec[0].file_subdir is None, cat

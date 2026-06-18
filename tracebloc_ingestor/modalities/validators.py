@@ -111,6 +111,11 @@ def object_detection(options: Dict[str, Any]) -> List[BaseValidator]:
 
 def tabular_classification(options: Dict[str, Any]) -> List[BaseValidator]:
     validators: List[BaseValidator] = []
+    # Reject a header-only / empty CSV up front (file_subdir=None -> row-count
+    # check only, no file pairing). DataValidator catches this too, but only
+    # when a schema is supplied; this closes the no-schema path that would
+    # otherwise create an empty table and fail late at registration.
+    validators.append(IngestableRecordsValidator(file_subdir=None))
     # Add data validator if schema is provided
     if options.get("schema"):
         validators.append(DataValidator(schema=options["schema"]))
@@ -213,6 +218,9 @@ def time_series_forecasting(options: Dict[str, Any]) -> List[BaseValidator]:
 
 def tabular_regression(options: Dict[str, Any]) -> List[BaseValidator]:
     validators: List[BaseValidator] = []
+    # Reject a header-only / empty CSV up front (no-schema path has no
+    # DataValidator to catch it; file_subdir=None -> row-count check only).
+    validators.append(IngestableRecordsValidator(file_subdir=None))
     # Add data validator if schema is provided
     if options.get("schema"):
         validators.append(DataValidator(schema=options["schema"]))
