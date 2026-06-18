@@ -12,12 +12,17 @@ whitespace-tokenized word per token):
    A mismatch is the exact condition that makes the client drop tokens to
    ``-100`` (or raise), so we reject it here against the dataset author.
 2. **Tag format** — every tag must be ``O`` or ``B-XXX`` / ``I-XXX`` (IOB2).
+3. **IOB2 sequence (warning)** — an ``I-<TYPE>`` should be preceded by a
+   ``B-<TYPE>`` / ``I-<TYPE>`` of the same type (entities start with ``B-``).
+   An ``I-`` that opens an entity is malformed under IOB2 but LEGAL under IOB1,
+   so it's surfaced as a WARNING rather than a hard reject — failing it would
+   wrongly break valid IOB1 datasets.
 """
 
 import logging
 import os
 import re
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Tuple
 
 import pandas as pd
 
@@ -89,18 +94,23 @@ class BIOLabelValidator(BaseValidator):
 
             texts_dir = os.path.join((self._config or config).SRC_PATH, self.texts_path)
             errors: List[str] = []
+            warnings: List[str] = []
 
             for idx, row in df.iterrows():
                 if len(errors) >= _MAX_REPORTED_ERRORS:
                     errors.append("... further errors suppressed.")
                     break
-                errors.extend(
-                    self._validate_row(row, idx, filename_col, label_col, texts_dir)
+                row_errors, row_warnings = self._validate_row(
+                    row, idx, filename_col, label_col, texts_dir
                 )
+                errors.extend(row_errors)
+                if len(warnings) < _MAX_REPORTED_ERRORS:
+                    warnings.extend(row_warnings)
 
             return self._create_result(
                 is_valid=len(errors) == 0,
                 errors=errors,
+                warnings=warnings or None,
                 metadata={"rows_checked": len(df)},
             )
 
@@ -118,7 +128,7 @@ class BIOLabelValidator(BaseValidator):
         filename_col: str,
         label_col: str,
         texts_dir: str,
-    ) -> List[str]:
+    ) -> Tuple[List[str], List[str]]:
         row_label = f"Row {idx}"
         filename = str(row[filename_col])
         tags = str(row[label_col]).strip().split()
@@ -126,11 +136,17 @@ class BIOLabelValidator(BaseValidator):
         # Invalid tag format (independent of the file).
         bad = [t for t in tags if not _BIO_TAG_RE.match(t)]
         errors: List[str] = []
+        warnings: List[str] = []
         if bad:
             errors.append(
                 f"{row_label} ('{filename}'): invalid BIO tag(s) {bad[:5]}; "
                 f"each tag must be 'O' or 'B-<TYPE>' / 'I-<TYPE>'."
             )
+        else:
+            # IOB2 sequence anomaly (warning) — only meaningful on well-formed
+            # tags, and independent of the .txt, so check it before file I/O so
+            # it's still surfaced when the file is missing/unreadable below.
+            warnings.extend(self._iob2_sequence_warnings(tags, filename, row_label))
 
         # Resolve the .txt with text_transfer's exact rule (shared
         # _has_extension): append the extension only when the CSV filename
@@ -148,14 +164,14 @@ class BIOLabelValidator(BaseValidator):
                 f"{row_label}: text file not found at "
                 f"'{self.texts_path}/{resolved}'."
             )
-            return errors
+            return errors, warnings
 
         try:
             with open(text_path, "r", encoding="utf-8") as f:
                 word_count = len(f.read().strip().split())
         except OSError as e:
             errors.append(f"{row_label}: could not read text file: {e}")
-            return errors
+            return errors, warnings
 
         if word_count != len(tags):
             errors.append(
@@ -164,7 +180,39 @@ class BIOLabelValidator(BaseValidator):
                 f"in the label column. Each word must have exactly one tag."
             )
 
-        return errors
+        return errors, warnings
+
+    @staticmethod
+    def _iob2_sequence_warnings(
+        tags: List[str], filename: str, row_label: str
+    ) -> List[str]:
+        """Flag IOB2 transition anomalies: an ``I-<TYPE>`` not immediately
+        preceded by a ``B-<TYPE>`` / ``I-<TYPE>`` of the SAME type — i.e. an
+        entity that opens with ``I-`` instead of ``B-`` (orphan ``I-`` at the
+        start, ``I-`` right after ``O``, or a type switch like ``B-PER I-ORG``).
+
+        Returned as warnings, not errors: such sequences are malformed under
+        IOB2 but LEGAL under IOB1 (a chunk may open with ``I-``), and this
+        validator is scheme-agnostic — hard-failing would wrongly reject valid
+        IOB1 datasets. The warning lets a user who intended IOB2 spot the
+        problem without blocking IOB1 ingests.
+        """
+        offenders: List[str] = []
+        prev = "O"
+        for t in tags:
+            if t.startswith("I-"):
+                etype = t[2:]
+                if prev != f"B-{etype}" and prev != f"I-{etype}":
+                    offenders.append(t)
+            prev = t
+        if not offenders:
+            return []
+        return [
+            f"{row_label} ('{filename}'): IOB2 transition anomaly — {offenders[:5]} "
+            f"open an entity with 'I-' (not preceded by a 'B-'/'I-' of the same "
+            f"type). Valid under IOB1 but malformed under IOB2; if you intended "
+            f"IOB2, the entity should start with 'B-'."
+        ]
 
     @staticmethod
     def _resolve_column(df: pd.DataFrame, name: str) -> Optional[str]:

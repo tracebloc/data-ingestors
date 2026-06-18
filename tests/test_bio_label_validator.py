@@ -144,3 +144,44 @@ def test_error_reporting_is_capped(validator, texts_dir):
     result = validator.validate(df)
     assert not result.is_valid
     assert any("further errors suppressed" in e for e in result.errors)
+
+
+# --- IOB2 sequence anomaly (warning, not a hard error) -----------------------
+
+
+def test_iob2_orphan_i_warns_but_does_not_block(validator, texts_dir):
+    # "I-PER" opens the entity (no preceding "B-PER"): malformed under IOB2,
+    # legal under IOB1 -> warn, but still valid (5 tags / 5 words).
+    _write(texts_dir, "s1", "John Smith works at Google")
+    df = pd.DataFrame({"filename": ["s1"], "label": ["I-PER O O O B-ORG"]})
+    result = validator.validate(df)
+    assert result.is_valid, result.errors
+    assert result.warnings and "IOB2 transition anomaly" in result.warnings[0]
+
+
+def test_iob2_type_switch_warns(validator, texts_dir):
+    # "I-ORG" right after "B-PER" is a type switch -> IOB2 anomaly.
+    _write(texts_dir, "s1", "Foo Bar baz")
+    df = pd.DataFrame({"filename": ["s1"], "label": ["B-PER I-ORG O"]})
+    result = validator.validate(df)
+    assert result.is_valid, result.errors
+    assert result.warnings and "IOB2 transition anomaly" in result.warnings[0]
+
+
+def test_iob2_well_formed_sequence_has_no_warning(validator, texts_dir):
+    _write(texts_dir, "s1", "John Smith works")
+    df = pd.DataFrame({"filename": ["s1"], "label": ["B-PER I-PER O"]})
+    result = validator.validate(df)
+    assert result.is_valid, result.errors
+    assert not result.warnings
+
+
+def test_iob2_check_skipped_when_tag_format_invalid(validator, texts_dir):
+    # A format-invalid tag is the (hard) error; don't also emit the IOB2
+    # sequence warning on garbage tags.
+    _write(texts_dir, "s1", "John lives here")
+    df = pd.DataFrame({"filename": ["s1"], "label": ["I-PER BOGUS O"]})
+    result = validator.validate(df)
+    assert not result.is_valid
+    assert any("invalid BIO tag" in e for e in result.errors)
+    assert not result.warnings

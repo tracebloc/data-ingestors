@@ -152,19 +152,28 @@ class BaseValidator(ABC):
 
     @staticmethod
     def _match_column(columns: Any, name: str) -> Optional[str]:
-        """Return the actual column whose name matches ``name``, case-insensitively.
+        """Return the actual column matching ``name``, case- AND
+        whitespace-insensitively.
 
-        Centralises the case-insensitive header lookup several validators need
-        (``filename`` / ``label`` columns whose case the dataset author may not
-        match exactly). ``columns`` is any iterable of column names (a
-        DataFrame's ``.columns``, an Index, or a plain list). Returns ``None``
-        when no column matches.
+        Centralises the header lookup several validators need (``filename`` /
+        ``label`` columns whose case the dataset author may not match exactly).
+        ``columns`` is any iterable of column names (a DataFrame's ``.columns``,
+        an Index, or a plain list). Returns ``None`` when no column matches.
+
+        Surrounding whitespace is stripped on both sides of the comparison
+        because ``CSVIngestor`` strips header whitespace on read
+        (``chunk.columns.str.strip()``) — so a header like ``" label "`` is
+        ingested as ``label`` and must resolve here too, or a manifest that
+        ingests fine fails preflight as if the column were missing (matches
+        ``LabelDiversityValidator._resolve_column``). The ORIGINAL column name
+        is returned so callers can still index the (un-stripped) raw frame.
         """
         cols = list(columns)
         if name in cols:
             return name
-        lowered = {str(c).lower(): c for c in cols}
-        return lowered.get(name.lower())
+        target = str(name).strip().lower()
+        normalised = {str(c).strip().lower(): c for c in cols}
+        return normalised.get(target)
 
     @staticmethod
     def _parse_json(row: Any, column: str) -> Optional[Any]:

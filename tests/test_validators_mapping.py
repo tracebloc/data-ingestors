@@ -142,6 +142,41 @@ def test_text_classification_defaults_extension():
     assert _types(v)[0] is FileTypeValidator
 
 
+def test_text_classification_includes_label_column_validator_before_diversity():
+    """A text-classification CSV missing the configured label column must fail
+    fast at preflight (not ingest label=None -> late backend 400). The presence
+    check runs BEFORE the diversity check, which only reads the column lazily."""
+    from tracebloc_ingestor.validators.label_column_validator import (
+        LabelColumnValidator,
+    )
+
+    types = _types(map_validators(TaskCategory.TEXT_CLASSIFICATION, {}))
+    assert LabelColumnValidator in types
+    assert types.index(LabelColumnValidator) < types.index(LabelDiversityValidator)
+
+
+def test_text_classification_threads_custom_label_column():
+    from tracebloc_ingestor.validators.label_column_validator import (
+        LabelColumnValidator,
+    )
+
+    v = map_validators(TaskCategory.TEXT_CLASSIFICATION, {"label_column": "sentiment"})
+    lc = next(x for x in v if isinstance(x, LabelColumnValidator))
+    assert lc.label_column == "sentiment"
+
+
+def test_token_classification_excludes_label_column_validator():
+    """Token classification already rejects a missing label column via
+    BIOLabelValidator, so it must NOT also carry LabelColumnValidator."""
+    from tracebloc_ingestor.validators.label_column_validator import (
+        LabelColumnValidator,
+    )
+
+    assert LabelColumnValidator not in _types(
+        map_validators(TaskCategory.TOKEN_CLASSIFICATION, {})
+    )
+
+
 def test_token_classification_includes_bio_validator():
     from tracebloc_ingestor.validators.bio_label_validator import BIOLabelValidator
 
