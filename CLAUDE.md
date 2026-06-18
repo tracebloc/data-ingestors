@@ -10,7 +10,7 @@ Data ingestion pipeline for the tracebloc platform. Validates, preprocesses, and
 
 ```bash
 pip install -e .            # editable install
-pip install -r requirements.txt  # includes dev/test deps
+pip install -r requirements-dev.txt  # runtime + dev/test deps
 pytest                      # run tests
 ```
 
@@ -50,4 +50,4 @@ Ingestor implementations are in `tracebloc_ingestor/ingestors/` (`base.py`, `csv
 
 ## Key Dependencies
 
-Python 3.8+, `sqlalchemy`, `mysql-connector-python`, `pandas`, `Pillow`, `requests`, `tenacity`, `tqdm`.
+Python 3.11+, `sqlalchemy`, `mysql-connector-python`, `pandas`, `Pillow`, `requests`, `tenacity`, `tqdm`.

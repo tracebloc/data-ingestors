@@ -96,7 +96,7 @@ Full chart docs (data-staging recipe, schema, every category, update model, veri
 
 ## Advanced: custom processors (legacy Python pattern)
 
-Use this when the declarative schema can't express what your data needs — typically when you have non-trivial preprocessing logic, a custom validator, or a `BaseProcessor` subclass.
+Use this when the declarative schema can't express what your data needs — typically when you have non-trivial preprocessing logic, a custom validator, or a `BaseIngestor` subclass.
 
 **1. Install the package.**
 
@@ -110,7 +110,7 @@ pip install tracebloc-ingestor
 cp templates/image_classification/image_classification.py .
 ```
 
-The package exports `BaseIngestor`, `CSVIngestor`, `JSONIngestor`, plus validators (`FileTypeValidator`, `ImageResolutionValidator`, `TableNameValidator`, etc.) and the `Database` / `APIClient` helpers. See [`examples/`](examples) for working scripts.
+The package exports `BaseIngestor`, `CSVIngestor`, `JSONIngestor`, the `run_ingestion` runner, plus validators (`FileTypeValidator`, `ImageResolutionValidator`, `TableNameValidator`, etc.) and the `Config` / `Database` / `APIClient` helpers. See [`examples/`](examples) for working scripts.
 
 **3. Build + deploy as a Kubernetes Job.**
 
