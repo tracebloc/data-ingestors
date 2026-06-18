@@ -24,7 +24,12 @@ from typing import Any, Dict, List, Optional
 
 from ..config import Config
 from ..modalities.registry import REGISTRY
+from ..modalities.validators import label_diversity_validator
+from ..utils.constants import FileExtension
 from ..validators.base import BaseValidator
+from ..validators.duplicate_validator import DuplicateValidator
+from ..validators.ingestable_records_validator import IngestableRecordsValidator
+from ..validators.table_name_validator import TableNameValidator
 
 
 def map_validators(
@@ -35,7 +40,28 @@ def map_validators(
     spec = REGISTRY.get(task_category)
     if spec is None:
         return []
-    validators = spec.build_validators(options)
+
+    # Compose the chain from a common frame + the category-specific middle, so
+    # the universally-applicable validators live ONCE here instead of being
+    # repeated in every per-category factory:
+    #   [0-record guard] + <category-specific> + [label-diversity?] + [tail]
+    validators: List[BaseValidator] = [
+        # Every CSV manifest must yield >= 1 ingestable record. ``file_subdir``
+        # (from the spec) adds the "all referenced files missing" check for
+        # file-bearing categories; ``None`` (tabular / time) runs the header-only
+        # / empty-CSV row check alone.
+        IngestableRecordsValidator(
+            file_subdir=spec.file_subdir,
+            extension=options.get("extension", FileExtension.TXT),
+        )
+    ]
+    validators += spec.build_validators(options)
+    # Classification-family datasets need >= 2 distinct labels.
+    if spec.is_classification:
+        validators.append(label_diversity_validator(options))
+    # Universal tail: a unique table name + de-duplicated record IDs.
+    validators += [TableNameValidator(), DuplicateValidator()]
+
     # Inject the run's Config into every validator (P4b). Optional so direct
     # callers / tests that omit it keep the prior behavior: the path-reading
     # validators fall back to their module-global ``config`` at the read site.

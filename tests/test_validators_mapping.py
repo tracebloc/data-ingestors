@@ -27,6 +27,9 @@ from tracebloc_ingestor.validators.keypoint_visibility_validator import (
 from tracebloc_ingestor.validators.label_diversity_validator import (
     LabelDiversityValidator,
 )
+from tracebloc_ingestor.validators.ingestable_records_validator import (
+    IngestableRecordsValidator,
+)
 
 IMAGE_OPTS = {"extension": FileExtension.JPG, "target_size": [224, 224]}
 
@@ -44,9 +47,12 @@ def test_image_classification():
     )
 
     v = map_validators(TaskCategory.IMAGE_CLASSIFICATION, IMAGE_OPTS)
+    # The 0-record guard, label-diversity, table-name and duplicate validators
+    # are composed by map_validators around the category-specific middle, so the
+    # guard now leads and the classification + tail validators trail.
     assert _types(v) == [
-        FileTypeValidator,
         IngestableRecordsValidator,
+        FileTypeValidator,
         ImageResolutionValidator,
         LabelColumnValidator,
         LabelDiversityValidator,
@@ -192,7 +198,9 @@ def test_tabular_regression_with_schema():
 
 def test_text_classification_defaults_extension():
     v = map_validators(TaskCategory.TEXT_CLASSIFICATION, {})
-    assert _types(v)[0] is FileTypeValidator
+    # The 0-record guard leads; the category's own FileTypeValidator follows.
+    assert _types(v)[0] is IngestableRecordsValidator
+    assert FileTypeValidator in _types(v)
 
 
 def test_text_classification_includes_label_column_validator_before_diversity():
@@ -235,7 +243,8 @@ def test_token_classification_includes_bio_validator():
 
     v = map_validators(TaskCategory.TOKEN_CLASSIFICATION, {})
     types = _types(v)
-    assert types[0] is FileTypeValidator
+    assert types[0] is IngestableRecordsValidator  # 0-record guard leads
+    assert FileTypeValidator in types
     assert BIOLabelValidator in types
     assert TableNameValidator in types and DuplicateValidator in types
 
@@ -360,10 +369,11 @@ def test_nlp_categories_include_content_hygiene_validators():
         TaskCategory.MASKED_LANGUAGE_MODELING,
     ):
         types = _types(map_validators(cat, {}))
-        assert IngestableRecordsValidator in types, cat
+        # 0-record guard leads (composed centrally); the category's own
+        # FileTypeValidator + text-content validator follow.
+        assert types[0] is IngestableRecordsValidator, cat
+        assert FileTypeValidator in types, cat
         assert TextContentValidator in types, cat
-        # FileTypeValidator stays first (the content validators come after it).
-        assert types[0] is FileTypeValidator, cat
 
     # Vision file-bearing categories get the zero-record guard but NOT the
     # text-content validator.
@@ -377,9 +387,10 @@ def test_nlp_categories_include_content_hygiene_validators():
         assert IngestableRecordsValidator in types, cat
         assert TextContentValidator not in types, cat
 
-    # Tabular has neither (no files, not text).
+    # Tabular gets the centralized 0-record guard (every category does) but NOT
+    # the text-content validator (no files, not text).
     types = _types(map_validators(TaskCategory.TABULAR_CLASSIFICATION, IMAGE_OPTS))
-    assert IngestableRecordsValidator not in types
+    assert IngestableRecordsValidator in types
     assert TextContentValidator not in types
 
 
@@ -438,3 +449,42 @@ def test_keypoint_annotation_validator_gets_image_bounds():
     )
     kp = next(x for x in v if isinstance(x, KeypointAnnotationValidator))
     assert kp.expected_resolution == IMAGE_OPTS["target_size"]
+
+
+ALL_CATEGORIES = (
+    TaskCategory.IMAGE_CLASSIFICATION,
+    TaskCategory.OBJECT_DETECTION,
+    TaskCategory.SEMANTIC_SEGMENTATION,
+    TaskCategory.KEYPOINT_DETECTION,
+    TaskCategory.TEXT_CLASSIFICATION,
+    TaskCategory.TOKEN_CLASSIFICATION,
+    TaskCategory.MASKED_LANGUAGE_MODELING,
+    TaskCategory.TABULAR_CLASSIFICATION,
+    TaskCategory.TABULAR_REGRESSION,
+    TaskCategory.TIME_SERIES_FORECASTING,
+    TaskCategory.TIME_TO_EVENT_PREDICTION,
+)
+_CLASSIFICATION = {
+    TaskCategory.IMAGE_CLASSIFICATION,
+    TaskCategory.OBJECT_DETECTION,
+    TaskCategory.SEMANTIC_SEGMENTATION,
+    TaskCategory.KEYPOINT_DETECTION,
+    TaskCategory.TEXT_CLASSIFICATION,
+    TaskCategory.TABULAR_CLASSIFICATION,
+}
+
+
+def test_common_validator_frame_composed_for_every_category():
+    """map_validators wraps every category's factory output in the common
+    frame: 0-record guard first, table-name + duplicate last, and label-diversity
+    second-to-last for classification families only — declared once, not per
+    factory."""
+    opts = {"extension": ".jpg", "target_size": [64, 64], "number_of_keypoints": 5}
+    for cat in ALL_CATEGORIES:
+        types = _types(map_validators(cat, opts))
+        assert types[0] is IngestableRecordsValidator, cat
+        assert types[-2:] == [TableNameValidator, DuplicateValidator], cat
+        if cat in _CLASSIFICATION:
+            assert types[-3] is LabelDiversityValidator, cat
+        else:
+            assert LabelDiversityValidator not in types, cat

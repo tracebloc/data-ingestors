@@ -32,6 +32,8 @@ _SPECS = (
         data_format=DataFormat.IMAGE,
         build_validators=v.image_classification,
         transfer=t.image_classification,
+        file_subdir="images",
+        is_classification=True,
     ),
     ModalitySpec(
         TaskCategory.OBJECT_DETECTION,
@@ -41,6 +43,8 @@ _SPECS = (
         data_format=DataFormat.IMAGE,
         build_validators=v.object_detection,
         transfer=t.object_detection,
+        file_subdir="images",
+        is_classification=True,
     ),
     ModalitySpec(
         TaskCategory.KEYPOINT_DETECTION,
@@ -50,6 +54,8 @@ _SPECS = (
         data_format=DataFormat.IMAGE,
         build_validators=v.keypoint_detection,
         transfer=t.keypoint_detection,
+        file_subdir="images",
+        is_classification=True,
     ),
     ModalitySpec(
         TaskCategory.SEMANTIC_SEGMENTATION,
@@ -59,6 +65,8 @@ _SPECS = (
         data_format=DataFormat.IMAGE,
         build_validators=v.semantic_segmentation,
         transfer=t.semantic_segmentation,
+        file_subdir="images",
+        is_classification=True,
     ),
     ModalitySpec(
         TaskCategory.TEXT_CLASSIFICATION,
@@ -69,6 +77,8 @@ _SPECS = (
         build_validators=v.text_classification,
         transfer=t.text_classification,
         is_nlp=True,
+        file_subdir="texts",
+        is_classification=True,
     ),
     ModalitySpec(
         TaskCategory.TOKEN_CLASSIFICATION,
@@ -79,6 +89,7 @@ _SPECS = (
         build_validators=v.token_classification,
         transfer=t.token_classification,
         is_nlp=True,
+        file_subdir="texts",
     ),
     # masked_language_modeling is file-bearing AND self-supervised (no label).
     ModalitySpec(
@@ -90,6 +101,7 @@ _SPECS = (
         build_validators=v.masked_language_modeling,
         transfer=t.masked_language_modeling,
         is_nlp=True,
+        file_subdir="sequences",
     ),
     # Tabular family (structured feature tables; no sidecar files -> no transfer).
     ModalitySpec(
@@ -99,6 +111,7 @@ _SPECS = (
         is_self_supervised=False,
         data_format=DataFormat.TABULAR,
         build_validators=v.tabular_classification,
+        is_classification=True,
     ),
     ModalitySpec(
         TaskCategory.TABULAR_REGRESSION,
