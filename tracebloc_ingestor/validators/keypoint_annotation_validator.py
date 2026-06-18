@@ -202,11 +202,15 @@ class KeypointAnnotationValidator(BaseValidator):
             )
         elif self.expected_resolution is not None:
             width, height = self.expected_resolution
-            if x > width or y > height:
+            # Valid coordinates lie in the half-open range [0, width) / [0, height)
+            # — consistent with the inclusive-0 lower bound above. A coordinate
+            # equal to width/height is the first index PAST the last pixel
+            # (indices run 0..W-1), so it's out of bounds (bugbot, PR #314).
+            if x >= width or y >= height:
                 errors.append(
                     f"{row_label}: Keypoint '{kp_name}' ({x}, {y}) lies outside "
-                    f"the image bounds ({width}x{height}) — the coordinate is past "
-                    f"the image edge."
+                    f"the image bounds ({width}x{height}) — coordinates must be "
+                    f"within [0, {width}) x [0, {height})."
                 )
 
         return errors, float(x), float(y)

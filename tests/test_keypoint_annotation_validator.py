@@ -217,3 +217,13 @@ def test_keypoint_bounds_skipped_without_resolution():
     df = _df([{"nose": [9999, 9999], "left_eye": [20, 15]}])
     result = v.validate(df)
     assert result.is_valid, result.errors
+
+
+def test_keypoint_at_exact_width_is_out_of_bounds():
+    # Half-open [0, W): a coord equal to the width is the first index past the
+    # last pixel, so it must be rejected (bugbot PR #314).
+    v = KeypointAnnotationValidator(expected_resolution=(64, 64))
+    df = _df([{"nose": [64, 10], "left_eye": [20, 15]}])
+    result = v.validate(df)
+    assert not result.is_valid
+    assert any("outside the image bounds" in e for e in result.errors)
