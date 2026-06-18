@@ -741,7 +741,12 @@ class PascalVOCXMLValidator(BaseValidator):
         except ImportError:  # pragma: no cover - Pillow is a runtime dep
             return []
 
-        images_dir = file_path.parent.parent / "images"
+        # Resolve the images dir from SRC_PATH (the same root FileTypeValidator
+        # uses, ``SRC_PATH/images``) rather than ``file_path.parent.parent`` —
+        # ``validate`` discovers XML via a recursive ``**/*.xml`` glob, so an XML
+        # nested deeper or at the root would otherwise resolve the wrong images
+        # tree (bugbot, PR #314).
+        images_dir = Path((self._config or config).SRC_PATH) / "images"
         # Match the stem-based pairing the ingestor uses; the image extension is
         # whatever's on disk (datasets ship .jpg / .jpeg / .png).
         candidates = [
