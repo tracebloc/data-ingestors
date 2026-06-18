@@ -151,6 +151,22 @@ class BaseValidator(ABC):
             return None
 
     @staticmethod
+    def _match_column(columns: Any, name: str) -> Optional[str]:
+        """Return the actual column whose name matches ``name``, case-insensitively.
+
+        Centralises the case-insensitive header lookup several validators need
+        (``filename`` / ``label`` columns whose case the dataset author may not
+        match exactly). ``columns`` is any iterable of column names (a
+        DataFrame's ``.columns``, an Index, or a plain list). Returns ``None``
+        when no column matches.
+        """
+        cols = list(columns)
+        if name in cols:
+            return name
+        lowered = {str(c).lower(): c for c in cols}
+        return lowered.get(name.lower())
+
+    @staticmethod
     def _parse_json(row: Any, column: str) -> Optional[Any]:
         """Parse a JSON string from a DataFrame row column. Returns None on failure."""
         import pandas as pd

@@ -19,11 +19,13 @@ from ..validators.duplicate_validator import DuplicateValidator
 from ..validators.file_pairing_validator import FilePairingValidator
 from ..validators.file_validator import FileTypeValidator
 from ..validators.image_validator import ImageResolutionValidator
+from ..validators.ingestable_records_validator import IngestableRecordsValidator
 from ..validators.keypoint_annotation_validator import KeypointAnnotationValidator
 from ..validators.keypoint_visibility_validator import KeypointVisibilityValidator
 from ..validators.label_diversity_validator import LabelDiversityValidator
 from ..validators.numeric_columns_validator import NumericColumnsValidator
 from ..validators.table_name_validator import TableNameValidator
+from ..validators.text_content_validator import TextContentValidator
 from ..validators.time_before_today_validator import TimeBeforeTodayValidator
 from ..validators.time_format_validator import TimeFormatValidator
 from ..validators.time_ordered_validator import TimeOrderedValidator
@@ -94,6 +96,22 @@ def tabular_classification(options: Dict[str, Any]) -> List[BaseValidator]:
     return validators
 
 
+def _nlp_content_validators(
+    options: Dict[str, Any], subdir: str
+) -> List[BaseValidator]:
+    """The NLP content-hygiene pair, gated on the text categories (text/token
+    classification, MLM): reject a manifest that would ingest zero records
+    (header-only CSV, or every referenced file missing), and reject text files
+    whose CONTENT is binary / non-UTF-8 (warn on empty docs). ``subdir`` is the
+    per-category text directory under ``SRC_PATH`` (``"texts"`` / ``"sequences"``),
+    matching the category's ``FileTypeValidator(path=...)``."""
+    extension = options.get("extension", FileExtension.TXT)
+    return [
+        IngestableRecordsValidator(file_subdir=subdir, extension=extension),
+        TextContentValidator(texts_path=subdir, extension=extension),
+    ]
+
+
 def text_classification(options: Dict[str, Any]) -> List[BaseValidator]:
     validators: List[BaseValidator] = []
     # Add text file validator
@@ -103,6 +121,8 @@ def text_classification(options: Dict[str, Any]) -> List[BaseValidator]:
             path="texts",
         ),
     )
+    # Reject a zero-record manifest and binary/empty text content up front.
+    validators.extend(_nlp_content_validators(options, "texts"))
     # Add data validator if schema is provided
     if options.get("schema"):
         validators.append(DataValidator(schema=options["schema"]))
@@ -122,6 +142,8 @@ def token_classification(options: Dict[str, Any]) -> List[BaseValidator]:
             path="texts",
         ),
     )
+    # Reject a zero-record manifest and binary/empty text content up front.
+    validators.extend(_nlp_content_validators(options, "texts"))
     # Validate BIO labels: one tag per word, valid BIO/IOB2 format. Honor a
     # custom label column name when one is configured in the YAML.
     validators.append(
@@ -237,6 +259,8 @@ def masked_language_modeling(options: Dict[str, Any]) -> List[BaseValidator]:
             path="sequences",
         ),
     )
+    # Reject a zero-record manifest and binary/empty text content up front.
+    validators.extend(_nlp_content_validators(options, "sequences"))
     # Add data validator if schema is provided
     if options.get("schema"):
         validators.append(DataValidator(schema=options["schema"]))
