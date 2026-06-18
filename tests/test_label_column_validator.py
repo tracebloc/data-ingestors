@@ -63,6 +63,17 @@ def test_label_column_match_is_case_insensitive(make_csv):
     assert result.is_valid
 
 
+def test_label_column_match_ignores_surrounding_whitespace(tmp_path):
+    # CSVIngestor strips header whitespace on read, so a header like " label "
+    # ingests as "label" and must NOT fail this preflight check (bugbot #313).
+    path = tmp_path / "ws.csv"
+    path.write_text(
+        "filename,extension, label \nsample1,'.txt',pos\n", encoding="utf-8"
+    )
+    result = LabelColumnValidator().validate(str(path))
+    assert result.is_valid
+
+
 def test_none_or_empty_label_column_defaults_to_label(make_csv):
     path = make_csv(pd.DataFrame({"filename": ["a"], "extension": [".txt"]}))
     # An unset/blank configured name must default to "label", not crash.
