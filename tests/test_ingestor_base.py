@@ -1032,7 +1032,9 @@ def test_ingest_attaches_text_profile_for_nlp(category):
     with patch.object(base_mod, "Session") as Sess, patch.object(
         ing, "validate_data", return_value=True
     ), patch.object(
-        base_mod, "map_file_transfer", side_effect=lambda c, r, o, cfg=None: r
+        base_mod,
+        "map_file_transfer",
+        side_effect=lambda c, r, o, cfg=None, source_record=None: r,
     ), patch.object(
         base_mod, "compute_text_profile", return_value=_TEXT_PROFILE
     ):
@@ -1056,7 +1058,9 @@ def test_ingest_omits_text_profile_when_none_for_nlp():
     with patch.object(base_mod, "Session") as Sess, patch.object(
         ing, "validate_data", return_value=True
     ), patch.object(
-        base_mod, "map_file_transfer", side_effect=lambda c, r, o, cfg=None: r
+        base_mod,
+        "map_file_transfer",
+        side_effect=lambda c, r, o, cfg=None, source_record=None: r,
     ), patch.object(
         base_mod, "compute_text_profile", return_value=None
     ):
@@ -1079,7 +1083,9 @@ def test_ingest_does_not_profile_non_nlp():
     with patch.object(base_mod, "Session") as Sess, patch.object(
         ing, "validate_data", return_value=True
     ), patch.object(
-        base_mod, "map_file_transfer", side_effect=lambda c, r, o, cfg=None: r
+        base_mod,
+        "map_file_transfer",
+        side_effect=lambda c, r, o, cfg=None, source_record=None: r,
     ), patch.object(
         base_mod, "compute_text_profile"
     ) as profile:
