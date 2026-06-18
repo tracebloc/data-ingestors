@@ -1,4 +1,4 @@
-[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE) [![PyPI](https://img.shields.io/pypi/v/tracebloc-ingestor.svg)](https://pypi.org/project/tracebloc-ingestor/) [![Python](https://img.shields.io/badge/python-3.8%2B-blue.svg)](https://python.org) [![Platform](https://img.shields.io/badge/platform-tracebloc-00C9A7.svg)](https://ai.tracebloc.io)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE) [![PyPI](https://img.shields.io/pypi/v/tracebloc-ingestor.svg)](https://pypi.org/project/tracebloc-ingestor/) [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://python.org) [![Platform](https://img.shields.io/badge/platform-tracebloc-00C9A7.svg)](https://ai.tracebloc.io)
 
 # Data Ingestors 📊
 
@@ -34,7 +34,7 @@ Only metadata (schema, statistics, structure) syncs to the web app. Raw data sta
 | Type | Categories |
 |---|---|
 | **Image** | [`image_classification`](templates/image_classification), [`object_detection`](templates/object_detection), [`keypoint_detection`](templates/keypoint_detection), [`semantic_segmentation`](templates/semantic_segmentation) |
-| **Text / NLP** | [`text_classification`](templates/text_classification), [`masked_language_modeling`](templates/masked_language_modeling) |
+| **Text / NLP** | [`text_classification`](templates/text_classification), [`token_classification`](templates/token_classification), [`masked_language_modeling`](templates/masked_language_modeling) |
 | **Tabular** | [`tabular_classification`](templates/tabular_classification), [`tabular_regression`](templates/tabular_regression) |
 | **Time series** | [`time_series_forecasting`](templates/time_series_forecasting), [`time_to_event_prediction`](templates/time_to_event_prediction) |
 
@@ -175,27 +175,32 @@ spec:
             drop: ["ALL"]
 ```
 
-### Subclassing BaseIngestor
+### Driving the ingestor classes directly
 
-For data that doesn't fit any of the existing templates, subclass `BaseIngestor`:
+For data that doesn't fit a template, drive the ingestor classes yourself. The validator set and file handling are selected by `category` (via the modality registry); per-dataset tuning goes through `csv_options` / `file_options`:
 
 ```python
-from tracebloc_ingestor import BaseIngestor, FileTypeValidator
+from tracebloc_ingestor import Config, Database, APIClient, CSVIngestor, run_ingestion
+from tracebloc_ingestor.utils.constants import TaskCategory, Intent, DataFormat
 
-class MyIngestor(BaseIngestor):
-    validators = [FileTypeValidator(allowed=[".parquet"])]
-
-    def transform(self, record):
-        # your preprocessing
-        return record
-
-if __name__ == "__main__":
-    MyIngestor().ingest()
+config = Config()
+ingestor = CSVIngestor(
+    database=Database(config),
+    api_client=APIClient(config),
+    table_name=config.TABLE_NAME,
+    category=TaskCategory.IMAGE_CLASSIFICATION,
+    data_format=DataFormat.IMAGE,
+    label_column="label",
+    intent=Intent.TRAIN,
+)
+run_ingestion(ingestor, config.LABEL_FILE, batch_size=config.BATCH_SIZE)
 ```
+
+The per-category scripts in [`templates/`](templates) are the canonical starting point — copy the closest one and adapt its `*_options`.
 
 ## Prerequisites
 
-- Python 3.8+
+- Python 3.11+
 - A [tracebloc account](https://ai.tracebloc.io/signup)
 - A running [tracebloc client](https://github.com/tracebloc/client) on your infrastructure
 
