@@ -205,6 +205,26 @@ def masked_language_modeling(options: Dict[str, Any]) -> List[BaseValidator]:
     return validators
 
 
+def causal_language_modeling(options: Dict[str, Any]) -> List[BaseValidator]:
+    # Self-supervised, like MLM — only a ``filename`` column is required, no
+    # label column, so no LabelColumn/BIO/LabelDiversity validators. Each sample
+    # is one ``.txt`` of RAW text: plain text (pretraining) or a tab-separated
+    # ``prompt\tcompletion`` pair (SFT). Both are valid UTF-8 text content, so
+    # the shared TextContentValidator (binary/non-UTF-8 reject, empty warn) is
+    # the whole content check — there is no extra structural rule to enforce.
+    # Stages from ``texts/`` (raw text), not ``sequences/`` (pre-tokenized).
+    validators: List[BaseValidator] = [
+        FileTypeValidator(
+            allowed_extension=options.get("extension", FileExtension.TXT),
+            path="texts",
+        ),
+        _text_content_validator(options, "texts"),
+    ]
+    if options.get("schema"):
+        validators.append(DataValidator(schema=options["schema"]))
+    return validators
+
+
 def tabular_classification(options: Dict[str, Any]) -> List[BaseValidator]:
     validators: List[BaseValidator] = []
     if options.get("schema"):

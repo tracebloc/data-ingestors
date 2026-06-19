@@ -103,6 +103,24 @@ _SPECS = (
         is_nlp=True,
         file_subdir="sequences",
     ),
+    # causal_language_modeling is file-bearing AND self-supervised (no label),
+    # like MLM. Unlike MLM it consumes RAW text — each sample is a ``.txt`` of
+    # either plain text (pretraining) or a tab-separated ``prompt\tcompletion``
+    # pair (SFT) — so it stages from ``texts/`` (the raw-text subdir shared with
+    # text/token classification), not ``sequences/`` (which the framework
+    # reserves for pre-tokenized data). It is NLP, so it ships the #805
+    # data-derived text profile for the contributor-tokenizer-fit check.
+    ModalitySpec(
+        TaskCategory.CAUSAL_LANGUAGE_MODELING,
+        is_file_bearing=True,
+        is_tabular_family=False,
+        is_self_supervised=True,
+        data_format=DataFormat.TEXT,
+        build_validators=v.causal_language_modeling,
+        transfer=t.causal_language_modeling,
+        is_nlp=True,
+        file_subdir="texts",
+    ),
     # Tabular family (structured feature tables; no sidecar files -> no transfer).
     ModalitySpec(
         TaskCategory.TABULAR_CLASSIFICATION,

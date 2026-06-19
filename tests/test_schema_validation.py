@@ -256,6 +256,33 @@ def test_masked_language_modeling_without_label_accepted(validator):
     validator.validate(config)  # must not raise
 
 
+def test_causal_language_modeling_with_label_rejected(validator):
+    """Causal LM is self-supervised like MLM (#213): setting `label:` must be
+    rejected at submission. The CSV has no label column and no edge-label
+    metadata is registered for it."""
+    config = _load_example("causal_language_modeling.yaml")
+    config["label"] = "some_column"
+    with pytest.raises(ValidationError):
+        validator.validate(config)
+
+
+def test_causal_language_modeling_without_label_accepted(validator):
+    """The shipped causal LM example omits `label:` by design — it must
+    validate cleanly."""
+    config = _load_example("causal_language_modeling.yaml")
+    assert "label" not in config, "test premise: the example yaml has no label"
+    validator.validate(config)  # must not raise
+
+
+def test_causal_language_modeling_without_texts_rejected(validator):
+    """Causal LM stages raw .txt under `texts:`; omitting it must be rejected
+    (the directory is where the per-sample files live)."""
+    config = _load_example("causal_language_modeling.yaml")
+    del config["texts"]
+    with pytest.raises(ValidationError):
+        validator.validate(config)
+
+
 # Regression-class tasks must specify label.policy explicitly; the shorthand
 # string form must be rejected for these categories.
 @pytest.mark.parametrize(

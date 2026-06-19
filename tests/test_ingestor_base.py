@@ -984,7 +984,7 @@ def test_check_src_path_only_runs_for_file_bearing_categories():
         TaskCategory.TIME_TO_EVENT_PREDICTION,
     ):
         assert cat not in _FILE_BEARING_CATEGORIES
-    # Image / text / segmentation / MLM all need a staged SRC_PATH.
+    # Image / text / segmentation / MLM / causal LM all need a staged SRC_PATH.
     for cat in (
         TaskCategory.IMAGE_CLASSIFICATION,
         TaskCategory.OBJECT_DETECTION,
@@ -992,6 +992,7 @@ def test_check_src_path_only_runs_for_file_bearing_categories():
         TaskCategory.SEMANTIC_SEGMENTATION,
         TaskCategory.TEXT_CLASSIFICATION,
         TaskCategory.MASKED_LANGUAGE_MODELING,
+        TaskCategory.CAUSAL_LANGUAGE_MODELING,
     ):
         assert cat in _FILE_BEARING_CATEGORIES
 
@@ -1019,7 +1020,12 @@ _TEXT_PROFILE = {
 
 @pytest.mark.parametrize(
     "category",
-    ["MASKED_LANGUAGE_MODELING", "TEXT_CLASSIFICATION", "TOKEN_CLASSIFICATION"],
+    [
+        "MASKED_LANGUAGE_MODELING",
+        "CAUSAL_LANGUAGE_MODELING",
+        "TEXT_CLASSIFICATION",
+        "TOKEN_CLASSIFICATION",
+    ],
 )
 def test_ingest_attaches_text_profile_for_nlp(category):
     """For every NLP category, the data-derived text profile is attached to

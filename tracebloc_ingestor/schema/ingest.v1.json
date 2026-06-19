@@ -36,7 +36,8 @@
         "tabular_regression",
         "time_series_forecasting",
         "time_to_event_prediction",
-        "masked_language_modeling"
+        "masked_language_modeling",
+        "causal_language_modeling"
       ],
       "description": "Task category. Drives convention defaults: validators, data_format, default columns, default file extensions, default validator set."
     },
@@ -86,7 +87,7 @@
     "texts": {
       "type": "string",
       "minLength": 1,
-      "description": "Directory holding text files referenced by the labels CSV. Required for text_classification and token_classification."
+      "description": "Directory holding text files referenced by the labels CSV. Required for text_classification, token_classification, and causal_language_modeling (raw .txt: plain text, or a tab-separated prompt\\tcompletion pair)."
     },
 
     "sequences": {
@@ -337,6 +338,14 @@
       "then": { "required": ["sequences"] }
     },
     {
+      "description": "causal_language_modeling requires `texts` (raw .txt samples). It is self-supervised, so unlike text/token classification it does NOT require `label`.",
+      "if": {
+        "properties": { "category": { "const": "causal_language_modeling" } },
+        "required": ["category"]
+      },
+      "then": { "required": ["texts"] }
+    },
+    {
       "description": "tabular and time-series categories require `schema`.",
       "if": {
         "properties": {
@@ -411,7 +420,8 @@
         "properties": {
           "category": {
             "enum": [
-              "masked_language_modeling"
+              "masked_language_modeling",
+              "causal_language_modeling"
             ]
           }
         },

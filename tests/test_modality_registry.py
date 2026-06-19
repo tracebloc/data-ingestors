@@ -58,13 +58,14 @@ def test_derived_sets_match_spec_flags():
     assert NLP_CATEGORIES == {c for c, s in REGISTRY.items() if s.is_nlp}
 
 
-def test_nlp_categories_are_the_three_text_categories():
-    """#805: the NLP set is exactly the text categories
-    (text/token classification + MLM) — never image/tabular."""
+def test_nlp_categories_are_exactly_the_text_categories():
+    """#805: the NLP set is exactly the text categories (text/token
+    classification + masked & causal language modeling) — never image/tabular."""
     assert NLP_CATEGORIES == {
         TaskCategory.TEXT_CLASSIFICATION,
         TaskCategory.TOKEN_CLASSIFICATION,
         TaskCategory.MASKED_LANGUAGE_MODELING,
+        TaskCategory.CAUSAL_LANGUAGE_MODELING,
     }
 
 
@@ -77,6 +78,13 @@ def test_known_flag_values():
     # Lock the data that used to live in the three base.py frozensets.
     mlm = spec_for(TaskCategory.MASKED_LANGUAGE_MODELING)
     assert mlm.is_file_bearing and mlm.is_self_supervised and not mlm.is_tabular_family
+
+    # causal LM mirrors MLM's flags (file-bearing + self-supervised + NLP) but
+    # stages raw text from texts/, not pre-tokenized sequences/.
+    clm = spec_for(TaskCategory.CAUSAL_LANGUAGE_MODELING)
+    assert clm.is_file_bearing and clm.is_self_supervised and clm.is_nlp
+    assert not clm.is_tabular_family and not clm.is_classification
+    assert clm.file_subdir == "texts"
 
     tab = spec_for(TaskCategory.TABULAR_CLASSIFICATION)
     assert (
