@@ -1,0 +1,12 @@
+# Causal language modeling: CSV manifest + .txt sidecar files (one per sample).
+# Self-supervised — no label column required.
+# `texts:` holds RAW text samples: each .txt is either plain text (pretraining)
+# or a tab-separated `prompt<TAB>completion` pair (SFT). The training client
+# builds next-token targets on-the-fly; pad=eos for decoder-only models.
+apiVersion: tracebloc.io/v1
+kind: IngestConfig
+table: dolly_clm_train
+intent: train
+category: causal_language_modeling
+csv: /data/shared/dolly-clm/labels_file.csv
+texts: /data/shared/dolly-clm/texts/

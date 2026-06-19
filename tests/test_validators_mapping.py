@@ -127,6 +127,7 @@ def test_classification_categories_include_label_diversity():
         TaskCategory.TIME_SERIES_FORECASTING,
         TaskCategory.TIME_TO_EVENT_PREDICTION,
         TaskCategory.MASKED_LANGUAGE_MODELING,
+        TaskCategory.CAUSAL_LANGUAGE_MODELING,
     ):
         assert LabelDiversityValidator not in _types(
             map_validators(cat, {"schema": {"a": "INT"}})
@@ -351,8 +352,8 @@ def test_map_validators_without_config_falls_back_to_module_global(monkeypatch):
 
 
 def test_nlp_categories_include_content_hygiene_validators():
-    """The text categories (text/token classification, MLM) gain BOTH the
-    zero-record guard and the (text-only) UTF-8 content validator. The
+    """The text categories (text/token classification, masked & causal LM) gain
+    BOTH the zero-record guard and the (text-only) UTF-8 content validator. The
     zero-record guard now also covers file-bearing vision categories, but
     TextContentValidator stays NLP-only (it decodes UTF-8 text, meaningless for
     images); tabular has neither."""
@@ -367,6 +368,7 @@ def test_nlp_categories_include_content_hygiene_validators():
         TaskCategory.TEXT_CLASSIFICATION,
         TaskCategory.TOKEN_CLASSIFICATION,
         TaskCategory.MASKED_LANGUAGE_MODELING,
+        TaskCategory.CAUSAL_LANGUAGE_MODELING,
     ):
         types = _types(map_validators(cat, {}))
         # 0-record guard leads (composed centrally); the category's own
@@ -409,6 +411,44 @@ def test_mlm_content_validators_target_sequences_subdir():
     txt = next(x for x in v if isinstance(x, TextContentValidator))
     assert rec.file_subdir == "sequences"
     assert txt.texts_path == "sequences"
+
+
+def test_causal_lm_content_validators_target_texts_subdir():
+    """Causal LM stages RAW text under ``texts/`` (not the pre-tokenized
+    ``sequences/`` MLM uses); the content validators must point there."""
+    from tracebloc_ingestor.validators.ingestable_records_validator import (
+        IngestableRecordsValidator,
+    )
+    from tracebloc_ingestor.validators.text_content_validator import (
+        TextContentValidator,
+    )
+
+    v = map_validators(TaskCategory.CAUSAL_LANGUAGE_MODELING, {})
+    rec = next(x for x in v if isinstance(x, IngestableRecordsValidator))
+    txt = next(x for x in v if isinstance(x, TextContentValidator))
+    assert rec.file_subdir == "texts"
+    assert txt.texts_path == "texts"
+
+
+def test_causal_lm_excludes_all_label_validators():
+    """Causal LM is self-supervised: only ``filename`` is required, no label
+    column. It must carry none of the label-oriented validators (mirrors MLM)."""
+    from tracebloc_ingestor.validators.label_column_validator import (
+        LabelColumnValidator,
+    )
+    from tracebloc_ingestor.validators.bio_label_validator import BIOLabelValidator
+
+    types = _types(map_validators(TaskCategory.CAUSAL_LANGUAGE_MODELING, {}))
+    assert LabelColumnValidator not in types
+    assert BIOLabelValidator not in types
+    assert LabelDiversityValidator not in types
+
+
+def test_causal_lm_with_schema_adds_data_validator():
+    v = map_validators(
+        TaskCategory.CAUSAL_LANGUAGE_MODELING, {"schema": {"a": "INT"}}
+    )
+    assert DataValidator in _types(v)
 
 
 def test_text_classification_content_validators_target_texts_subdir():
@@ -459,6 +499,7 @@ ALL_CATEGORIES = (
     TaskCategory.TEXT_CLASSIFICATION,
     TaskCategory.TOKEN_CLASSIFICATION,
     TaskCategory.MASKED_LANGUAGE_MODELING,
+    TaskCategory.CAUSAL_LANGUAGE_MODELING,
     TaskCategory.TABULAR_CLASSIFICATION,
     TaskCategory.TABULAR_REGRESSION,
     TaskCategory.TIME_SERIES_FORECASTING,

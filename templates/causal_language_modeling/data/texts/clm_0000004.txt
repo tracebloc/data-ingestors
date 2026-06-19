@@ -1,0 +1,1 @@
+Summarize: tracebloc trains models on data that never leaves the contributor cluster.	Only the model travels; the data stays on-premise.

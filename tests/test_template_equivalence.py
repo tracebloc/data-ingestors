@@ -285,6 +285,34 @@ CASES = [
     ),
 
     # -----------------------------------------------------------------------
+    # causal_language_modeling — self-supervised, no label column. CSV manifest
+    # points at .txt sidecar files holding RAW text (plain text or a
+    # prompt<TAB>completion SFT pair); the client builds next-token targets at
+    # train time. Sidecar dir is ``texts/`` (raw text — same layout as
+    # text/token classification), NOT MLM's ``sequences/`` (pre-tokenized).
+    # -----------------------------------------------------------------------
+    pytest.param(
+        _yaml(
+            category=TaskCategory.CAUSAL_LANGUAGE_MODELING,
+            table="causal_language_modeling_train",
+            intent="train",
+            csv="/data/labels.csv",
+            texts="/data/texts/",
+        ),
+        {
+            "category": TaskCategory.CAUSAL_LANGUAGE_MODELING,
+            "data_format": DataFormat.TEXT,
+            "intent": Intent.TRAIN,
+            "label_column": "",  # self-supervised — no label
+            "label_policy": PASSTHROUGH,
+            "unique_id_column": None,
+            "annotation_column": None,
+            "file_options": {"extension": FileExtension.TXT},
+        },
+        id="causal_language_modeling",
+    ),
+
+    # -----------------------------------------------------------------------
     # tabular_classification — template label_column="name"
     # -----------------------------------------------------------------------
     pytest.param(
