@@ -148,17 +148,41 @@ docker run --rm --entrypoint python ${IMAGE}@${DIGEST} \
   -c "from tracebloc_ingestor.cli.run import _load_schema; print(_load_schema()['title'])"
 ```
 
-## 7. (Optional) Bump the greenfield baseline in `tracebloc/client`
+## 7. Confirm the rollout (existing installs roll themselves forward)
 
-**Live clusters roll themselves forward — this step is not required for rollout.** Since [`tracebloc/client#159`](https://github.com/tracebloc/client/pull/159) (the [#158](https://github.com/tracebloc/client/issues/158) auto-refresh feature), the chart ships `images.ingestor.autoRefresh: true` with a floating tag (`images.ingestor.tag: "0.3"`). An image-refresh CronJob polls `ghcr.io/tracebloc/ingestor:0.3` and rewrites the live deployment's `INGESTOR_IMAGE_DIGEST` within ~15 min of a new image push — no chart change, no `helm upgrade`. Every existing install converges on its own, as long as the new image matches the chart's floating tag. (Authoritative explanation: the comment block around `images.ingestor` in [`client/values.yaml`](https://github.com/tracebloc/client/blob/develop/client/values.yaml).)
+**Existing installs pick up the new image with no chart change and no `helm upgrade` — this step only *confirms* that from the registry.** jobs-manager spawns each ingestion run as a short-lived Job from the floating tag `images.ingestor.tag` (`"0.3"`) with `imagePullPolicy: Always`, exactly the way training pods are spawned. The kubelet re-resolves the tag's current digest at **every job spawn** (a cheap registry manifest check — already-present layers are reused), so once the step-5 release moves `:0.3` to the new digest, the next ingestion run on any install runs it. Nothing rewrites a Deployment env, and there is no convergence window to wait on. (Authoritative sources: the `images.ingestor` comment block in [`client/values.yaml`](https://github.com/tracebloc/client/blob/develop/client/values.yaml), the `INGESTOR_IMAGE_*` env wiring in `client/templates/jobs-manager-deployment.yaml`, and `submit_ingestion_run._build_image_reference` in client-runtime — the mechanism landed in `client-runtime#40` / `client#125`.)
 
-The pinned `images.ingestor.digest` in the chart only sets the **greenfield baseline** — the digest a brand-new install lands on before its first refresh tick. Bumping it is a deliberate, optional chart release, not a release step. Do it when you want fresh installs to start on the version you just shipped:
+> **Corrects an earlier version of this doc.** Older text here described an image-refresh CronJob that polled `:0.3` and rewrote an `INGESTOR_IMAGE_DIGEST` env on the `*-jobs-manager` Deployment (via `kubectl set env`) within ~15 min. That "class-2" pass was **retired**: a `helm upgrade` that reset the env could revert the ingestor to a stale baseline — a regression a customer hit (a newer ingestor's fix disappeared on upgrade and resurfaced as a "non-numeric" validation error on data the new image handled correctly). The `INGESTOR_IMAGE_DIGEST` env on the jobs-manager Deployment is now **empty/unused by default**; spawning by floating tag is revert-proof and needs no env reconcile. `INGESTOR_IMAGE_DIGEST` survives only as an *opt-in* cluster-wide pin (see step 8).
+
+Because the rollout signal now lives entirely in the registry, you can verify it **without cluster access** — confirm the floating `:0.3` tag resolves to the digest you just released:
+
+```bash
+IMAGE=ghcr.io/tracebloc/ingestor
+
+# The digest the release published (the same sha256 surfaced in step 6).
+RELEASE_DIGEST=$(gh release view v${VERSION} --repo tracebloc/data-ingestors \
+  --json body --jq '.body' | grep -oE 'sha256:[a-f0-9]{64}' | head -1)
+
+# What :0.3 currently points at — the multi-arch index digest.
+TAG_DIGEST=$(docker buildx imagetools inspect ${IMAGE}:0.3 --format '{{ .Manifest.Digest }}')
+# (equivalent one-liner if you have crane:  crane digest ${IMAGE}:0.3 )
+
+[ "$TAG_DIGEST" = "$RELEASE_DIGEST" ] \
+  && echo "OK        :0.3 -> ${RELEASE_DIGEST}; every new ingestion Job runs v${VERSION}" \
+  || echo "MISMATCH  :0.3 is ${TAG_DIGEST}, release is ${RELEASE_DIGEST} (floating tag did not move)"
+```
+
+`release-image.yml` pushes `:X.Y.Z`, `:X.Y`, and `:X` to the same index digest, so a `v0.3.z` release moves `:0.3` (and `:0`) on its own — a match here means the whole fleet lands on the new image at its next ingestion-Job spawn. (Air-gapped installs that mirror `:0.3` into a private registry roll forward when *their* mirror syncs the tag; the check above confirms the upstream ghcr source that the release controls.)
+
+## 8. (Optional) Bump the greenfield baseline in `tracebloc/client`
+
+The pinned `images.ingestor.digest` in the chart only sets the **greenfield baseline** — the digest a brand-new install lands on for its first ingestion run, before it would otherwise resolve the floating `:0.3` tag. It does **not** drive rollout to existing installs (step 7 covers those). Bumping it is a deliberate, optional chart release, not a release step. Do it when you want fresh installs to start on the version you just shipped:
 
 - Bump `images.ingestor.digest` to the new digest **and** `client/Chart.yaml`'s `version` + `appVersion` in lockstep (the chart's own SemVer, independent of the ingestor's).
 - Open the PR against **`develop`**, like any other client change — this is not a `master`-targeting release PR.
 - Precedent: [`client#161`](https://github.com/tracebloc/client/pull/161) (baseline v0.3.0 → v0.3.1) and [`client#185`](https://github.com/tracebloc/client/pull/185) (v0.3.1 → v0.3.2, tracking [#184](https://github.com/tracebloc/client/issues/184)).
 
-(When you do pin, pull by digest, not tag — that's the whole point of signing.)
+(When you do pin, pull by digest, not tag — that's the whole point of signing — and the digest must be the multi-arch index, not a per-arch one, or arm64 nodes `ImagePullBackOff`.)
 
 ## Manual fallback (workflow_dispatch)
 

@@ -50,3 +50,54 @@ def test_create_directory_if_needed_existing(tmp_path):
     dest = tmp_path / "already"
     dest.mkdir()
     assert DuplicateValidator(dest_path=str(dest))._create_directory_if_needed() is True
+
+
+# --- Within-CSV duplicate filename detection (warning, not a hard failure) ---
+
+
+def test_within_csv_duplicate_filenames_warn(tmp_path, make_csv):
+    dest = tmp_path / "new_table"  # does not exist -> no dest collision
+    path = make_csv(
+        [
+            {"filename": "a", "label": "x"},
+            {"filename": "b", "label": "y"},
+            {"filename": "a", "label": "z"},  # duplicate of row 1
+        ]
+    )
+    result = DuplicateValidator(dest_path=str(dest)).validate(str(path))
+    assert result.is_valid  # warning only — does NOT fail
+    assert any("appear more than once" in w for w in result.warnings)
+    assert result.metadata["within_csv_duplicate_filenames"] is True
+
+
+def test_within_csv_no_duplicates_no_warning(tmp_path, make_csv):
+    dest = tmp_path / "new_table"
+    path = make_csv([{"filename": "a"}, {"filename": "b"}])
+    result = DuplicateValidator(dest_path=str(dest)).validate(str(path))
+    assert result.is_valid
+    assert not any("appear more than once" in w for w in result.warnings)
+    assert result.metadata["within_csv_duplicate_filenames"] is False
+
+
+def test_within_csv_duplicate_case_insensitive_column(tmp_path, make_csv):
+    import pandas as pd
+
+    dest = tmp_path / "new_table"
+    path = make_csv(pd.DataFrame({"FileName": ["a", "a"]}))
+    result = DuplicateValidator(dest_path=str(dest)).validate(str(path))
+    assert any("appear more than once" in w for w in result.warnings)
+
+
+def test_within_csv_no_filename_column_is_noop(tmp_path, make_csv):
+    dest = tmp_path / "new_table"
+    path = make_csv([{"feature_a": "1"}, {"feature_a": "1"}])
+    result = DuplicateValidator(dest_path=str(dest)).validate(str(path))
+    assert not any("appear more than once" in w for w in result.warnings)
+
+
+def test_within_csv_none_input_is_noop(tmp_path):
+    # The table-only callers pass None; must not error or warn.
+    dest = tmp_path / "new_table"
+    result = DuplicateValidator(dest_path=str(dest)).validate(None)
+    assert result.is_valid
+    assert result.metadata["within_csv_duplicate_filenames"] is False

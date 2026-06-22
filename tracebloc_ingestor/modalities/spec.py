@@ -77,3 +77,16 @@ class ModalitySpec:
         Callable[[Dict[str, Any], Dict[str, Any], Any], Optional[Dict[str, Any]]]
     ] = None
     is_nlp: bool = False
+    # Subdirectory under SRC_PATH holding this category's per-row files
+    # (``images`` / ``texts`` / ``sequences``), or ``None`` for non-file-bearing
+    # (tabular / time-series) categories. Used by the centralized 0-record guard
+    # in ``map_validators``: with a subdir it also cross-checks the CSV's
+    # referenced files exist; with ``None`` only the header-only / empty-CSV row
+    # check runs.
+    file_subdir: Optional[str] = None
+    # Classification-family category whose dataset needs >= 2 distinct label
+    # values (image / object / semantic / keypoint / tabular / text
+    # classification). Gates the centralized LabelDiversityValidator. False for
+    # regression / self-supervised / token-classification (per-token BIO) and
+    # the time families.
+    is_classification: bool = False

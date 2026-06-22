@@ -44,6 +44,23 @@ logger = logging.getLogger(__name__)
 __all__ = ["BaseIngestor", "IngestionSummary"]
 
 
+def _rows_state_clause(inserted_records: int) -> str:
+    """Phrase the parenthetical about what's already in the database for a
+    registration-failure message, truthfully for the row count actually
+    ingested.
+
+    The registration steps run AFTER the rows are committed, so when some rows
+    landed the message must warn they're already persisted. But when zero rows
+    were ingested (e.g. a header-only CSV or an all-files-missing manifest that
+    slipped to this point), the old fixed "(its rows are already in the
+    database)" wording was simply false and sent users hunting for rows that
+    don't exist. Switch on the count so the message can never claim phantom rows.
+    """
+    if inserted_records > 0:
+        return f"its {inserted_records} already-ingested row(s) remain in the database"
+    return "no rows were ingested, so nothing was left in the database"
+
+
 # NOTE: _TABULAR_FAMILY_CATEGORIES and _FILE_BEARING_CATEGORIES are imported
 # above from modalities.registry (derived from the per-category ModalitySpec
 # flags — backend#796 P3a). The ``self.category in <set>`` checks throughout
@@ -588,9 +605,10 @@ class BaseIngestor(ABC):
                     self.table_name, self.ingestor_id, self.intent
                 ):
                     raise RuntimeError(
-                        "Backend rejected edge-label metadata; the dataset was "
-                        "NOT registered (its rows are already in the database). "
-                        "See the logged API error above."
+                        f"Backend rejected edge-label metadata; the dataset was "
+                        f"NOT registered "
+                        f"({_rows_state_clause(stats['inserted_records'])}). "
+                        f"See the logged API error above."
                     )
 
                 # Ship a data-derived text profile for NLP datasets (#805):
@@ -608,9 +626,10 @@ class BaseIngestor(ABC):
                     self.table_name, schema_dict, self.file_options
                 ):
                     raise RuntimeError(
-                        "Backend rejected the dataset schema/metadata; the "
-                        "dataset was NOT registered (its rows are already in the "
-                        "database). See the logged API error above."
+                        f"Backend rejected the dataset schema/metadata; the "
+                        f"dataset was NOT registered "
+                        f"({_rows_state_clause(stats['inserted_records'])}). "
+                        f"See the logged API error above."
                     )
 
                 if not self.api_client.prepare_dataset(
@@ -631,7 +650,8 @@ class BaseIngestor(ABC):
                     )
                     raise RuntimeError(
                         f"Backend failed to prepare the dataset; it was NOT "
-                        f"registered (its rows are already in the database). "
+                        f"registered "
+                        f"({_rows_state_clause(stats['inserted_records'])}). "
                         f"Backend response: {detail}"
                     )
 

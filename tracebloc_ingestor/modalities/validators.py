@@ -1,10 +1,20 @@
 """Per-category validator factories (structural refactor — backend#796, P3b).
 
-One factory per task category, each ``(options) -> [validators]``. These are
-the bodies of the old ``utils.validators_mapping.map_validators`` if/elif arms,
-moved verbatim so the validator sets are byte-for-byte identical — now attached
-to each ModalitySpec (``build_validators``) instead of dispatched by a ladder.
-``map_validators`` is now a thin lookup over the registry.
+One factory per task category, each ``(options) -> [validators]``, attached to a
+``ModalitySpec`` (``build_validators``).
+
+Each factory returns ONLY the validators **specific to that category**. The
+universally-applicable validators are composed once in
+``utils.validators_mapping.map_validators`` around the factory's output, driven
+by declarative ``ModalitySpec`` traits, so they are not repeated per category:
+
+    [IngestableRecordsValidator]            # 0-record guard — every category
+      + <factory(options)>                  # category-specific (this file)
+      + [LabelDiversityValidator]           # iff spec.is_classification
+      + [TableNameValidator, DuplicateValidator]   # every category
+
+So a factory here never lists the 0-record guard, label-diversity, table-name,
+or duplicate validators — adding one would double it.
 """
 
 from __future__ import annotations
@@ -15,15 +25,15 @@ from ..utils.constants import FileExtension
 from ..validators.base import BaseValidator
 from ..validators.bio_label_validator import BIOLabelValidator
 from ..validators.data_validator import DataValidator
-from ..validators.duplicate_validator import DuplicateValidator
 from ..validators.file_pairing_validator import FilePairingValidator
 from ..validators.file_validator import FileTypeValidator
 from ..validators.image_validator import ImageResolutionValidator
 from ..validators.keypoint_annotation_validator import KeypointAnnotationValidator
 from ..validators.keypoint_visibility_validator import KeypointVisibilityValidator
+from ..validators.label_column_validator import LabelColumnValidator
 from ..validators.label_diversity_validator import LabelDiversityValidator
 from ..validators.numeric_columns_validator import NumericColumnsValidator
-from ..validators.table_name_validator import TableNameValidator
+from ..validators.text_content_validator import TextContentValidator
 from ..validators.time_before_today_validator import TimeBeforeTodayValidator
 from ..validators.time_format_validator import TimeFormatValidator
 from ..validators.time_ordered_validator import TimeOrderedValidator
@@ -31,10 +41,10 @@ from ..validators.time_to_event_validator import TimeToEventValidator
 from ..validators.xml_validator import PascalVOCXMLValidator
 
 
-def _label_diversity_validator(options: Dict[str, Any]) -> LabelDiversityValidator:
+def label_diversity_validator(options: Dict[str, Any]) -> LabelDiversityValidator:
     """Construct a LabelDiversityValidator using the user-configured label
-    column name (or the framework default ``label``). Centralised so every
-    classification-family factory wires the same instance shape.
+    column name (or the framework default ``label``). Composed centrally by
+    ``map_validators`` for every ``is_classification`` category.
 
     Issue #251: a classification dataset with one distinct label value is
     unlearnable and the backend rejects it at ``/global_meta/prepare/`` with
@@ -56,13 +66,29 @@ def _label_diversity_validator(options: Dict[str, Any]) -> LabelDiversityValidat
     )
 
 
+def _text_content_validator(
+    options: Dict[str, Any], subdir: str
+) -> TextContentValidator:
+    """NLP text-content check: reject binary / non-UTF-8 files, warn on empty
+    docs. ``subdir`` is the per-category text directory (``texts`` / ``sequences``).
+    The 0-record guard that used to be paired with this is now applied centrally
+    in ``map_validators`` (via ``spec.file_subdir``)."""
+    return TextContentValidator(
+        texts_path=subdir, extension=options.get("extension", FileExtension.TXT)
+    )
+
+
 def image_classification(options: Dict[str, Any]) -> List[BaseValidator]:
     return [
         FileTypeValidator(allowed_extension=options["extension"], path="images"),
         ImageResolutionValidator(expected_resolution=options["target_size"]),
-        _label_diversity_validator(options),
-        TableNameValidator(),
-        DuplicateValidator(),
+        # Fail fast when the configured label column is absent from the CSV
+        # (else every record cleans to label=None and the backend rejects each
+        # row with HTTP 400 "label: may not be null"). image_classification is
+        # the only vision category whose label is a CSV column — object
+        # detection / segmentation / keypoint source labels from XML / masks /
+        # annotation files, so they do NOT get this validator.
+        LabelColumnValidator(label_column=options.get("label_column") or "label"),
     ]
 
 
@@ -77,117 +103,7 @@ def object_detection(options: Dict[str, Any]) -> List[BaseValidator]:
             sidecar_label="annotation",
         ),
         ImageResolutionValidator(expected_resolution=options["target_size"]),
-        _label_diversity_validator(options),
-        TableNameValidator(),
-        DuplicateValidator(),
     ]
-
-
-def tabular_classification(options: Dict[str, Any]) -> List[BaseValidator]:
-    validators: List[BaseValidator] = []
-    # Add data validator if schema is provided
-    if options.get("schema"):
-        validators.append(DataValidator(schema=options["schema"]))
-    validators.append(_label_diversity_validator(options))
-    validators.append(TableNameValidator())
-    validators.append(DuplicateValidator())
-    return validators
-
-
-def text_classification(options: Dict[str, Any]) -> List[BaseValidator]:
-    validators: List[BaseValidator] = []
-    # Add text file validator
-    validators.append(
-        FileTypeValidator(
-            allowed_extension=options.get("extension", FileExtension.TXT),
-            path="texts",
-        ),
-    )
-    # Add data validator if schema is provided
-    if options.get("schema"):
-        validators.append(DataValidator(schema=options["schema"]))
-    validators.append(_label_diversity_validator(options))
-    validators.append(TableNameValidator())
-    validators.append(DuplicateValidator())
-    return validators
-
-
-def token_classification(options: Dict[str, Any]) -> List[BaseValidator]:
-    validators: List[BaseValidator] = []
-    # Validate text file extensions (one .txt of whitespace-tokenized words
-    # per sample, same layout as text classification).
-    validators.append(
-        FileTypeValidator(
-            allowed_extension=options.get("extension", FileExtension.TXT),
-            path="texts",
-        ),
-    )
-    # Validate BIO labels: one tag per word, valid BIO/IOB2 format. Honor a
-    # custom label column name when one is configured in the YAML.
-    validators.append(
-        BIOLabelValidator(
-            texts_path="texts",
-            extension=options.get("extension", FileExtension.TXT),
-            label_column=options.get("label_column") or "label",
-        )
-    )
-    # Add data validator if schema is provided
-    if options.get("schema"):
-        validators.append(DataValidator(schema=options["schema"]))
-    validators.append(TableNameValidator())
-    validators.append(DuplicateValidator())
-    return validators
-
-
-def time_series_forecasting(options: Dict[str, Any]) -> List[BaseValidator]:
-    validators: List[BaseValidator] = []
-    schema = options.get("schema", {})
-    validators.append(TimeFormatValidator(schema=schema))
-    validators.append(TimeOrderedValidator())
-    validators.append(TimeBeforeTodayValidator())
-    validators.append(NumericColumnsValidator(schema=schema))
-    if options.get("schema"):
-        schema_without_timestamp = {
-            k: v for k, v in options["schema"].items() if k.lower() != "timestamp"
-        }
-        if schema_without_timestamp:
-            validators.append(DataValidator(schema=schema_without_timestamp))
-    validators.append(TableNameValidator())
-    validators.append(DuplicateValidator())
-    return validators
-
-
-def tabular_regression(options: Dict[str, Any]) -> List[BaseValidator]:
-    validators: List[BaseValidator] = []
-    # Add data validator if schema is provided
-    if options.get("schema"):
-        validators.append(DataValidator(schema=options["schema"]))
-    validators.append(TableNameValidator())
-    validators.append(DuplicateValidator())
-    return validators
-
-
-def time_to_event_prediction(options: Dict[str, Any]) -> List[BaseValidator]:
-    validators: List[BaseValidator] = []
-    # Add time to event validator with schema to identify time column
-    if options.get("schema"):
-        validators.append(
-            TimeToEventValidator(
-                schema=options["schema"],
-                time_column=options.get("time_column"),
-            )
-        )
-    else:
-        # If no schema, use default time column name
-        validators.append(
-            TimeToEventValidator(time_column=options.get("time_column", "time"))
-        )
-    # Add data validator if schema is provided
-    if options.get("schema"):
-        validators.append(DataValidator(schema=options["schema"]))
-    validators.append(TableNameValidator())
-    validators.append(DuplicateValidator())
-    return validators
 
 
 def semantic_segmentation(options: Dict[str, Any]) -> List[BaseValidator]:
@@ -205,9 +121,15 @@ def semantic_segmentation(options: Dict[str, Any]) -> List[BaseValidator]:
             sidecar_suffix="_mask",
         ),
         ImageResolutionValidator(expected_resolution=options["target_size"]),
-        _label_diversity_validator(options),
-        TableNameValidator(),
-        DuplicateValidator(),
+        # Masks are pixel-wise label maps: validate they're readable PNGs and
+        # share the images' resolution. The default ImageResolution instance only
+        # scans <SRC>/images, so without this a corrupt mask, or a mask whose size
+        # differs from its image, would slip through to training.
+        ImageResolutionValidator(
+            expected_resolution=options["target_size"],
+            name="Mask Resolution Validator",
+            subdir="masks",
+        ),
     ]
 
 
@@ -220,26 +142,136 @@ def keypoint_detection(options: Dict[str, Any]) -> List[BaseValidator]:
     return [
         FileTypeValidator(allowed_extension=options["extension"], path="images"),
         ImageResolutionValidator(expected_resolution=options["target_size"]),
-        KeypointAnnotationValidator(num_keypoints=options.get("number_of_keypoints")),
+        KeypointAnnotationValidator(
+            num_keypoints=options.get("number_of_keypoints"),
+            # Bound keypoint coords by the declared image size (images are
+            # enforced to target_size by ImageResolutionValidator above).
+            expected_resolution=options.get("target_size"),
+        ),
         KeypointVisibilityValidator(),
-        _label_diversity_validator(options),
-        TableNameValidator(),
-        DuplicateValidator(),
     ]
 
 
+def text_classification(options: Dict[str, Any]) -> List[BaseValidator]:
+    validators: List[BaseValidator] = [
+        FileTypeValidator(
+            allowed_extension=options.get("extension", FileExtension.TXT),
+            path="texts",
+        ),
+        _text_content_validator(options, "texts"),
+        # Fail fast when the configured label column is absent from the CSV
+        # header (otherwise every record cleans to label=None and the backend
+        # rejects each row with HTTP 400 "label: may not be null"). Token
+        # classification covers this via BIOLabelValidator instead.
+        LabelColumnValidator(label_column=options.get("label_column") or "label"),
+    ]
+    if options.get("schema"):
+        validators.append(DataValidator(schema=options["schema"]))
+    return validators
+
+
+def token_classification(options: Dict[str, Any]) -> List[BaseValidator]:
+    validators: List[BaseValidator] = [
+        # One .txt of whitespace-tokenized words per sample (same layout as
+        # text classification).
+        FileTypeValidator(
+            allowed_extension=options.get("extension", FileExtension.TXT),
+            path="texts",
+        ),
+        _text_content_validator(options, "texts"),
+        # Validate BIO labels: one tag per word, valid BIO/IOB2 format; also
+        # rejects a missing label column. Honor a custom label column name.
+        BIOLabelValidator(
+            texts_path="texts",
+            extension=options.get("extension", FileExtension.TXT),
+            label_column=options.get("label_column") or "label",
+        ),
+    ]
+    if options.get("schema"):
+        validators.append(DataValidator(schema=options["schema"]))
+    return validators
+
+
 def masked_language_modeling(options: Dict[str, Any]) -> List[BaseValidator]:
-    validators: List[BaseValidator] = []
-    # Validate text file extensions
-    validators.append(
+    validators: List[BaseValidator] = [
         FileTypeValidator(
             allowed_extension=options.get("extension", FileExtension.TXT),
             path="sequences",
         ),
-    )
-    # Add data validator if schema is provided
+        _text_content_validator(options, "sequences"),
+    ]
     if options.get("schema"):
         validators.append(DataValidator(schema=options["schema"]))
-    validators.append(TableNameValidator())
-    validators.append(DuplicateValidator())
+    return validators
+
+
+def causal_language_modeling(options: Dict[str, Any]) -> List[BaseValidator]:
+    # Self-supervised, like MLM — only a ``filename`` column is required, no
+    # label column, so no LabelColumn/BIO/LabelDiversity validators. Each sample
+    # is one ``.txt`` of RAW text: plain text (pretraining) or a tab-separated
+    # ``prompt\tcompletion`` pair (SFT). Both are valid UTF-8 text content, so
+    # the shared TextContentValidator (binary/non-UTF-8 reject, empty warn) is
+    # the whole content check — there is no extra structural rule to enforce.
+    # Stages from ``texts/`` (raw text), not ``sequences/`` (pre-tokenized).
+    validators: List[BaseValidator] = [
+        FileTypeValidator(
+            allowed_extension=options.get("extension", FileExtension.TXT),
+            path="texts",
+        ),
+        _text_content_validator(options, "texts"),
+    ]
+    if options.get("schema"):
+        validators.append(DataValidator(schema=options["schema"]))
+    return validators
+
+
+def tabular_classification(options: Dict[str, Any]) -> List[BaseValidator]:
+    validators: List[BaseValidator] = []
+    if options.get("schema"):
+        validators.append(DataValidator(schema=options["schema"]))
+    return validators
+
+
+def tabular_regression(options: Dict[str, Any]) -> List[BaseValidator]:
+    validators: List[BaseValidator] = []
+    if options.get("schema"):
+        validators.append(DataValidator(schema=options["schema"]))
+    return validators
+
+
+def time_series_forecasting(options: Dict[str, Any]) -> List[BaseValidator]:
+    schema = options.get("schema", {})
+    validators: List[BaseValidator] = [
+        TimeFormatValidator(schema=schema),
+        TimeOrderedValidator(),
+        TimeBeforeTodayValidator(),
+        NumericColumnsValidator(schema=schema),
+    ]
+    if options.get("schema"):
+        schema_without_timestamp = {
+            k: v for k, v in options["schema"].items() if k.lower() != "timestamp"
+        }
+        if schema_without_timestamp:
+            validators.append(DataValidator(schema=schema_without_timestamp))
+    return validators
+
+
+def time_to_event_prediction(options: Dict[str, Any]) -> List[BaseValidator]:
+    validators: List[BaseValidator] = []
+    # Time-to-event validator identifies + checks the (non-negative, numeric)
+    # time column. With a schema it can resolve the column from it; otherwise it
+    # falls back to the default/declared name.
+    if options.get("schema"):
+        validators.append(
+            TimeToEventValidator(
+                schema=options["schema"],
+                time_column=options.get("time_column"),
+            )
+        )
+    else:
+        validators.append(
+            TimeToEventValidator(time_column=options.get("time_column", "time"))
+        )
+    if options.get("schema"):
+        validators.append(DataValidator(schema=options["schema"]))
     return validators

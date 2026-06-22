@@ -27,6 +27,9 @@ from tracebloc_ingestor.validators.keypoint_visibility_validator import (
 from tracebloc_ingestor.validators.label_diversity_validator import (
     LabelDiversityValidator,
 )
+from tracebloc_ingestor.validators.ingestable_records_validator import (
+    IngestableRecordsValidator,
+)
 
 IMAGE_OPTS = {"extension": FileExtension.JPG, "target_size": [224, 224]}
 
@@ -36,14 +39,70 @@ def _types(validators):
 
 
 def test_image_classification():
+    from tracebloc_ingestor.validators.ingestable_records_validator import (
+        IngestableRecordsValidator,
+    )
+    from tracebloc_ingestor.validators.label_column_validator import (
+        LabelColumnValidator,
+    )
+
     v = map_validators(TaskCategory.IMAGE_CLASSIFICATION, IMAGE_OPTS)
+    # The 0-record guard, label-diversity, table-name and duplicate validators
+    # are composed by map_validators around the category-specific middle, so the
+    # guard now leads and the classification + tail validators trail.
     assert _types(v) == [
+        IngestableRecordsValidator,
         FileTypeValidator,
         ImageResolutionValidator,
+        LabelColumnValidator,
         LabelDiversityValidator,
         TableNameValidator,
         DuplicateValidator,
     ]
+
+
+def test_vision_categories_have_zero_record_guard():
+    """0-record fail-fast (header-only / empty CSV) is wired into every
+    file-bearing vision category — image/object/semantic/keypoint — so a
+    zero-record vision dataset is rejected at preflight instead of creating an
+    orphan empty table (extends #303 from NLP to vision)."""
+    from tracebloc_ingestor.validators.ingestable_records_validator import (
+        IngestableRecordsValidator,
+    )
+
+    for cat in (
+        TaskCategory.IMAGE_CLASSIFICATION,
+        TaskCategory.OBJECT_DETECTION,
+        TaskCategory.SEMANTIC_SEGMENTATION,
+        TaskCategory.KEYPOINT_DETECTION,
+    ):
+        rec = [
+            x
+            for x in map_validators(cat, IMAGE_OPTS)
+            if isinstance(x, IngestableRecordsValidator)
+        ]
+        assert len(rec) == 1, cat
+        assert rec[0].file_subdir == "images", cat
+
+
+def test_label_column_guard_is_image_classification_only():
+    """LabelColumnValidator gates only image_classification among vision
+    categories — object detection / segmentation / keypoint source labels from
+    XML / masks / annotation files, not a CSV label column, so adding it there
+    would wrongly reject every such dataset."""
+    from tracebloc_ingestor.validators.label_column_validator import (
+        LabelColumnValidator,
+    )
+
+    assert LabelColumnValidator in _types(
+        map_validators(TaskCategory.IMAGE_CLASSIFICATION, IMAGE_OPTS)
+    )
+    for cat in (
+        TaskCategory.OBJECT_DETECTION,
+        TaskCategory.SEMANTIC_SEGMENTATION,
+        TaskCategory.KEYPOINT_DETECTION,
+    ):
+        assert LabelColumnValidator not in _types(map_validators(cat, IMAGE_OPTS)), cat
 
 
 def test_classification_categories_include_label_diversity():
@@ -68,6 +127,7 @@ def test_classification_categories_include_label_diversity():
         TaskCategory.TIME_SERIES_FORECASTING,
         TaskCategory.TIME_TO_EVENT_PREDICTION,
         TaskCategory.MASKED_LANGUAGE_MODELING,
+        TaskCategory.CAUSAL_LANGUAGE_MODELING,
     ):
         assert LabelDiversityValidator not in _types(
             map_validators(cat, {"schema": {"a": "INT"}})
@@ -139,7 +199,44 @@ def test_tabular_regression_with_schema():
 
 def test_text_classification_defaults_extension():
     v = map_validators(TaskCategory.TEXT_CLASSIFICATION, {})
-    assert _types(v)[0] is FileTypeValidator
+    # The 0-record guard leads; the category's own FileTypeValidator follows.
+    assert _types(v)[0] is IngestableRecordsValidator
+    assert FileTypeValidator in _types(v)
+
+
+def test_text_classification_includes_label_column_validator_before_diversity():
+    """A text-classification CSV missing the configured label column must fail
+    fast at preflight (not ingest label=None -> late backend 400). The presence
+    check runs BEFORE the diversity check, which only reads the column lazily."""
+    from tracebloc_ingestor.validators.label_column_validator import (
+        LabelColumnValidator,
+    )
+
+    types = _types(map_validators(TaskCategory.TEXT_CLASSIFICATION, {}))
+    assert LabelColumnValidator in types
+    assert types.index(LabelColumnValidator) < types.index(LabelDiversityValidator)
+
+
+def test_text_classification_threads_custom_label_column():
+    from tracebloc_ingestor.validators.label_column_validator import (
+        LabelColumnValidator,
+    )
+
+    v = map_validators(TaskCategory.TEXT_CLASSIFICATION, {"label_column": "sentiment"})
+    lc = next(x for x in v if isinstance(x, LabelColumnValidator))
+    assert lc.label_column == "sentiment"
+
+
+def test_token_classification_excludes_label_column_validator():
+    """Token classification already rejects a missing label column via
+    BIOLabelValidator, so it must NOT also carry LabelColumnValidator."""
+    from tracebloc_ingestor.validators.label_column_validator import (
+        LabelColumnValidator,
+    )
+
+    assert LabelColumnValidator not in _types(
+        map_validators(TaskCategory.TOKEN_CLASSIFICATION, {})
+    )
 
 
 def test_token_classification_includes_bio_validator():
@@ -147,7 +244,8 @@ def test_token_classification_includes_bio_validator():
 
     v = map_validators(TaskCategory.TOKEN_CLASSIFICATION, {})
     types = _types(v)
-    assert types[0] is FileTypeValidator
+    assert types[0] is IngestableRecordsValidator  # 0-record guard leads
+    assert FileTypeValidator in types
     assert BIOLabelValidator in types
     assert TableNameValidator in types and DuplicateValidator in types
 
@@ -251,3 +349,183 @@ def test_map_validators_without_config_falls_back_to_module_global(monkeypatch):
     assert all(v._config is None for v in validators)
     dup = next(v for v in validators if isinstance(v, DuplicateValidator))
     assert dup.dest_path.endswith("/env_table")
+
+
+def test_nlp_categories_include_content_hygiene_validators():
+    """The text categories (text/token classification, masked & causal LM) gain
+    BOTH the zero-record guard and the (text-only) UTF-8 content validator. The
+    zero-record guard now also covers file-bearing vision categories, but
+    TextContentValidator stays NLP-only (it decodes UTF-8 text, meaningless for
+    images); tabular has neither."""
+    from tracebloc_ingestor.validators.ingestable_records_validator import (
+        IngestableRecordsValidator,
+    )
+    from tracebloc_ingestor.validators.text_content_validator import (
+        TextContentValidator,
+    )
+
+    for cat in (
+        TaskCategory.TEXT_CLASSIFICATION,
+        TaskCategory.TOKEN_CLASSIFICATION,
+        TaskCategory.MASKED_LANGUAGE_MODELING,
+        TaskCategory.CAUSAL_LANGUAGE_MODELING,
+    ):
+        types = _types(map_validators(cat, {}))
+        # 0-record guard leads (composed centrally); the category's own
+        # FileTypeValidator + text-content validator follow.
+        assert types[0] is IngestableRecordsValidator, cat
+        assert FileTypeValidator in types, cat
+        assert TextContentValidator in types, cat
+
+    # Vision file-bearing categories get the zero-record guard but NOT the
+    # text-content validator.
+    for cat in (
+        TaskCategory.IMAGE_CLASSIFICATION,
+        TaskCategory.OBJECT_DETECTION,
+        TaskCategory.SEMANTIC_SEGMENTATION,
+        TaskCategory.KEYPOINT_DETECTION,
+    ):
+        types = _types(map_validators(cat, IMAGE_OPTS))
+        assert IngestableRecordsValidator in types, cat
+        assert TextContentValidator not in types, cat
+
+    # Tabular gets the centralized 0-record guard (every category does) but NOT
+    # the text-content validator (no files, not text).
+    types = _types(map_validators(TaskCategory.TABULAR_CLASSIFICATION, IMAGE_OPTS))
+    assert IngestableRecordsValidator in types
+    assert TextContentValidator not in types
+
+
+def test_mlm_content_validators_target_sequences_subdir():
+    """MLM stages files under ``sequences/`` (not ``texts/``); the content
+    validators must point at that subdirectory."""
+    from tracebloc_ingestor.validators.ingestable_records_validator import (
+        IngestableRecordsValidator,
+    )
+    from tracebloc_ingestor.validators.text_content_validator import (
+        TextContentValidator,
+    )
+
+    v = map_validators(TaskCategory.MASKED_LANGUAGE_MODELING, {})
+    rec = next(x for x in v if isinstance(x, IngestableRecordsValidator))
+    txt = next(x for x in v if isinstance(x, TextContentValidator))
+    assert rec.file_subdir == "sequences"
+    assert txt.texts_path == "sequences"
+
+
+def test_causal_lm_content_validators_target_texts_subdir():
+    """Causal LM stages RAW text under ``texts/`` (not the pre-tokenized
+    ``sequences/`` MLM uses); the content validators must point there."""
+    from tracebloc_ingestor.validators.ingestable_records_validator import (
+        IngestableRecordsValidator,
+    )
+    from tracebloc_ingestor.validators.text_content_validator import (
+        TextContentValidator,
+    )
+
+    v = map_validators(TaskCategory.CAUSAL_LANGUAGE_MODELING, {})
+    rec = next(x for x in v if isinstance(x, IngestableRecordsValidator))
+    txt = next(x for x in v if isinstance(x, TextContentValidator))
+    assert rec.file_subdir == "texts"
+    assert txt.texts_path == "texts"
+
+
+def test_causal_lm_excludes_all_label_validators():
+    """Causal LM is self-supervised: only ``filename`` is required, no label
+    column. It must carry none of the label-oriented validators (mirrors MLM)."""
+    from tracebloc_ingestor.validators.label_column_validator import (
+        LabelColumnValidator,
+    )
+    from tracebloc_ingestor.validators.bio_label_validator import BIOLabelValidator
+
+    types = _types(map_validators(TaskCategory.CAUSAL_LANGUAGE_MODELING, {}))
+    assert LabelColumnValidator not in types
+    assert BIOLabelValidator not in types
+    assert LabelDiversityValidator not in types
+
+
+def test_causal_lm_with_schema_adds_data_validator():
+    v = map_validators(
+        TaskCategory.CAUSAL_LANGUAGE_MODELING, {"schema": {"a": "INT"}}
+    )
+    assert DataValidator in _types(v)
+
+
+def test_text_classification_content_validators_target_texts_subdir():
+    from tracebloc_ingestor.validators.ingestable_records_validator import (
+        IngestableRecordsValidator,
+    )
+    from tracebloc_ingestor.validators.text_content_validator import (
+        TextContentValidator,
+    )
+
+    v = map_validators(TaskCategory.TEXT_CLASSIFICATION, {})
+    rec = next(x for x in v if isinstance(x, IngestableRecordsValidator))
+    txt = next(x for x in v if isinstance(x, TextContentValidator))
+    assert rec.file_subdir == "texts"
+    assert txt.texts_path == "texts"
+
+
+def test_semantic_segmentation_validates_masks_resolution():
+    """Seg masks get their own ImageResolutionValidator(subdir="masks") so a
+    corrupt or wrong-sized mask is rejected (the default instance only scans
+    images). PR #314."""
+    v = map_validators(TaskCategory.SEMANTIC_SEGMENTATION, IMAGE_OPTS)
+    res = [x for x in v if isinstance(x, ImageResolutionValidator)]
+    subdirs = sorted(x.subdir for x in res)
+    assert subdirs == ["images", "masks"], subdirs
+
+
+def test_keypoint_annotation_validator_gets_image_bounds():
+    """KeypointAnnotationValidator is given the declared target_size so it can
+    reject keypoints past the image edge. PR #314."""
+    from tracebloc_ingestor.validators.keypoint_annotation_validator import (
+        KeypointAnnotationValidator,
+    )
+
+    v = map_validators(
+        TaskCategory.KEYPOINT_DETECTION,
+        {**IMAGE_OPTS, "number_of_keypoints": 5},
+    )
+    kp = next(x for x in v if isinstance(x, KeypointAnnotationValidator))
+    assert kp.expected_resolution == IMAGE_OPTS["target_size"]
+
+
+ALL_CATEGORIES = (
+    TaskCategory.IMAGE_CLASSIFICATION,
+    TaskCategory.OBJECT_DETECTION,
+    TaskCategory.SEMANTIC_SEGMENTATION,
+    TaskCategory.KEYPOINT_DETECTION,
+    TaskCategory.TEXT_CLASSIFICATION,
+    TaskCategory.TOKEN_CLASSIFICATION,
+    TaskCategory.MASKED_LANGUAGE_MODELING,
+    TaskCategory.CAUSAL_LANGUAGE_MODELING,
+    TaskCategory.TABULAR_CLASSIFICATION,
+    TaskCategory.TABULAR_REGRESSION,
+    TaskCategory.TIME_SERIES_FORECASTING,
+    TaskCategory.TIME_TO_EVENT_PREDICTION,
+)
+_CLASSIFICATION = {
+    TaskCategory.IMAGE_CLASSIFICATION,
+    TaskCategory.OBJECT_DETECTION,
+    TaskCategory.SEMANTIC_SEGMENTATION,
+    TaskCategory.KEYPOINT_DETECTION,
+    TaskCategory.TEXT_CLASSIFICATION,
+    TaskCategory.TABULAR_CLASSIFICATION,
+}
+
+
+def test_common_validator_frame_composed_for_every_category():
+    """map_validators wraps every category's factory output in the common
+    frame: 0-record guard first, table-name + duplicate last, and label-diversity
+    second-to-last for classification families only — declared once, not per
+    factory."""
+    opts = {"extension": ".jpg", "target_size": [64, 64], "number_of_keypoints": 5}
+    for cat in ALL_CATEGORIES:
+        types = _types(map_validators(cat, opts))
+        assert types[0] is IngestableRecordsValidator, cat
+        assert types[-2:] == [TableNameValidator, DuplicateValidator], cat
+        if cat in _CLASSIFICATION:
+            assert types[-3] is LabelDiversityValidator, cat
+        else:
+            assert LabelDiversityValidator not in types, cat

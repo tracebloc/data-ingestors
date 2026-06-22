@@ -106,6 +106,16 @@ def masked_language_modeling(
     return text_transfer(record, options, src_subdir="sequences", cfg=cfg)
 
 
+def causal_language_modeling(
+    record: Dict[str, Any], options: Dict[str, Any], cfg: Optional[Config] = None
+) -> Optional[Dict[str, Any]]:
+    # Raw text, one .txt per sample in the ``texts`` subdir (same on-disk
+    # layout as text/token classification — the default text_transfer subdir).
+    # Self-supervised: the .txt holds plain text or a ``prompt\tcompletion``
+    # pair, never a label.
+    return text_transfer(record, options, cfg=cfg)
+
+
 def semantic_segmentation(
     record: Dict[str, Any], options: Dict[str, Any], cfg: Optional[Config] = None
 ) -> Optional[Dict[str, Any]]:
