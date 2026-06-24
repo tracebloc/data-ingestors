@@ -283,6 +283,33 @@ def test_causal_language_modeling_without_texts_rejected(validator):
         validator.validate(config)
 
 
+def test_seq2seq_with_label_rejected(validator):
+    """seq2seq is self-supervised like causal LM (#213): setting `label:` must be
+    rejected at submission. The CSV has no label column and no edge-label
+    metadata is registered for it."""
+    config = _load_example("seq2seq.yaml")
+    config["label"] = "some_column"
+    with pytest.raises(ValidationError):
+        validator.validate(config)
+
+
+def test_seq2seq_without_label_accepted(validator):
+    """The shipped seq2seq example omits `label:` by design — it must validate
+    cleanly."""
+    config = _load_example("seq2seq.yaml")
+    assert "label" not in config, "test premise: the example yaml has no label"
+    validator.validate(config)  # must not raise
+
+
+def test_seq2seq_without_texts_rejected(validator):
+    """seq2seq stages raw .txt under `texts:`; omitting it must be rejected
+    (the directory is where the per-sample source\\ttarget files live)."""
+    config = _load_example("seq2seq.yaml")
+    del config["texts"]
+    with pytest.raises(ValidationError):
+        validator.validate(config)
+
+
 # Regression-class tasks must specify label.policy explicitly; the shorthand
 # string form must be rejected for these categories.
 @pytest.mark.parametrize(

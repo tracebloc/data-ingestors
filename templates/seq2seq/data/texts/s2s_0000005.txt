@@ -1,0 +1,1 @@
+Paraphrase: Federated learning trains a shared model without moving raw data.	Federated learning builds one model while each party keeps its own data in place.

@@ -121,6 +121,24 @@ _SPECS = (
         is_nlp=True,
         file_subdir="texts",
     ),
+    # seq2seq is file-bearing AND self-supervised (no label), exactly like
+    # causal_language_modeling. Each sample is one ``.txt`` of RAW text — a
+    # tab-separated ``source\ttarget`` pair (the same on-disk shape as causal
+    # LM's ``prompt\tcompletion``) — so it stages from ``texts/`` (the raw-text
+    # subdir shared with text/token classification), not ``sequences/`` (which
+    # the framework reserves for pre-tokenized data). It is NLP, so it ships the
+    # #805 data-derived text profile for the contributor-tokenizer-fit check.
+    ModalitySpec(
+        TaskCategory.SEQ2SEQ,
+        is_file_bearing=True,
+        is_tabular_family=False,
+        is_self_supervised=True,
+        data_format=DataFormat.TEXT,
+        build_validators=v.seq2seq,
+        transfer=t.seq2seq,
+        is_nlp=True,
+        file_subdir="texts",
+    ),
     # Tabular family (structured feature tables; no sidecar files -> no transfer).
     ModalitySpec(
         TaskCategory.TABULAR_CLASSIFICATION,

@@ -223,6 +223,17 @@ CASES = [
         sidecars=[str(T / "causal_language_modeling/data/texts")],
         roundtrip_col=None,
     ),
+    dict(
+        id="seq2seq",
+        cfg=_cfg(
+            table="char_s2s",
+            category="seq2seq",
+            csv=str(T / "seq2seq/data/labels_file_sample.csv"),
+            texts=str(T / "seq2seq/data/texts"),
+        ),
+        sidecars=[str(T / "seq2seq/data/texts")],
+        roundtrip_col=None,
+    ),
     # semantic_segmentation: the one file-bearing modality the harness never
     # characterized (audit gap). mask_id is DECLARED in schema so it's stored
     # (the training client SELECTs it to locate masks — backend#816); the masks

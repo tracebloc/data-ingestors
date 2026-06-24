@@ -60,12 +60,14 @@ def test_derived_sets_match_spec_flags():
 
 def test_nlp_categories_are_exactly_the_text_categories():
     """#805: the NLP set is exactly the text categories (text/token
-    classification + masked & causal language modeling) — never image/tabular."""
+    classification + masked & causal language modeling + seq2seq) — never
+    image/tabular."""
     assert NLP_CATEGORIES == {
         TaskCategory.TEXT_CLASSIFICATION,
         TaskCategory.TOKEN_CLASSIFICATION,
         TaskCategory.MASKED_LANGUAGE_MODELING,
         TaskCategory.CAUSAL_LANGUAGE_MODELING,
+        TaskCategory.SEQ2SEQ,
     }
 
 
@@ -85,6 +87,13 @@ def test_known_flag_values():
     assert clm.is_file_bearing and clm.is_self_supervised and clm.is_nlp
     assert not clm.is_tabular_family and not clm.is_classification
     assert clm.file_subdir == "texts"
+
+    # seq2seq mirrors causal LM's flags exactly (file-bearing + self-supervised
+    # + NLP, raw text from texts/).
+    s2s = spec_for(TaskCategory.SEQ2SEQ)
+    assert s2s.is_file_bearing and s2s.is_self_supervised and s2s.is_nlp
+    assert not s2s.is_tabular_family and not s2s.is_classification
+    assert s2s.file_subdir == "texts"
 
     tab = spec_for(TaskCategory.TABULAR_CLASSIFICATION)
     assert (
