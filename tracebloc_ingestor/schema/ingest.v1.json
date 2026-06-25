@@ -37,7 +37,8 @@
         "time_series_forecasting",
         "time_to_event_prediction",
         "masked_language_modeling",
-        "causal_language_modeling"
+        "causal_language_modeling",
+        "seq2seq"
       ],
       "description": "Task category. Drives convention defaults: validators, data_format, default columns, default file extensions, default validator set."
     },
@@ -87,7 +88,7 @@
     "texts": {
       "type": "string",
       "minLength": 1,
-      "description": "Directory holding text files referenced by the labels CSV. Required for text_classification, token_classification, and causal_language_modeling (raw .txt: plain text, or a tab-separated prompt\\tcompletion pair)."
+      "description": "Directory holding text files referenced by the labels CSV. Required for text_classification, token_classification, causal_language_modeling (raw .txt: plain text, or a tab-separated prompt\\tcompletion pair), and seq2seq (raw .txt: a tab-separated source\\ttarget pair)."
     },
 
     "sequences": {
@@ -346,6 +347,14 @@
       "then": { "required": ["texts"] }
     },
     {
+      "description": "seq2seq requires `texts` (raw .txt samples, each a tab-separated source\\ttarget pair). It is self-supervised, so unlike text/token classification it does NOT require `label`.",
+      "if": {
+        "properties": { "category": { "const": "seq2seq" } },
+        "required": ["category"]
+      },
+      "then": { "required": ["texts"] }
+    },
+    {
       "description": "tabular and time-series categories require `schema`.",
       "if": {
         "properties": {
@@ -421,7 +430,8 @@
           "category": {
             "enum": [
               "masked_language_modeling",
-              "causal_language_modeling"
+              "causal_language_modeling",
+              "seq2seq"
             ]
           }
         },

@@ -199,6 +199,18 @@ CASES = [
         ),
         id="causal_language_modeling",
     ),
+    # seq2seq: self-supervised raw text in texts/ (a source<TAB>target pair —
+    # same on-disk shape as causal LM). No tokenizer.json at ingest — alignment
+    # is the data-derived text profile (#805).
+    pytest.param(
+        _cfg(
+            table="e2e_s2s",
+            category="seq2seq",
+            csv=str(T / "seq2seq/data/labels_file_sample.csv"),
+            texts=str(T / "seq2seq/data/texts"),
+        ),
+        id="seq2seq",
+    ),
     # semantic_segmentation: masks now wire through the declarative path (the P5
     # mask_id work — the transfer resolves the mask via the schema-declared
     # mask_id), so #136's xfail is removed. The full contract (masks land in

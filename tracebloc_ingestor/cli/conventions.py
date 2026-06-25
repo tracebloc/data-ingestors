@@ -45,15 +45,16 @@ IMAGE_CATEGORIES: FrozenSet[str] = frozenset(
 )
 
 # Categories that stage raw ``.txt`` files from ``texts/`` and default to the
-# ``.txt`` extension. causal_language_modeling joins text/token classification
-# here (it reads raw text, not the pre-tokenized ``sequences/`` MLM uses); it is
-# self-supervised, but that only governs label handling, not the file_options
-# default this set drives.
+# ``.txt`` extension. causal_language_modeling and seq2seq join text/token
+# classification here (they read raw text, not the pre-tokenized ``sequences/``
+# MLM uses); they are self-supervised, but that only governs label handling, not
+# the file_options default this set drives.
 TEXT_CATEGORIES: FrozenSet[str] = frozenset(
     {
         TaskCategory.TEXT_CLASSIFICATION,
         TaskCategory.TOKEN_CLASSIFICATION,
         TaskCategory.CAUSAL_LANGUAGE_MODELING,
+        TaskCategory.SEQ2SEQ,
     }
 )
 
