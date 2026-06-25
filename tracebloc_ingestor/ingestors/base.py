@@ -550,99 +550,54 @@ class BaseIngestor(ABC):
                 session.commit()
                 pbar.close()
 
-                # Register the dataset with the backend. Every step here is
-                # REQUIRED: the rows are already committed to MySQL above, so if
-                # any step fails the dataset is half-created — rows present but
-                # not registered. The previous code nested these as
-                # `if A: if B: if C: create()`, so a False return at ANY step
-                # silently skipped the rest (including create_dataset AND the
-                # summary) and the run STILL exited 0 — leaving committed rows
-                # with no registered dataset and no error the user could see.
-                # Fail loudly instead: raise so the process exits non-zero and
-                # the failure surfaces (the CLI streams these logs live and marks
-                # the Job failed). The api_client has already logged the
-                # underlying HTTP detail before returning False.
-                # Generate edge-label metadata for EVERY category, including
-                # self-supervised ones (MLM / text / token). The backend's
-                # get_edges discovers candidate edges only via the
-                # `edge_labels_meta` collection, so a dataset with no
-                # edge_labels_meta document can never be prepared/registered —
-                # it stays invisible in the app even though its rows are in
-                # MySQL.
-                #
-                # History: this call used to be skipped for self-supervised
-                # categories (#213) because those rows carry no `label` and the
-                # old backend rejected blank labels — the edge-label endpoint
-                # returned a misleading HTTP 400 ("No data found for table X"),
-                # which combined with PR #187's fail-loud behaviour to surface a
-                # registration crash unrelated to the real cause. Backend
-                # PR #683 ("allow blank label for self-supervised categories")
-                # fixed that: blank `label` is accepted, GenerateEdgeLabelsMeta
-                # buckets the single "" label into `edge_labels_meta = {"": N}`
-                # (truthy → inserted → HTTP 200), and PrepareDatasetMeta uses
-                # min_labels=0 for these categories. So the skip is now the only
-                # thing blocking self-supervised registration — remove it and
-                # let generate run for all categories, still failing loud (the
-                # RuntimeError below) on a False return.
-                if not self.api_client.send_generate_edge_label_meta(
-                    self.table_name, self.ingestor_id, self.intent
-                ):
-                    raise RuntimeError(
-                        f"Backend rejected edge-label metadata; the dataset was "
-                        f"NOT registered "
-                        f"({_rows_state_clause(stats['inserted_records'])}). "
-                        f"See the logged API error above."
-                    )
-
-                # Ship a data-derived text profile for NLP datasets (#805):
-                # Unicode-script mix + length distribution, computed from the
-                # staged text with NO tokenizer. The backend uses it for a
-                # warn-only tokenizer-fit check at linking. Only aggregate
-                # statistics cross the boundary — never raw text or vocabulary.
-                if self.category in _NLP_CATEGORIES:
-                    text_profile = compute_text_profile(self.database.config)
-                    if text_profile:
-                        self.file_options["text_profile"] = text_profile
-
-                schema_dict = self.database.get_table_schema(self.table_name)
-                if not self.api_client.send_global_meta_meta(
-                    self.table_name, schema_dict, self.file_options
-                ):
-                    raise RuntimeError(
-                        f"Backend rejected the dataset schema/metadata; the "
-                        f"dataset was NOT registered "
-                        f"({_rows_state_clause(stats['inserted_records'])}). "
-                        f"See the logged API error above."
-                    )
-
-                if not self.api_client.prepare_dataset(
-                    self.category,
-                    self.ingestor_id,
-                    self.data_format,
-                    self.intent,
-                ):
-                    # Surface the BACKEND'S actual reason in the user-visible
-                    # error — not just "see the logged API error above" which
-                    # forces the user to grep the log for the real cause.
-                    # Issue #251: a misleading "Backend failed to prepare the
-                    # dataset" message buried the real reason (e.g. "Please
-                    # provide atleast 2 labels.") in a preceding ERROR line.
-                    detail = (
-                        getattr(self.api_client, "last_prepare_error", None)
-                        or "see the logged API error above"
-                    )
-                    raise RuntimeError(
-                        f"Backend failed to prepare the dataset; it was NOT "
-                        f"registered "
-                        f"({_rows_state_clause(stats['inserted_records'])}). "
-                        f"Backend response: {detail}"
-                    )
-
-                self.api_client.create_dataset(
-                    category=self.category, ingestor_id=self.ingestor_id
+                # Query accurate label counts from the DB (excludes any rows that
+                # failed insertion) and collect a small preview sample.
+                label_counts = self.database.get_label_counts(
+                    self.table_name, self.ingestor_id
                 )
 
-                # Create and log summary — only after successful registration.
+                if not stats["inserted_records"]:
+                    logger.warning(
+                        "No records were inserted for this ingestor run; "
+                        "skipping ingest summary."
+                    )
+                elif not label_counts:
+                    raise RuntimeError(
+                        f"Inserted {stats['inserted_records']} row(s) but "
+                        f"get_label_counts returned nothing for "
+                        f"ingestor_id={self.ingestor_id!r}. "
+                        "Rows are committed to MySQL but the dataset was not "
+                        "registered with the backend."
+                    )
+                else:
+                    samples = self.database.get_samples(
+                        self.table_name, self.ingestor_id
+                    )
+                    dataset_title = (
+                        self.api_client.config.TITLE
+                        or f"{self.table_name} - {self.ingestor_id[:8]}"
+                    )
+                    schema_dict = self.database.get_table_schema(self.table_name)
+
+                    if self.category in _NLP_CATEGORIES:
+                        text_profile = compute_text_profile(self.database.config)
+                        if text_profile:
+                            self.file_options["text_profile"] = text_profile
+
+                    self.api_client.send_ingest_summary(
+                        table_name=self.table_name,
+                        ingestor_id=self.ingestor_id,
+                        labels=label_counts,
+                        dataset_title=dataset_title,
+                        data_format=self.data_format,
+                        data_intent=self.intent,
+                        category=self.category,
+                        schema=schema_dict,
+                        samples=samples,
+                        meta_data=self.file_options,
+                    )
+                    stats["api_sent_records"] = stats["inserted_records"]
+
                 summary = IngestionSummary(**stats)
                 self._log_summary(summary)
 
@@ -663,9 +618,8 @@ class BaseIngestor(ABC):
     @property
     def _batch_writer(self) -> BatchWriter:
         """The ingestor's batch write-path collaborator (P5d). Owns DB insert +
-        API publish + failure accounting; built from the run's database /
-        api_client / table. A fresh instance per access is fine — it just holds
-        those refs."""
+        failure accounting; built from the run's database / table. A fresh
+        instance per access is fine — it just holds those refs."""
         return BatchWriter(
             self.database, self.api_client, self.table_name, self.ingestor_id
         )

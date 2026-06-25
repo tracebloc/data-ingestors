@@ -417,41 +417,15 @@ def test_authenticate_error_with_response_text():
             APIClient(cfg)
 
 
-def test_send_batch_error_with_response_text():
+def test_send_ingest_summary_error_with_response_text():
     client = _client()
     with patch.object(client.session, "post", side_effect=_err_with_response()):
-        assert client.send_batch([(1, {"data_id": "a"})], "tbl", "ing") is False
-
-
-def test_send_global_meta_error_with_response_text():
-    client = _client()
-    with patch.object(client.session, "post", side_effect=_err_with_response()):
-        assert client.send_global_meta_meta("tbl", {}, {}) is False
-
-
-def test_generate_edge_label_error_with_response_text():
-    client = _client()
-    with patch.object(client.session, "get", side_effect=_err_with_response()):
-        assert client.send_generate_edge_label_meta("tbl", "ing", "train") is False
-
-
-def test_prepare_dataset_error_with_response_text():
-    client = _client()
-    with patch.object(client.session, "get", side_effect=_err_with_response()):
-        assert (
-            client.prepare_dataset(
-                TaskCategory.IMAGE_CLASSIFICATION, "ing", "image", "train"
-            )
-            is False
-        )
-
-
-def test_create_dataset_error_with_response_text():
-    client = _client()
-    with patch.object(client.session, "post", side_effect=_err_with_response()):
-        with pytest.raises(requests.exceptions.RequestException):
-            client.create_dataset(
-                ingestor_id="ing", category=TaskCategory.IMAGE_CLASSIFICATION
+        with pytest.raises(requests.exceptions.HTTPError):
+            client.send_ingest_summary(
+                table_name="tbl", ingestor_id="ing", labels={"cat": 1},
+                dataset_title="T", data_format="image", data_intent="train",
+                category=TaskCategory.IMAGE_CLASSIFICATION,
+                schema={}, samples=[],
             )
 
 

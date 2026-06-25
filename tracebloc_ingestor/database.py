@@ -502,6 +502,66 @@ class Database:
 
         return result["success_ids"], result["failures"]
 
+    def get_label_counts(self, table_name: str, ingestor_id: str) -> Dict[str, int]:
+        """
+        Return ``{label: row_count}`` for every label inserted by *ingestor_id*.
+
+        Used to build the summary payload sent to the backend after all records
+        have been committed, giving an accurate count that excludes any rows
+        that failed DB insertion.
+
+        Args:
+            table_name: Name of the table to query
+            ingestor_id: UUID of the current ingest run
+
+        Returns:
+            Dict mapping label string to integer row count
+        """
+        with self.engine.connect() as conn:
+            rows = conn.execute(
+                text(
+                    f"SELECT label, COUNT(*) AS cnt "
+                    f"FROM `{table_name}` "
+                    f"WHERE ingestor_id = :ingestor_id "
+                    f"GROUP BY label"
+                ),
+                {"ingestor_id": ingestor_id},
+            ).fetchall()
+        counts: Dict[str, int] = {}
+        for label, cnt in rows:
+            key = label if label is not None else ""
+            counts[key] = counts.get(key, 0) + cnt
+        return counts
+
+    def get_samples(
+        self, table_name: str, ingestor_id: str, limit: int = 10
+    ) -> List[Dict[str, Any]]:
+        """
+        Return a small sample of records for the given ingest run.
+
+        These are stored on the backend as ``UserDataSet.data_samples`` and
+        displayed in the dataset preview UI.
+
+        Args:
+            table_name: Name of the table to query
+            ingestor_id: UUID of the current ingest run
+            limit: Maximum number of sample rows to return (default 10)
+
+        Returns:
+            List of ``{"data_id": ..., "label": ...}`` dicts
+        """
+        with self.engine.connect() as conn:
+            rows = conn.execute(
+                text(
+                    f"SELECT data_id, label "
+                    f"FROM `{table_name}` "
+                    f"WHERE ingestor_id = :ingestor_id "
+                    f"LIMIT :limit"
+                ),
+                {"ingestor_id": ingestor_id, "limit": limit},
+            ).fetchall()
+        return [{"data_id": row[0], "label": row[1] if row[1] is not None else ""} for row in rows]
+
     def get_table_schema(self, table_name: str) -> Dict[str, str]:
         """
         Returns the schema of a table as a dictionary mapping column names to their MySQL types.

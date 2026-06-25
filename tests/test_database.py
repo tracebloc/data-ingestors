@@ -729,3 +729,36 @@ def test_upsert_doubles_embedded_backticks_in_column_name():
     assert "VALUES(`ev``il`)" in sql
     # Unescaped form would close the identifier early — must not appear.
     assert "VALUES(`ev`il`)" not in sql
+
+
+# ---------------------------------------------------------------------------
+# get_samples / get_label_counts: SQL NULL label normalisation
+# ---------------------------------------------------------------------------
+
+
+def test_get_samples_null_label_normalised_to_empty_string(db, mock_engine_factory):
+    """SQL NULL labels in sample rows must be normalised to '' so the JSON
+    payload matches get_label_counts, which already maps NULL → '' (the same
+    convention the old per-row API always sent when no label was present)."""
+    _, _, conn = mock_engine_factory
+    conn.execute.return_value.fetchall.return_value = [
+        ("id-1", None),   # self-supervised / no label column → SQL NULL
+        ("id-2", "cat"),
+    ]
+    result = db.get_samples("tbl", "ing-uuid")
+    assert result == [
+        {"data_id": "id-1", "label": ""},
+        {"data_id": "id-2", "label": "cat"},
+    ]
+
+
+def test_get_label_counts_null_label_normalised_to_empty_string(db, mock_engine_factory):
+    """SQL NULL and '' both map to '' so they merge into a single count."""
+    _, _, conn = mock_engine_factory
+    conn.execute.return_value.fetchall.return_value = [
+        (None, 3),
+        ("",   2),
+        ("cat", 5),
+    ]
+    result = db.get_label_counts("tbl", "ing-uuid")
+    assert result == {"": 5, "cat": 5}
