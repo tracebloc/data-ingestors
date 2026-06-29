@@ -1,8 +1,8 @@
 """Text Content Validator Module.
 
 Content-level check for NLP categories (text_classification,
-token_classification, masked_language_modeling, causal_language_modeling).
-``FileTypeValidator`` only
+token_classification, masked_language_modeling, causal_language_modeling,
+seq2seq). ``FileTypeValidator`` only
 checks the file *extension*, so a file named ``doc1.txt`` that actually holds
 binary / non-UTF-8 bytes — or is empty — passed validation and was ingested
 silently; the dataset author only discovered the corruption at training time.
@@ -45,9 +45,9 @@ class TextContentValidator(BaseValidator):
 
     Attributes:
         texts_path: Subdirectory under ``SRC_PATH`` holding the text files
-            (``"texts"`` for text/token classification and causal language
-            modeling, ``"sequences"`` for masked language modeling) — mirrors
-            ``FileTypeValidator(path=...)``.
+            (``"texts"`` for text/token classification, causal language
+            modeling and seq2seq, ``"sequences"`` for masked language
+            modeling) — mirrors ``FileTypeValidator(path=...)``.
         extension: Expected text-file extension (default ``.txt``).
         filename_column: CSV column naming each sample's file (default
             ``"filename"``; resolved case-insensitively).

@@ -116,6 +116,16 @@ def causal_language_modeling(
     return text_transfer(record, options, cfg=cfg)
 
 
+def seq2seq(
+    record: Dict[str, Any], options: Dict[str, Any], cfg: Optional[Config] = None
+) -> Optional[Dict[str, Any]]:
+    # Raw text, one .txt per sample in the ``texts`` subdir (same on-disk
+    # layout as causal_language_modeling — the default text_transfer subdir).
+    # Self-supervised: the .txt holds a tab-separated ``source\ttarget`` pair,
+    # never a label.
+    return text_transfer(record, options, cfg=cfg)
+
+
 def semantic_segmentation(
     record: Dict[str, Any], options: Dict[str, Any], cfg: Optional[Config] = None
 ) -> Optional[Dict[str, Any]]:

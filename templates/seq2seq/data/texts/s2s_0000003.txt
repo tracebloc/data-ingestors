@@ -1,0 +1,1 @@
+Summarize: tracebloc trains models on data that never leaves the contributor cluster, so raw data stays on-premise.	Models travel to the data; the data stays on-premise.

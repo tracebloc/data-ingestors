@@ -1020,7 +1020,8 @@ def test_check_src_path_only_runs_for_file_bearing_categories():
         TaskCategory.TIME_TO_EVENT_PREDICTION,
     ):
         assert cat not in _FILE_BEARING_CATEGORIES
-    # Image / text / segmentation / MLM / causal LM all need a staged SRC_PATH.
+    # Image / text / segmentation / MLM / causal LM / seq2seq all need a staged
+    # SRC_PATH.
     for cat in (
         TaskCategory.IMAGE_CLASSIFICATION,
         TaskCategory.OBJECT_DETECTION,
@@ -1029,6 +1030,7 @@ def test_check_src_path_only_runs_for_file_bearing_categories():
         TaskCategory.TEXT_CLASSIFICATION,
         TaskCategory.MASKED_LANGUAGE_MODELING,
         TaskCategory.CAUSAL_LANGUAGE_MODELING,
+        TaskCategory.SEQ2SEQ,
     ):
         assert cat in _FILE_BEARING_CATEGORIES
 
@@ -1059,6 +1061,7 @@ _TEXT_PROFILE = {
     [
         "MASKED_LANGUAGE_MODELING",
         "CAUSAL_LANGUAGE_MODELING",
+        "SEQ2SEQ",
         "TEXT_CLASSIFICATION",
         "TOKEN_CLASSIFICATION",
     ],

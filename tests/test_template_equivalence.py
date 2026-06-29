@@ -313,6 +313,34 @@ CASES = [
     ),
 
     # -----------------------------------------------------------------------
+    # seq2seq — self-supervised, no label column. CSV manifest points at .txt
+    # sidecar files holding RAW text (a source<TAB>target pair); the client
+    # builds encoder inputs and decoder targets at train time. Sidecar dir is
+    # ``texts/`` (raw text — same layout as causal language modeling), NOT MLM's
+    # ``sequences/`` (pre-tokenized).
+    # -----------------------------------------------------------------------
+    pytest.param(
+        _yaml(
+            category=TaskCategory.SEQ2SEQ,
+            table="seq2seq_train",
+            intent="train",
+            csv="/data/labels.csv",
+            texts="/data/texts/",
+        ),
+        {
+            "category": TaskCategory.SEQ2SEQ,
+            "data_format": DataFormat.TEXT,
+            "intent": Intent.TRAIN,
+            "label_column": "",  # self-supervised — no label
+            "label_policy": PASSTHROUGH,
+            "unique_id_column": None,
+            "annotation_column": None,
+            "file_options": {"extension": FileExtension.TXT},
+        },
+        id="seq2seq",
+    ),
+
+    # -----------------------------------------------------------------------
     # tabular_classification — template label_column="name"
     # -----------------------------------------------------------------------
     pytest.param(
