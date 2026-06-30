@@ -234,6 +234,17 @@ CASES = [
         sidecars=[str(T / "seq2seq/data/texts")],
         roundtrip_col=None,
     ),
+    dict(
+        id="embeddings",
+        cfg=_cfg(
+            table="char_emb",
+            category="embeddings",
+            csv=str(T / "embeddings/data/labels_file_sample.csv"),
+            texts=str(T / "embeddings/data/texts"),
+        ),
+        sidecars=[str(T / "embeddings/data/texts")],
+        roundtrip_col=None,
+    ),
     # semantic_segmentation: the one file-bearing modality the harness never
     # characterized (audit gap). mask_id is DECLARED in schema so it's stored
     # (the training client SELECTs it to locate masks — backend#816); the masks

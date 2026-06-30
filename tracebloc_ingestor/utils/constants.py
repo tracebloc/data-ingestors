@@ -48,6 +48,7 @@ class TaskCategory:
     MASKED_LANGUAGE_MODELING = "masked_language_modeling"
     CAUSAL_LANGUAGE_MODELING = "causal_language_modeling"
     SEQ2SEQ = "seq2seq"
+    EMBEDDINGS = "embeddings"
 
     # instance_segmentation is deliberately absent: it briefly shipped here
     # and in the schema enum with no validators and no file transfer, so
@@ -77,6 +78,7 @@ class TaskCategory:
             cls.MASKED_LANGUAGE_MODELING,
             cls.CAUSAL_LANGUAGE_MODELING,
             cls.SEQ2SEQ,
+            cls.EMBEDDINGS,
         ]
 
     @classmethod

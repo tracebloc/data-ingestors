@@ -24,6 +24,7 @@ from typing import Any, Dict, List
 from ..utils.constants import FileExtension
 from ..validators.base import BaseValidator
 from ..validators.bio_label_validator import BIOLabelValidator
+from ..validators.contrastive_pairs_validator import ContrastivePairsValidator
 from ..validators.data_validator import DataValidator
 from ..validators.file_pairing_validator import FilePairingValidator
 from ..validators.file_validator import FileTypeValidator
@@ -240,6 +241,32 @@ def seq2seq(options: Dict[str, Any]) -> List[BaseValidator]:
             path="texts",
         ),
         _text_content_validator(options, "texts"),
+    ]
+    if options.get("schema"):
+        validators.append(DataValidator(schema=options["schema"]))
+    return validators
+
+
+def embeddings(options: Dict[str, Any]) -> List[BaseValidator]:
+    # Self-supervised (contrastive), like seq2seq — only a ``filename`` column
+    # is required, no label column, so no LabelColumn/BIO/LabelDiversity
+    # validators. Each sample is one ``.txt`` of RAW text staged from ``texts/``.
+    # UNLIKE seq2seq / causal LM (free-form text), the on-disk shape is
+    # STRUCTURED: a tab-separated ``anchor\tpositive`` pair OR an
+    # ``anchor\tpositive\tnegative`` triplet. So beyond the shared
+    # TextContentValidator (UTF-8 / binary hygiene) it adds a structural
+    # ContrastivePairsValidator that rejects any file that isn't exactly 2 or 3
+    # non-empty tab fields.
+    validators: List[BaseValidator] = [
+        FileTypeValidator(
+            allowed_extension=options.get("extension", FileExtension.TXT),
+            path="texts",
+        ),
+        _text_content_validator(options, "texts"),
+        ContrastivePairsValidator(
+            texts_path="texts",
+            extension=options.get("extension", FileExtension.TXT),
+        ),
     ]
     if options.get("schema"):
         validators.append(DataValidator(schema=options["schema"]))

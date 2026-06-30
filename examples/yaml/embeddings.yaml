@@ -1,0 +1,12 @@
+# Embeddings (self-supervised contrastive): CSV manifest + .txt sidecar files
+# (one per sample). Self-supervised — no label column required.
+# `texts:` holds RAW text samples: each .txt is a single tab-separated record,
+# either an `anchor<TAB>positive` pair or an `anchor<TAB>positive<TAB>negative`
+# triplet. The training client builds a contrastive objective from these views.
+apiVersion: tracebloc.io/v1
+kind: IngestConfig
+table: stsb_embeddings_train
+intent: train
+category: embeddings
+csv: /data/shared/stsb-embeddings/labels_file.csv
+texts: /data/shared/stsb-embeddings/texts/

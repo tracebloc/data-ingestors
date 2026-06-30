@@ -1,0 +1,1 @@
+What is federated learning?	Federated learning trains a shared model without centralizing raw data.	The capital of France is Paris.

@@ -126,6 +126,16 @@ def seq2seq(
     return text_transfer(record, options, cfg=cfg)
 
 
+def embeddings(
+    record: Dict[str, Any], options: Dict[str, Any], cfg: Optional[Config] = None
+) -> Optional[Dict[str, Any]]:
+    # Raw text, one .txt per sample in the ``texts`` subdir (same on-disk
+    # layout as seq2seq — the default text_transfer subdir). Self-supervised
+    # (contrastive): the .txt holds a tab-separated ``anchor\tpositive`` pair or
+    # ``anchor\tpositive\tnegative`` triplet, never a label.
+    return text_transfer(record, options, cfg=cfg)
+
+
 def semantic_segmentation(
     record: Dict[str, Any], options: Dict[str, Any], cfg: Optional[Config] = None
 ) -> Optional[Dict[str, Any]]:
