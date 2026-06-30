@@ -34,7 +34,7 @@ Only metadata (schema, statistics, structure) syncs to the web app. Raw data sta
 | Type | Categories |
 |---|---|
 | **Image** | [`image_classification`](templates/image_classification), [`object_detection`](templates/object_detection), [`keypoint_detection`](templates/keypoint_detection), [`semantic_segmentation`](templates/semantic_segmentation) |
-| **Text / NLP** | [`text_classification`](templates/text_classification), [`token_classification`](templates/token_classification), [`masked_language_modeling`](templates/masked_language_modeling), [`causal_language_modeling`](templates/causal_language_modeling), [`seq2seq`](templates/seq2seq) |
+| **Text / NLP** | [`text_classification`](templates/text_classification), [`token_classification`](templates/token_classification), [`masked_language_modeling`](templates/masked_language_modeling), [`causal_language_modeling`](templates/causal_language_modeling), [`seq2seq`](templates/seq2seq), [`embeddings`](templates/embeddings) |
 | **Tabular** | [`tabular_classification`](templates/tabular_classification), [`tabular_regression`](templates/tabular_regression) |
 | **Time series** | [`time_series_forecasting`](templates/time_series_forecasting), [`time_to_event_prediction`](templates/time_to_event_prediction) |
 

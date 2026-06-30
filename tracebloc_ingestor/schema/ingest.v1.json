@@ -38,7 +38,8 @@
         "time_to_event_prediction",
         "masked_language_modeling",
         "causal_language_modeling",
-        "seq2seq"
+        "seq2seq",
+        "embeddings"
       ],
       "description": "Task category. Drives convention defaults: validators, data_format, default columns, default file extensions, default validator set."
     },
@@ -88,7 +89,7 @@
     "texts": {
       "type": "string",
       "minLength": 1,
-      "description": "Directory holding text files referenced by the labels CSV. Required for text_classification, token_classification, causal_language_modeling (raw .txt: plain text, or a tab-separated prompt\\tcompletion pair), and seq2seq (raw .txt: a tab-separated source\\ttarget pair)."
+      "description": "Directory holding text files referenced by the labels CSV. Required for text_classification, token_classification, causal_language_modeling (raw .txt: plain text, or a tab-separated prompt\\tcompletion pair), seq2seq (raw .txt: a tab-separated source\\ttarget pair), and embeddings (raw .txt: a tab-separated anchor\\tpositive pair, or anchor\\tpositive\\tnegative triplet)."
     },
 
     "sequences": {
@@ -355,6 +356,14 @@
       "then": { "required": ["texts"] }
     },
     {
+      "description": "embeddings requires `texts` (raw .txt samples, each a tab-separated anchor\\tpositive pair or anchor\\tpositive\\tnegative triplet). It is self-supervised (contrastive), so unlike text/token classification it does NOT require `label`.",
+      "if": {
+        "properties": { "category": { "const": "embeddings" } },
+        "required": ["category"]
+      },
+      "then": { "required": ["texts"] }
+    },
+    {
       "description": "tabular and time-series categories require `schema`.",
       "if": {
         "properties": {
@@ -431,7 +440,8 @@
             "enum": [
               "masked_language_modeling",
               "causal_language_modeling",
-              "seq2seq"
+              "seq2seq",
+              "embeddings"
             ]
           }
         },

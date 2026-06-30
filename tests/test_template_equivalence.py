@@ -341,6 +341,34 @@ CASES = [
     ),
 
     # -----------------------------------------------------------------------
+    # embeddings — self-supervised (contrastive), no label column. CSV manifest
+    # points at .txt sidecar files holding RAW text (an anchor<TAB>positive pair
+    # or anchor<TAB>positive<TAB>negative triplet); the client builds the
+    # contrastive objective at train time. Sidecar dir is ``texts/`` (raw text —
+    # same layout as seq2seq), NOT MLM's ``sequences/`` (pre-tokenized).
+    # -----------------------------------------------------------------------
+    pytest.param(
+        _yaml(
+            category=TaskCategory.EMBEDDINGS,
+            table="embeddings_train",
+            intent="train",
+            csv="/data/labels.csv",
+            texts="/data/texts/",
+        ),
+        {
+            "category": TaskCategory.EMBEDDINGS,
+            "data_format": DataFormat.TEXT,
+            "intent": Intent.TRAIN,
+            "label_column": "",  # self-supervised — no label
+            "label_policy": PASSTHROUGH,
+            "unique_id_column": None,
+            "annotation_column": None,
+            "file_options": {"extension": FileExtension.TXT},
+        },
+        id="embeddings",
+    ),
+
+    # -----------------------------------------------------------------------
     # tabular_classification — template label_column="name"
     # -----------------------------------------------------------------------
     pytest.param(

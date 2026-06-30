@@ -211,6 +211,19 @@ CASES = [
         ),
         id="seq2seq",
     ),
+    # embeddings: self-supervised contrastive raw text in texts/ (an
+    # anchor<TAB>positive pair or anchor<TAB>positive<TAB>negative triplet). The
+    # structural ContrastivePairsValidator gates malformed files; alignment is
+    # the data-derived text profile (#805), no tokenizer.json at ingest.
+    pytest.param(
+        _cfg(
+            table="e2e_emb",
+            category="embeddings",
+            csv=str(T / "embeddings/data/labels_file_sample.csv"),
+            texts=str(T / "embeddings/data/texts"),
+        ),
+        id="embeddings",
+    ),
     # semantic_segmentation: masks now wire through the declarative path (the P5
     # mask_id work — the transfer resolves the mask via the schema-declared
     # mask_id), so #136's xfail is removed. The full contract (masks land in

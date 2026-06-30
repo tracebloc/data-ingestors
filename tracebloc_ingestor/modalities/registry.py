@@ -139,6 +139,27 @@ _SPECS = (
         is_nlp=True,
         file_subdir="texts",
     ),
+    # embeddings is file-bearing AND self-supervised (no label) — the
+    # contrastive NLP modality. Each sample is one ``.txt`` of RAW text: a
+    # tab-separated ``anchor\tpositive`` pair OR an ``anchor\tpositive\tnegative``
+    # triplet (no label column). Same raw-text staging as seq2seq / causal LM —
+    # ``texts/``, not the pre-tokenized ``sequences/`` MLM uses. Unlike those two
+    # (which also accept free-form text), the on-disk shape here is STRUCTURED —
+    # exactly 2 or 3 tab-separated fields — so its validator factory adds a
+    # structural ContrastivePairsValidator that rejects malformed rows. It is
+    # NLP, so it ships the #805 data-derived text profile for the
+    # contributor-tokenizer-fit check.
+    ModalitySpec(
+        TaskCategory.EMBEDDINGS,
+        is_file_bearing=True,
+        is_tabular_family=False,
+        is_self_supervised=True,
+        data_format=DataFormat.TEXT,
+        build_validators=v.embeddings,
+        transfer=t.embeddings,
+        is_nlp=True,
+        file_subdir="texts",
+    ),
     # Tabular family (structured feature tables; no sidecar files -> no transfer).
     ModalitySpec(
         TaskCategory.TABULAR_CLASSIFICATION,

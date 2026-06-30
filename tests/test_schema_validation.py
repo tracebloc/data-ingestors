@@ -310,6 +310,34 @@ def test_seq2seq_without_texts_rejected(validator):
         validator.validate(config)
 
 
+def test_embeddings_with_label_rejected(validator):
+    """embeddings is self-supervised (contrastive) like seq2seq (#213): setting
+    `label:` must be rejected at submission. The CSV has no label column and no
+    edge-label metadata is registered for it."""
+    config = _load_example("embeddings.yaml")
+    config["label"] = "some_column"
+    with pytest.raises(ValidationError):
+        validator.validate(config)
+
+
+def test_embeddings_without_label_accepted(validator):
+    """The shipped embeddings example omits `label:` by design — it must
+    validate cleanly."""
+    config = _load_example("embeddings.yaml")
+    assert "label" not in config, "test premise: the example yaml has no label"
+    validator.validate(config)  # must not raise
+
+
+def test_embeddings_without_texts_rejected(validator):
+    """embeddings stages raw .txt under `texts:`; omitting it must be rejected
+    (the directory is where the per-sample anchor\\tpositive[\\tnegative] files
+    live)."""
+    config = _load_example("embeddings.yaml")
+    del config["texts"]
+    with pytest.raises(ValidationError):
+        validator.validate(config)
+
+
 # Regression-class tasks must specify label.policy explicitly; the shorthand
 # string form must be rejected for these categories.
 @pytest.mark.parametrize(
