@@ -115,6 +115,22 @@ def test_missing_file_reported(staged):
     assert any("not found" in e for e in result.errors)
 
 
+def test_path_traversal_manifest_value_skipped(staged):
+    """A manifest value that escapes the dataset dir (``..`` / absolute) is
+    resolved with ``_safe_join`` exactly as the transfer does (#239): the
+    transfer rejects it, so preflight neither reads nor flags a file outside
+    ``texts/`` — it is skipped here (mirrors TextContentValidator), not read
+    from disk."""
+    texts, make_csv = staged
+    # A real readable pair OUTSIDE texts/ — proves we don't read it.
+    outside = texts.parent.parent / "secret.txt"
+    outside.write_text("anchor\tpositive\n", encoding="utf-8")
+    path = make_csv(["../../secret"])
+    result = ContrastivePairsValidator(texts_path="texts").validate(str(path))
+    # Escaping value is skipped (no structural error raised for it).
+    assert result.is_valid, result.errors
+
+
 def test_missing_filename_column_reported(staged):
     texts, make_csv = staged
     path = make_csv(["x"], column="wrongname")

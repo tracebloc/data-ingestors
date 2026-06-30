@@ -29,6 +29,7 @@ import os
 from typing import Any, List, Optional, Tuple
 
 from ..config import Config
+from ..file_transfer import _has_extension, _safe_join
 from ..utils.constants import FileExtension
 from .base import BaseValidator, ValidationResult
 
@@ -81,7 +82,7 @@ class ContrastivePairsValidator(BaseValidator):
                     errors=[f"Missing required column: {self.filename_column}"],
                 )
 
-            texts_dir = os.path.join((self._config or config).SRC_PATH, self.texts_path)
+            src_root = (self._config or config).SRC_PATH
             errors: List[str] = []
             checked = 0
             for idx, row in df.iterrows():
@@ -89,7 +90,7 @@ class ContrastivePairsValidator(BaseValidator):
                     errors.append("... further errors suppressed.")
                     break
                 checked += 1
-                error = self._validate_row(row, idx, filename_col, texts_dir)
+                error = self._validate_row(row, idx, filename_col, src_root)
                 if error:
                     errors.append(error)
 
@@ -111,7 +112,7 @@ class ContrastivePairsValidator(BaseValidator):
         row: Any,
         idx: Any,
         filename_col: str,
-        texts_dir: str,
+        src_root: str,
     ) -> Optional[str]:
         row_label = f"Row {idx}"
         filename = str(row[filename_col])
@@ -121,12 +122,18 @@ class ContrastivePairsValidator(BaseValidator):
         # none. Deterministic on purpose — probing the filesystem for
         # alternatives here could validate one file while text_transfer copies a
         # different one.
-        from ..file_transfer import _has_extension
-
         resolved = (
             filename if _has_extension(filename) else f"{filename}{self.extension}"
         )
-        text_path = os.path.join(texts_dir, resolved)
+        # Resolve as the transfer does (``_safe_join`` under SRC_PATH), so
+        # preflight can't disagree with copy behavior: an absolute / ``..``
+        # manifest value is rejected by the transfer (#239), so we neither read
+        # nor flag a file outside the dataset dir — its missing-ness is the
+        # records validator's job. Mirrors TextContentValidator.
+        try:
+            text_path = _safe_join(src_root, self.texts_path, resolved)
+        except ValueError:
+            return None
         if not os.path.isfile(text_path):
             return (
                 f"{row_label}: text file not found at "
