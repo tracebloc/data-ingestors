@@ -28,7 +28,6 @@ import pytest
 import yaml
 from jsonschema import Draft7Validator, ValidationError
 
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCHEMA_PATH = REPO_ROOT / "tracebloc_ingestor" / "schema" / "ingest.v1.json"
 EXAMPLES_DIR = REPO_ROOT / "examples" / "yaml"
@@ -60,9 +59,8 @@ EXAMPLES = sorted(p.name for p in EXAMPLES_DIR.glob("*.yaml"))
 def test_example_validates(validator: Draft7Validator, example_name: str):
     config = _load_example(example_name)
     errors = sorted(validator.iter_errors(config), key=lambda e: e.path)
-    assert not errors, (
-        f"{example_name} failed schema validation:\n  "
-        + "\n  ".join(f"{list(e.absolute_path) or '<root>'}: {e.message}" for e in errors)
+    assert not errors, f"{example_name} failed schema validation:\n  " + "\n  ".join(
+        f"{list(e.absolute_path) or '<root>'}: {e.message}" for e in errors
     )
 
 
@@ -70,7 +68,8 @@ def test_image_classification_is_eight_lines():
     """The dominant case has to fit in ~8 lines, per #44 design constraint."""
     body = (EXAMPLES_DIR / "image_classification.yaml").read_text(encoding="utf-8")
     non_blank_non_comment = [
-        line for line in body.splitlines()
+        line
+        for line in body.splitlines()
         if line.strip() and not line.lstrip().startswith("#")
     ]
     assert len(non_blank_non_comment) == 8, (
@@ -94,7 +93,8 @@ def test_all_task_categories_covered():
     covered = {
         yaml.safe_load((EXAMPLES_DIR / name).read_text(encoding="utf-8"))["category"]
         for name in EXAMPLES
-        if name != "custom_processor.yaml"  # uses tabular_classification, already covered
+        if name
+        != "custom_processor.yaml"  # uses tabular_classification, already covered
     }
 
     missing = enum_values - covered
@@ -135,6 +135,7 @@ def test_schema_category_enum_matches_engine_categories():
 # ---------------------------------------------------------------------------
 # Negative coverage: each rejection path the schema is supposed to enforce.
 # ---------------------------------------------------------------------------
+
 
 def _ic_base() -> dict:
     """A known-good image_classification config to mutate per test."""
@@ -223,6 +224,22 @@ def test_token_classification_without_texts_rejected(validator):
 
 def test_token_classification_without_label_rejected(validator):
     config = _load_example("token_classification.yaml")
+    del config["label"]
+    with pytest.raises(ValidationError):
+        validator.validate(config)
+
+
+def test_sentence_pair_classification_without_texts_rejected(validator):
+    config = _load_example("sentence_pair_classification.yaml")
+    del config["texts"]
+    with pytest.raises(ValidationError):
+        validator.validate(config)
+
+
+def test_sentence_pair_classification_without_label_rejected(validator):
+    """sentence_pair_classification is SUPERVISED (like text/token
+    classification): omitting `label` must be rejected at submission."""
+    config = _load_example("sentence_pair_classification.yaml")
     del config["label"]
     with pytest.raises(ValidationError):
         validator.validate(config)

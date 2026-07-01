@@ -100,6 +100,16 @@ def token_classification(
     return text_transfer(record, options, cfg=cfg)
 
 
+def sentence_pair_classification(
+    record: Dict[str, Any], options: Dict[str, Any], cfg: Optional[Config] = None
+) -> Optional[Dict[str, Any]]:
+    # Same on-disk layout as text classification: one .txt per sample in the
+    # ``texts`` subdir. Supervised — the class label travels in the labels CSV,
+    # not on disk; the .txt holds a tab-separated ``text_a\ttext_b`` sentence
+    # pair (the default text_transfer subdir).
+    return text_transfer(record, options, cfg=cfg)
+
+
 def masked_language_modeling(
     record: Dict[str, Any], options: Dict[str, Any], cfg: Optional[Config] = None
 ) -> Optional[Dict[str, Any]]:

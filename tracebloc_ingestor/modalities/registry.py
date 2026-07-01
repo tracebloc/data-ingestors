@@ -91,6 +91,27 @@ _SPECS = (
         is_nlp=True,
         file_subdir="texts",
     ),
+    # sentence_pair_classification is SUPERVISED text classification — the class
+    # label travels in the labels CSV, exactly like text_classification (so
+    # is_classification=True, is_self_supervised=False, staged from ``texts/``).
+    # What's distinct is the on-disk shape: each ``.txt`` is a STRUCTURED
+    # tab-separated ``text_a\ttext_b`` sentence pair (the text_classification
+    # layout with a tab separating the pair), so its validator factory adds a
+    # structural SentencePairValidator that rejects malformed files. It is NLP,
+    # so it ships the #805 data-derived text profile for the
+    # contributor-tokenizer-fit check.
+    ModalitySpec(
+        TaskCategory.SENTENCE_PAIR_CLASSIFICATION,
+        is_file_bearing=True,
+        is_tabular_family=False,
+        is_self_supervised=False,
+        data_format=DataFormat.TEXT,
+        build_validators=v.sentence_pair_classification,
+        transfer=t.sentence_pair_classification,
+        is_nlp=True,
+        file_subdir="texts",
+        is_classification=True,
+    ),
     # masked_language_modeling is file-bearing AND self-supervised (no label).
     ModalitySpec(
         TaskCategory.MASKED_LANGUAGE_MODELING,

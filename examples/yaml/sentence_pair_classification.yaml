@@ -1,0 +1,14 @@
+# Sentence-pair classification: CSV manifest + .txt sidecar files (one per
+# sample) + a label column. Supervised — the class label lives in the CSV.
+# `texts:` holds RAW text samples: each .txt is a single tab-separated
+# `text_a<TAB>text_b` sentence pair (the text_classification layout with a tab
+# separating the pair). The class (e.g. entailment / contradiction / neutral for
+# NLI, or paraphrase / not_paraphrase) is the `label` column in the CSV.
+apiVersion: tracebloc.io/v1
+kind: IngestConfig
+table: mnli_sentence_pairs_train
+intent: train
+category: sentence_pair_classification
+csv: /data/shared/mnli-pairs/labels_file.csv
+texts: /data/shared/mnli-pairs/texts/
+label: label

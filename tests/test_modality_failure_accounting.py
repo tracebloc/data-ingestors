@@ -47,7 +47,7 @@ from tracebloc_ingestor.utils.constants import TaskCategory
 # helpers (mirror test_batch_send_failure_accounting.py)
 # ---------------------------------------------------------------------------
 
-# One entry per template directory — the 14 supported modalities.
+# One entry per template directory — the 15 supported modalities.
 _TEMPLATE_CATEGORIES = [
     TaskCategory.IMAGE_CLASSIFICATION,
     TaskCategory.KEYPOINT_DETECTION,
@@ -60,6 +60,7 @@ _TEMPLATE_CATEGORIES = [
     TaskCategory.TABULAR_CLASSIFICATION,
     TaskCategory.TABULAR_REGRESSION,
     TaskCategory.TEXT_CLASSIFICATION,
+    TaskCategory.SENTENCE_PAIR_CLASSIFICATION,
     TaskCategory.TIME_SERIES_FORECASTING,
     TaskCategory.TIME_TO_EVENT_PREDICTION,
     TaskCategory.TOKEN_CLASSIFICATION,

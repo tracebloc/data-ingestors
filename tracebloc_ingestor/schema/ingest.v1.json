@@ -32,6 +32,7 @@
         "semantic_segmentation",
         "text_classification",
         "token_classification",
+        "sentence_pair_classification",
         "tabular_classification",
         "tabular_regression",
         "time_series_forecasting",
@@ -89,7 +90,7 @@
     "texts": {
       "type": "string",
       "minLength": 1,
-      "description": "Directory holding text files referenced by the labels CSV. Required for text_classification, token_classification, causal_language_modeling (raw .txt: plain text, or a tab-separated prompt\\tcompletion pair), seq2seq (raw .txt: a tab-separated source\\ttarget pair), and embeddings (raw .txt: a tab-separated anchor\\tpositive pair, or anchor\\tpositive\\tnegative triplet)."
+      "description": "Directory holding text files referenced by the labels CSV. Required for text_classification, token_classification, sentence_pair_classification (raw .txt: a tab-separated text_a\\ttext_b sentence pair), causal_language_modeling (raw .txt: plain text, or a tab-separated prompt\\tcompletion pair), seq2seq (raw .txt: a tab-separated source\\ttarget pair), and embeddings (raw .txt: a tab-separated anchor\\tpositive pair, or anchor\\tpositive\\tnegative triplet)."
     },
 
     "sequences": {
@@ -332,6 +333,14 @@
       "then": { "required": ["texts"] }
     },
     {
+      "description": "sentence_pair_classification requires `texts` (raw .txt samples, each a tab-separated text_a\\ttext_b sentence pair). It is supervised, so it also requires `label` (see the label rule below).",
+      "if": {
+        "properties": { "category": { "const": "sentence_pair_classification" } },
+        "required": ["category"]
+      },
+      "then": { "required": ["texts"] }
+    },
+    {
       "description": "masked_language_modeling requires `sequences`.",
       "if": {
         "properties": { "category": { "const": "masked_language_modeling" } },
@@ -424,6 +433,7 @@
               "semantic_segmentation",
               "text_classification",
               "token_classification",
+              "sentence_pair_classification",
               "tabular_classification"
             ]
           }
