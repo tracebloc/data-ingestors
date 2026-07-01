@@ -40,6 +40,7 @@ class TaskCategory:
     KEYPOINT_DETECTION = "keypoint_detection"
     TEXT_CLASSIFICATION = "text_classification"
     TOKEN_CLASSIFICATION = "token_classification"
+    SENTENCE_PAIR_CLASSIFICATION = "sentence_pair_classification"
     TABULAR_CLASSIFICATION = "tabular_classification"
     TABULAR_REGRESSION = "tabular_regression"
     TIME_SERIES_FORECASTING = "time_series_forecasting"
@@ -70,6 +71,7 @@ class TaskCategory:
             cls.KEYPOINT_DETECTION,
             cls.TEXT_CLASSIFICATION,
             cls.TOKEN_CLASSIFICATION,
+            cls.SENTENCE_PAIR_CLASSIFICATION,
             cls.TABULAR_CLASSIFICATION,
             cls.TABULAR_REGRESSION,
             cls.TIME_SERIES_FORECASTING,

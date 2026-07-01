@@ -41,6 +41,20 @@ CASES = [
         ),
         id="text_classification",
     ),
+    # sentence_pair_classification: SUPERVISED text classification (label in the
+    # CSV, like text_classification) but each .txt is a tab-separated
+    # text_a<TAB>text_b pair. The structural SentencePairValidator gates
+    # malformed files; alignment is the data-derived text profile (#805).
+    pytest.param(
+        _cfg(
+            table="e2e_spc",
+            category="sentence_pair_classification",
+            csv=str(T / "sentence_pair_classification/data/labels_file_sample.csv"),
+            texts=str(T / "sentence_pair_classification/data/texts"),
+            label="label",
+        ),
+        id="sentence_pair_classification",
+    ),
     # token_classification was uncovered by any e2e test (audit gap). Same
     # on-disk layout as text classification (one .txt per sample under texts/);
     # the BIO tags travel in the `label` column. The template CSV quotes the

@@ -49,10 +49,13 @@ IMAGE_CATEGORIES: FrozenSet[str] = frozenset(
 # text/token classification here (they read raw text, not the pre-tokenized
 # ``sequences/`` MLM uses); they are self-supervised, but that only governs
 # label handling, not the file_options default this set drives.
+# sentence_pair_classification also belongs here — supervised, but its .txt is
+# still raw text (a tab-separated ``text_a\ttext_b`` pair) staged from ``texts/``.
 TEXT_CATEGORIES: FrozenSet[str] = frozenset(
     {
         TaskCategory.TEXT_CLASSIFICATION,
         TaskCategory.TOKEN_CLASSIFICATION,
+        TaskCategory.SENTENCE_PAIR_CLASSIFICATION,
         TaskCategory.CAUSAL_LANGUAGE_MODELING,
         TaskCategory.SEQ2SEQ,
         TaskCategory.EMBEDDINGS,

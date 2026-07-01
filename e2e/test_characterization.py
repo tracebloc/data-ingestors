@@ -118,6 +118,18 @@ CASES = [
         roundtrip_col=None,
     ),
     dict(
+        id="sentence_pair_classification",
+        cfg=_cfg(
+            table="char_spc",
+            category="sentence_pair_classification",
+            csv=str(T / "sentence_pair_classification/data/labels_file_sample.csv"),
+            texts=str(T / "sentence_pair_classification/data/texts"),
+            label="label",
+        ),
+        sidecars=[str(T / "sentence_pair_classification/data/texts")],
+        roundtrip_col=None,
+    ),
+    dict(
         id="time_to_event_prediction",
         cfg=_cfg(
             table="char_tte",
