@@ -71,12 +71,10 @@ def make_ingestor(records=None, **overrides):
     db.create_table.return_value = MagicMock(name="table")
     db.insert_batch.return_value = ([1, 2], [])  # ids, db_failures
     db.get_table_schema.return_value = {"a": "INT"}
+    db.get_label_counts.return_value = {"cat": 2}
+    db.get_samples.return_value = []
     api = MagicMock(name="APIClient")
-    api.send_batch.return_value = True
-    api.send_generate_edge_label_meta.return_value = True
-    api.send_global_meta_meta.return_value = True
-    api.prepare_dataset.return_value = True
-    api.create_dataset.return_value = {"id": 1}
+    api.send_ingest_summary.return_value = {"dataset_id": 1, "dataset_key": "key"}
 
     kwargs = dict(
         database=db,
@@ -91,11 +89,10 @@ def make_ingestor(records=None, **overrides):
 
 
 # ---------------------------------------------------------------------------
-# 1. send_batch logs the actual backend error, not a 100-char stub
+# 1. send_ingest_summary logs the actual backend error, not a 100-char stub
 # ---------------------------------------------------------------------------
 
-# A realistic DRF batch-rejection body: well past the old 100-char cutoff
-# (str(e) started with "HTTP 400: ", leaving ~90 chars of body).
+# A realistic DRF batch-rejection body: well past the old 100-char cutoff.
 _DRF_400_BODY = (
     '[{"data_id": ["This field may not be blank."], '
     '"label": ["Object with label=tok_cls_O does not exist. '
@@ -104,45 +101,54 @@ _DRF_400_BODY = (
 )
 
 
-def test_send_batch_400_logs_status_and_full_field_error(caplog):
+def _summary_call(client):
+    return client.send_ingest_summary(
+        table_name="tbl", ingestor_id="ing", labels={"cat": 1},
+        dataset_title="T", data_format="image", data_intent="train",
+        category="image_classification", schema={}, samples=[],
+    )
+
+
+def test_send_ingest_summary_400_logs_status_and_full_error(caplog):
     client = _client()
     with patch.object(client.session, "post", return_value=_resp(400, text=_DRF_400_BODY)):
         with caplog.at_level(logging.ERROR, logger="tracebloc_ingestor.api.client"):
-            assert client.send_batch([(1, {"data_id": "a"})], "tbl", "ing") is False
+            with pytest.raises(requests.exceptions.HTTPError):
+                _summary_call(client)
     joined = "\n".join(r.getMessage() for r in caplog.records)
-    assert "Error sending batch to API" in joined
+    assert "Error sending ingest summary" in joined
     assert "HTTP 400" in joined
-    # The tail of the DRF body — beyond the old [:100] truncation — must be
-    # visible so the operator can see WHY the backend rejected the batch.
     assert "well past the first hundred characters" in joined
 
 
-def test_send_batch_400_body_capped_at_2000_chars(caplog):
+def test_send_ingest_summary_400_body_capped_at_2000_chars(caplog):
     client = _client()
     huge = "x" * 5000
     with patch.object(client.session, "post", return_value=_resp(400, text=huge)):
         with caplog.at_level(logging.ERROR, logger="tracebloc_ingestor.api.client"):
-            client.send_batch([(1, {"data_id": "a"})], "tbl", "ing")
+            with pytest.raises(requests.exceptions.HTTPError):
+                _summary_call(client)
     joined = "\n".join(r.getMessage() for r in caplog.records)
     assert "x" * 2000 in joined
     assert "x" * 2001 not in joined
 
 
-def test_send_batch_connection_error_still_logged(caplog):
+def test_send_ingest_summary_connection_error_still_logged(caplog):
     client = _client()
     with patch.object(
         client.session, "post",
         side_effect=requests.exceptions.ConnectionError("conn refused"),
     ):
         with caplog.at_level(logging.ERROR, logger="tracebloc_ingestor.api.client"):
-            assert client.send_batch([(1, {"data_id": "a"})], "tbl", "ing") is False
+            with pytest.raises(requests.exceptions.ConnectionError):
+                _summary_call(client)
     joined = "\n".join(r.getMessage() for r in caplog.records)
-    assert "Error sending batch to API" in joined
+    assert "Error sending ingest summary" in joined
     assert "conn refused" in joined
 
 
 # ---------------------------------------------------------------------------
-# 2. ingest() surfaces API-send failures: returned, counted, summarized
+# 2. ingest() surfaces summary failures: raise propagates, DB failures counted
 # ---------------------------------------------------------------------------
 
 def _run_ingest(ing, batch_size=10):
@@ -161,38 +167,34 @@ def _run_ingest(ing, batch_size=10):
     return failed, captured.get("summary")
 
 
-def test_ingest_api_send_failure_returns_failed_records():
+def test_ingest_summary_failure_raises_out_of_ingest():
+    """send_ingest_summary failing raises out of ingest() so cli.run.main
+    returns 1 and the template scripts exit non-zero."""
     records = [{"a": "1", "filename": "f1"}, {"a": "2", "filename": "f2"}]
     ing = make_ingestor(records=records, category=None)
-    ing.api_client.send_batch.return_value = False  # every batch POST rejected
+    ing.api_client.send_ingest_summary.side_effect = RuntimeError("backend rejected")
 
-    failed, summary = _run_ingest(ing)
-
-    # Every inserted-but-unsent record comes back as a failed record, so
-    # cli.run.main returns 1 and the template scripts sys.exit(1).
-    assert len(failed) == 2
-    assert all(f["error"] == "api_send_failed" for f in failed)
-
-    # The summary must not claim the records shipped.
-    assert summary.inserted_records == 2
-    assert summary.api_sent_records == 0
-    assert summary.has_failures is True
+    with patch.object(base_mod, "Session") as Sess, \
+         patch.object(ing, "validate_data", return_value=True):
+        Sess.return_value.__enter__.return_value = MagicMock()
+        with pytest.raises(RuntimeError, match="backend rejected"):
+            ing.ingest("src", batch_size=10)
 
 
-def test_ingest_api_send_failure_on_final_partial_batch():
-    # 3 records with batch_size=2 exercises BOTH flush sites (in-loop and
-    # final partial batch).
+def test_ingest_summary_failure_on_partial_batch():
+    """Same guard with 3 records split across 2 batches (exercises both flush
+    sites — in-loop and final partial batch)."""
     records = [{"a": str(i), "filename": f"f{i}"} for i in range(3)]
     ing = make_ingestor(records=records, category=None)
-    ing.api_client.send_batch.return_value = False
-    # insert_batch must echo the actual batch size, not the fixture's [1, 2]
+    ing.api_client.send_ingest_summary.side_effect = RuntimeError("backend rejected")
     ing.database.insert_batch.side_effect = lambda t, b: (list(range(len(b))), [])
+    ing.database.get_label_counts.return_value = {"cat": 3}
 
-    failed, summary = _run_ingest(ing, batch_size=2)
-
-    assert len(failed) == 3
-    assert summary.inserted_records == 3
-    assert summary.api_sent_records == 0
+    with patch.object(base_mod, "Session") as Sess, \
+         patch.object(ing, "validate_data", return_value=True):
+        Sess.return_value.__enter__.return_value = MagicMock()
+        with pytest.raises(RuntimeError, match="backend rejected"):
+            ing.ingest("src", batch_size=2)
 
 
 def test_ingest_api_success_keeps_failed_records_empty():
@@ -239,20 +241,15 @@ def test_ingest_partial_db_failure_not_double_counted():
     assert summary.failed_records == 1
 
 
-def test_ingest_mid_batch_db_failure_plus_api_failure_tags_right_records():
-    # Bugbot regression guard: insert_batch's per-record fallback appends
-    # successes in scan order, so after a MID-batch DB failure the inserted
-    # records are NOT the first len(ids) entries. The api_send_failed tag
-    # must land on the records that actually inserted (here: #0 and #2),
-    # not on a batch[:len(ids)] prefix that would include the DB-failed #1
-    # and omit #2.
+def test_ingest_mid_batch_db_failure_only_db_failure_in_failed():
+    # Mid-batch DB failure: 2 of 3 records insert, 1 fails. send_ingest_summary
+    # is still called (some records inserted), and only the DB failure appears
+    # in failed — no api_send_failed entries since the summary call succeeded.
     records = [{"a": str(i), "filename": f"f{i}"} for i in range(3)]
     ing = make_ingestor(records=records, category=None)
-    ing.api_client.send_batch.return_value = False
+    ing.database.get_label_counts.return_value = {"a": 2}
 
     def fake_insert(table_name, batch):
-        # Middle record fails; failure carries a COPY of the record (the
-        # real insert_batch builds processed_record = {**record, ...}).
         failed_copy = {**batch[1], "updated_at": "now"}
         return [10, 12], [{"record": failed_copy, "error": "dup key"}]
 
@@ -260,12 +257,11 @@ def test_ingest_mid_batch_db_failure_plus_api_failure_tags_right_records():
 
     failed, summary = _run_ingest(ing)
 
-    api_failed = [f for f in failed if f["error"] == "api_send_failed"]
-    assert {f["record"]["a"] for f in api_failed} == {"0", "2"}
-    assert [f["error"] for f in failed if f["error"] != "api_send_failed"] == ["dup key"]
+    assert [f["error"] for f in failed] == ["dup key"]
     assert summary.inserted_records == 2
-    assert summary.api_sent_records == 0
+    assert summary.api_sent_records == 2
     assert summary.failed_records == 1
+    ing.api_client.send_ingest_summary.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
