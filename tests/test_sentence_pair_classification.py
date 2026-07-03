@@ -285,16 +285,17 @@ def test_spc_binary_content_rejected(clean_env, tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_spc_api_send_failure_counts_every_record(clean_env):
-    """Every batch POST rejected -> every sentence_pair record returns as a
-    failure, so the run exits non-zero (the file-transfer branch runs since
-    sentence_pair is file-bearing)."""
+def test_spc_ingest_summary_failure_raises_out_of_ingest(clean_env):
+    """The per-batch API publish is gone (#325): a single send_ingest_summary
+    call is made after commit. When it fails, the error raises out of ingest()
+    so the run exits non-zero (the file-transfer branch runs since sentence_pair
+    is file-bearing)."""
     records = [
         {"a": "1", "filename": "f1", "label": "entailment"},
         {"a": "2", "filename": "f2", "label": "neutral"},
     ]
     ing = make_ingestor(records=records)
-    ing.api_client.send_batch.return_value = False
+    ing.api_client.send_ingest_summary.side_effect = RuntimeError("backend rejected")
 
     with patch.object(base_mod, "Session") as Sess, patch.object(
         ing, "validate_data", return_value=True
@@ -302,9 +303,7 @@ def test_spc_api_send_failure_counts_every_record(clean_env):
         base_mod,
         "map_file_transfer",
         side_effect=lambda c, r, o, cfg=None, source_record=None: r,
-    ):
+    ), patch.object(base_mod, "compute_text_profile", return_value=None):
         Sess.return_value.__enter__.return_value = MagicMock()
-        failed = ing.ingest("src", batch_size=10)
-
-    assert len(failed) == 2
-    assert all(f["error"] == "api_send_failed" for f in failed)
+        with pytest.raises(RuntimeError, match="backend rejected"):
+            ing.ingest("src", batch_size=10)
