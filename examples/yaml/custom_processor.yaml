@@ -1,8 +1,25 @@
-# Custom processor escape hatch: when convention defaults aren't enough,
-# customers can plug in a `BaseProcessor` subclass *without* building their
-# own Docker image.
+# =============================================================================
+# !! WARNING — NOT YET EXECUTED (planned for v1.1) !!
 #
-# How it lands in the cluster:
+# `spec.processors` is accepted by the schema but is NOT yet executed at
+# runtime. Custom-processor support requires the Helm subchart from client#86
+# to land first. The entrypoint (cli/run.py) logs a warning, SKIPS every
+# processor listed here, and continues without them — the job still exits 0.
+#
+# `spec.validators` overrides are likewise accepted by the schema but not yet
+# honoured at runtime; the default validator set from map_validators(category)
+# runs instead.
+#
+# Concretely for the example below: the `encrypted_diagnosis` column would be
+# ingested STILL ENCRYPTED, with no error. Do not write `spec.processors:` (or
+# `spec.validators:`) until v1.1 ships.
+# =============================================================================
+#
+# Planned design (v1.1) — custom processor escape hatch: when convention
+# defaults aren't enough, customers can plug in a `BaseProcessor` subclass
+# *without* building their own Docker image.
+#
+# How it will land in the cluster:
 #   - The Helm subchart (client#86) takes the script body as a chart value.
 #   - The chart writes a ConfigMap holding the script.
 #   - The ingestor pod mounts the ConfigMap at /custom/.
