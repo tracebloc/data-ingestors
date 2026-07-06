@@ -83,6 +83,20 @@ def test_send_ingest_summary_http_error_raises():
             _summary_call(client)
 
 
+def test_send_ingest_summary_409_returns_existing_dataset():
+    """Backend #900 returns 409 + {dataset_id, dataset_key} when the
+    (owner, ingestor_id) dataset already exists (e.g. a transport-level POST
+    retry after a dropped 201). That 409 is a success signal for the retry —
+    the client must return the existing dataset, not raise (issue #332)."""
+    client = _client()
+    with patch.object(
+        client.session, "post",
+        return_value=_resp(409, {"dataset_id": 7, "dataset_key": "existing"}),
+    ):
+        result = _summary_call(client)
+    assert result == {"dataset_id": 7, "dataset_key": "existing"}
+
+
 def test_send_ingest_summary_local_mode():
     client = _client(EDGE_ENV="local")
     with patch.object(client.session, "post") as post:
