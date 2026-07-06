@@ -1,14 +1,11 @@
 """Blob Data Ingestion Example.
 
-This example demonstrates how to ingest binary data (BLOBs) from a CSV file into a database
-and optionally send it to an API. It handles base64 encoded binary data.
+This example demonstrates how to ingest binary data (BLOBs) from a CSV file
+into a database using BLOB/LONGBLOB schema columns.
 """
 
-import base64
-import json
 import logging
 from pathlib import Path
-from typing import Dict, Any
 
 from tracebloc_ingestor import Config, Database, APIClient, CSVIngestor
 from tracebloc_ingestor.utils.logging import setup_logging
@@ -46,12 +43,7 @@ def main():
             "on_bad_lines": "warn",  # Just warn about bad lines instead of failing
         }
 
-        # Create blob data processor
-        blob_processor = BlobDataProcessor(
-            config=config, storage_path=config.STORAGE_PATH
-        )
-
-        # Create ingestor with blob processor
+        # Create ingestor
         ingestor = CSVIngestor(
             database=database,
             api_client=api_client,
