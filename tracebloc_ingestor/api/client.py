@@ -279,6 +279,22 @@ class APIClient:
                 timeout=API_TIMEOUT,
             )
 
+            # 409 = backend idempotency guard (backend #900): the
+            # (owner, ingestor_id) dataset already exists — e.g. urllib3
+            # re-sent this POST after a dropped/timed-out 201 on a long
+            # ingest (POST is in the retry adapter's allowed_methods). The
+            # body carries the existing {dataset_id, dataset_key}. This is a
+            # success signal for the retry, not a failure — parse and return
+            # it rather than crashing an ingest whose dataset was created.
+            if response.status_code == 409:
+                result = self._parse_json(response, required=True)
+                logger.info(
+                    f"{GREEN}Dataset already registered (idempotent retry): "
+                    f"key={result.get('dataset_key')} "
+                    f"id={result.get('dataset_id')}{RESET}"
+                )
+                return result
+
             # Check status after retries are exhausted. Attach the response
             # so the handler below can log the status and body — a bare
             # HTTPError has e.response = None, which would hide the field

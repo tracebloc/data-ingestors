@@ -602,6 +602,13 @@ class BaseIngestor(ABC):
                 self._log_summary(summary)
 
             except Exception as e:
+                # NOTE: rows are already committed above (session.commit()),
+                # so this rollback is a no-op on the inserted data — it only
+                # discards any uncommitted state. If send_ingest_summary
+                # fails for real (a genuine 400/500), the rows remain in
+                # MySQL with no registered dataset; we raise loudly rather
+                # than silently swallow that. A 409 is handled inside the
+                # client as an idempotent success and does not reach here.
                 session.rollback()
                 logger.error(f"Error during ingestion: {str(e)}")
                 raise e
