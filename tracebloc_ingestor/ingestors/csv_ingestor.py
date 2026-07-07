@@ -8,6 +8,7 @@ from typing import Dict, Any, Generator, Optional, List
 import csv as _csv
 import numpy as np
 import pandas as pd
+from ..utils import redaction
 import logging
 from pathlib import Path
 
@@ -44,11 +45,13 @@ def _raise_on_overflow(
     # `converted`; pd.to_numeric never produces NaN from an inf path.
     overflowed = np.isinf(converted) | (np.isnan(converted) & original.notna())
     if overflowed.any():
-        offenders = original[overflowed].head(5).tolist()
+        offender_rows = original.index[overflowed][:5].tolist()
         raise ValueError(
             f"Column '{column}' (dtype {dtype}) contains "
             f"{int(overflowed.sum())} value(s) that overflow IEEE float "
-            f"(±inf / NaN). Sample: {offenders}. ``pd.to_numeric`` "
+            f"(±inf / NaN) at "
+            f"{redaction.row_refs(offender_rows, int(overflowed.sum()))}. "
+            f"``pd.to_numeric`` "
             f"silently converted overflow (e.g. ``1e400``) into ±inf; "
             f"this guard surfaces it at cast time instead of letting it "
             f"reach MySQL."
@@ -84,22 +87,25 @@ def _cast_datetime_strict(series: pd.Series, column: str, dtype: str) -> pd.Seri
     except Exception as exc:
         # Surface the offender per the project convention: name the
         # column, dtype, and a sample of the bad tokens.
-        offenders = (
-            series[
-                pd.to_datetime(series, errors="coerce", format="mixed").isna()
-                & series.notna()
-            ]
-            .astype(str)
-            .head(5)
-            .tolist()
+        bad_mask = (
+            pd.to_datetime(series, errors="coerce", format="mixed").isna()
+            & series.notna()
+        )
+        offender_rows = series.index[bad_mask][:5].tolist()
+        # Shape, not content: the FORMAT is the diagnosis for date errors.
+        shapes = sorted(
+            {redaction.mask_shape(v) for v in series[bad_mask].head(5)}
         )
         raise ValueError(
             f"Column '{column}' (dtype {dtype}) has un-parseable date "
-            f"value(s). Sample: {offenders}. The cast layer raises on "
+            f"value(s) at {redaction.row_refs(offender_rows, int(bad_mask.sum()))} "
+            f"(masked shapes: {shapes}). The cast layer raises on "
             f"un-parseable dates (matching the numeric branch); fix the "
             f"value(s) or declare the column as VARCHAR if the content "
-            f"isn't actually a date. (Underlying parser error: {exc})"
-        ) from exc
+            f"isn't actually a date. (Parser: {type(exc).__name__} — its "
+            f"message is suppressed; pandas embeds the raw cell value, "
+            f"which must not reach logs, #226.)"
+        ) from None
 
 
 class CSVIngestor(BaseIngestor):
@@ -234,9 +240,21 @@ class CSVIngestor(BaseIngestor):
                     # Int64 keeps integers integral and stores missing as pd.NA
                     # (-> SQL NULL); default errors="raise" still surfaces a
                     # genuinely non-numeric value as a clear per-column error.
-                    # (Safe now: the only values that make to_numeric return an
-                    # object dtype are out-of-int64 ints, already rejected above.)
-                    converted = pd.to_numeric(df[column])
+                    # Coerce-then-check instead of errors="raise": pandas'
+                    # own raise message embeds the offending cell value,
+                    # which must not reach logs (#226) — and while
+                    # DataValidator gates tabular categories first, image-
+                    # family categories and category=None runs reach this
+                    # cast un-gated.
+                    converted = pd.to_numeric(df[column], errors="coerce")
+                    non_numeric = converted.isna() & df[column].notna()
+                    if non_numeric.any():
+                        offender_rows = df.index[non_numeric][:5].tolist()
+                        raise ValueError(
+                            f"Column '{column}' contains {int(non_numeric.sum())} "
+                            f"non-numeric value(s) at "
+                            f"{redaction.row_refs(offender_rows, int(non_numeric.sum()))}."
+                        )
                     _raise_on_overflow(column, df[column], converted, dtype)
                     df[column] = converted.astype("Int64")
                 elif any(t in dtype.upper() for t in ("FLOAT", "DOUBLE", "DECIMAL", "NUMERIC")):
@@ -256,10 +274,11 @@ class CSVIngestor(BaseIngestor):
                     converted = pd.to_numeric(df[column], errors="coerce")
                     non_numeric = converted.isna() & df[column].notna()
                     if non_numeric.any():
-                        sample = df[column][non_numeric].head(5).tolist()
+                        offender_rows = df.index[non_numeric][:5].tolist()
                         raise ValueError(
                             f"Column '{column}' contains {int(non_numeric.sum())} "
-                            f"non-numeric value(s). Sample: {sample}"
+                            f"non-numeric value(s) at "
+                            f"{redaction.row_refs(offender_rows, int(non_numeric.sum()))}."
                         )
                     # inf guard (e.g. an overflow that coerced to ±inf). Safe to
                     # call np.isinf here: `converted` is now a float series, never
@@ -315,9 +334,20 @@ class CSVIngestor(BaseIngestor):
                         )
                     )
             except Exception as e:
+                # Our own ValueErrors above are already content-safe; any
+                # OTHER exception may embed cell values (pandas/numpy
+                # messages do), so report only its type and sever the chain
+                # — a logged traceback must not resurrect the content (#226).
+                if isinstance(e, ValueError):
+                    raise ValueError(
+                        f"{RED}Data type validation failed for column "
+                        f"{column}: {str(e)}{RESET}"
+                    ) from None
                 raise ValueError(
-                    f"{RED}Data type validation failed for column {column}: {str(e)}{RESET}"
-                )
+                    f"{RED}Data type validation failed for column {column}: "
+                    f"{type(e).__name__} (message suppressed — it can embed "
+                    f"cell values, #226){RESET}"
+                ) from None
 
     def read_data(self, file_path: str) -> Generator[Dict[str, Any], None, None]:
         """Read and validate CSV file using pandas optimizations.

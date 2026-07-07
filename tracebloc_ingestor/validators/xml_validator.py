@@ -11,6 +11,7 @@ import logging
 
 from .base import BaseValidator, ValidationResult
 from ..config import Config
+from ..utils import redaction
 
 config = Config()
 logger = logging.getLogger(__name__)
@@ -453,7 +454,8 @@ class PascalVOCXMLValidator(BaseValidator):
                         metadata[elem_name] = value
                 except (ValueError, TypeError):
                     errors.append(
-                        f"{elem_name} must be a valid integer, found: {elem.text}"
+                        f"{elem_name} must be a valid integer, found "
+                        f"(masked): {redaction.mask_shape(elem.text)}"
                     )
             elif elem_name in self.required_size_elements:
                 errors.append(f"Missing required '{elem_name}' element")
@@ -658,7 +660,9 @@ class PascalVOCXMLValidator(BaseValidator):
                         coords[coord_name] = value
                 except (ValueError, TypeError):
                     errors.append(
-                        f"Object {index}: {coord_name} must be a valid integer, found: {coord_elem.text}"
+                        f"Object {index}: {coord_name} must be a valid "
+                        f"integer, found (masked): "
+                        f"{redaction.mask_shape(coord_elem.text)}"
                     )
             elif coord_name in self.required_bndbox_elements:
                 errors.append(

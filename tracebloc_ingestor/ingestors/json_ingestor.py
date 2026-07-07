@@ -15,6 +15,8 @@ from pathlib import Path
 import ijson
 import pandas as pd
 
+from ..utils import redaction
+
 
 def _peek_json_shape(path: Path) -> Optional[str]:
     """Detect whether a JSON file is a single object or an array of
@@ -80,14 +82,14 @@ def _validate_value_against_dtype(value: Any, dtype_upper: str) -> None:
         ts = pd.to_datetime(str(value), errors="coerce")
         if pd.isna(ts):
             raise ValueError(
-                f"value {value!r} is not a valid {dtype_upper} (expected an "
+                f"value {redaction.mask_shape(value)!r} is not a valid {dtype_upper} (expected an "
                 f"ISO 8601 date-time)"
             )
     elif "DATE" in dtype_upper or "TIME" in dtype_upper:
         ts = pd.to_datetime(str(value), errors="coerce")
         if pd.isna(ts):
             raise ValueError(
-                f"value {value!r} is not a valid {dtype_upper}"
+                f"value {redaction.mask_shape(value)!r} is not a valid {dtype_upper}"
             )
     elif "BOOL" in dtype_upper:
         # ``bool(value)`` is truthy for any non-empty value, so "maybe" / 2
@@ -110,7 +112,7 @@ def _validate_value_against_dtype(value: Any, dtype_upper: str) -> None:
             if not pd.isna(num) and num in (0, 1):
                 return
         raise ValueError(
-            f"value {value!r} is not a valid BOOLEAN (expected true/false, "
+            f"value {redaction.mask_shape(value)!r} is not a valid BOOLEAN (expected true/false, "
             f"yes/no, 1/0, or a recognised string form)"
         )
     elif "INT" in dtype_upper:
@@ -125,7 +127,7 @@ def _validate_value_against_dtype(value: Any, dtype_upper: str) -> None:
         try:
             f = float(value)
         except (TypeError, ValueError):
-            raise ValueError(f"value {value!r} is not numeric")
+            raise ValueError(f"value {redaction.mask_shape(value)!r} is not numeric")
         # Reject non-finite (inf / -inf / NaN) before is_integer(). inf and
         # NaN both return False from is_integer() in CPython today, so the
         # check below already rejects them — but make the guard explicit so
@@ -134,7 +136,7 @@ def _validate_value_against_dtype(value: Any, dtype_upper: str) -> None:
         # ``_non_finite_error`` on the CSV path).
         if not math.isfinite(f):
             raise ValueError(
-                f"value {value!r} is non-finite (inf/NaN) and cannot be "
+                f"value {redaction.mask_shape(value)!r} is non-finite (inf/NaN) and cannot be "
                 f"stored in an INT column"
             )
         # Reject values beyond signed 64-bit range with the same verdict the
@@ -149,18 +151,18 @@ def _validate_value_against_dtype(value: Any, dtype_upper: str) -> None:
                 else " (declare the column as BIGINT for larger integers)"
             )
             raise ValueError(
-                f"value {value!r} is outside the signed 64-bit integer range "
+                f"value {redaction.mask_shape(value)!r} is outside the signed 64-bit integer range "
                 f"(max {coercion.INT64_MAX}){hint}"
             )
         if not f.is_integer():
             raise ValueError(
-                f"value {value!r} is not an integer (would silently truncate)"
+                f"value {redaction.mask_shape(value)!r} is not an integer (would silently truncate)"
             )
     elif any(t in dtype_upper for t in ("FLOAT", "DOUBLE", "DECIMAL", "NUMERIC")):
         try:
             f = float(value)
         except (TypeError, ValueError):
-            raise ValueError(f"value {value!r} is not numeric")
+            raise ValueError(f"value {redaction.mask_shape(value)!r} is not numeric")
         # Reject inf / -inf / NaN. ``float("Infinity")`` returns +inf
         # without raising, so the bare float() above lets non-finite values
         # through silently; DataValidator's FLOAT branch already rejects
@@ -168,7 +170,7 @@ def _validate_value_against_dtype(value: Any, dtype_upper: str) -> None:
         # JSON and CSV give the same verdict on the same record.
         if not math.isfinite(f):
             raise ValueError(
-                f"value {value!r} is non-finite (inf/NaN) and cannot be "
+                f"value {redaction.mask_shape(value)!r} is non-finite (inf/NaN) and cannot be "
                 f"stored in a numeric column"
             )
     elif any(t in dtype_upper for t in ("VARCHAR", "CHAR", "TEXT")):
@@ -178,13 +180,13 @@ def _validate_value_against_dtype(value: Any, dtype_upper: str) -> None:
         # is a non-scalar container.
         if isinstance(value, (list, dict, set, tuple)):
             raise ValueError(
-                f"value {value!r} is a non-scalar container; cannot be "
+                f"value {redaction.mask_shape(value)!r} is a non-scalar container; cannot be "
                 f"stored as a {dtype_upper.split('(')[0]}"
             )
         m = re.search(r"\((\d+)\)", dtype_upper)
         if m and len(str(value)) > int(m.group(1)):
             raise ValueError(
-                f"value {value!r} exceeds the declared length "
+                f"value {redaction.mask_shape(value)!r} exceeds the declared length "
                 f"{m.group(1)} (got {len(str(value))} characters)"
             )
 
@@ -385,12 +387,13 @@ class JSONIngestor(BaseIngestor):
         JSON behave consistently with CSV (#235): a bad record aborts the
         run with a clear, non-zero exit instead of vanishing from the
         dataset with only a log line nobody durably sees."""
-        for record in records:
+        for position, record in enumerate(records):
             if not isinstance(record, dict):
                 raise ValueError(
-                    f"{RED}JSON record is not an object: {record!r}. Every item "
-                    f"in a JSON array must be an object mapping column names to "
-                    f"values.{RESET}"
+                    f"{RED}JSON record at position {position} is not an object "
+                    f"(got {type(record).__name__}; content not logged, #226). "
+                    f"Every item in a JSON array must be an object mapping "
+                    f"column names to values.{RESET}"
                 )
             # _validate_record raises ValueError on a type-invalid record;
             # let it propagate (fail-fast) rather than skip-and-continue.

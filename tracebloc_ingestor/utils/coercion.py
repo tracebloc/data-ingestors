@@ -25,6 +25,7 @@ compares or ``isinf``-checks a raw object series.
 from typing import Any, Dict, FrozenSet, List, Optional
 
 import numpy as np
+from . import redaction
 import pandas as pd
 
 __all__ = [
@@ -143,7 +144,7 @@ def int_range_error(original: pd.Series, column: str, mysql_type: str) -> Option
     count = int(mask.sum())
     if count == 0:
         return None
-    sample = original[mask].head(5).tolist()
+    offender_rows = original.index[mask][:5].tolist()
     base = _base_type(mysql_type)
     hint = (
         ""
@@ -152,7 +153,8 @@ def int_range_error(original: pd.Series, column: str, mysql_type: str) -> Option
     )
     return (
         f"Column '{column}' has {count} value(s) outside the signed 64-bit "
-        f"integer range (max {INT64_MAX}): {sample}.{hint}"
+        f"integer range (max {INT64_MAX}) at "
+        f"{redaction.row_refs(offender_rows, count)}.{hint}"
     )
 
 
