@@ -128,6 +128,7 @@ class CSVIngestor(BaseIngestor):
         category: Optional[str] = None,
         data_format: Optional[str] = None,
         label_policy: str = label_policy_module.PASSTHROUGH,
+        data_id_strategy: str = "uuid",
     ):
         """Initialize CSV Ingestor.
 
@@ -162,6 +163,7 @@ class CSVIngestor(BaseIngestor):
             data_format,
             file_options,
             label_policy=label_policy,
+            data_id_strategy=data_id_strategy,
         )
         self.csv_options = csv_options or {}
 
