@@ -1,0 +1,7 @@
+name,document_type,content_type,document_data,thumbnail,metadata
+q3-invoice-001,invoice,application/pdf,JVBERi0xLjQgc2FtcGxlIGludm9pY2UgcGF5bG9hZA==,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAY=,"{""pages"": 2, ""source"": ""erp""}"
+q3-invoice-002,invoice,application/pdf,JVBERi0xLjQgc2Vjb25kIGludm9pY2UgYm9keQ==,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAZ=,"{""pages"": 1, ""source"": ""erp""}"
+annual-report-2025,report,application/pdf,JVBERi0xLjQgYW5udWFsIHJlcG9ydCBjb250ZW50,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCBA=,"{""pages"": 48, ""source"": ""finance""}"
+audit-report-q2,report,application/pdf,JVBERi0xLjQgYXVkaXQgZmluZGluZ3MgYm9keQ==,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCBB=,"{""pages"": 12, ""source"": ""audit""}"
+sla-contract-034,contract,application/pdf,JVBERi0xLjQgc2xhIGNvbnRyYWN0IHRlcm1z,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCBC=,"{""pages"": 9, ""source"": ""legal""}"
+nda-partner-007,contract,application/pdf,JVBERi0xLjQgbmRhIGFncmVlbWVudCBib2R5,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCBD=,"{""pages"": 4, ""source"": ""legal""}"

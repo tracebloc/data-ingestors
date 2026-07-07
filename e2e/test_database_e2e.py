@@ -193,3 +193,17 @@ def test_delete_by_ingestor_id_removes_only_that_run(db, table):
     assert rows == [("c", "run-registered")]
     # idempotent: a second delete is a harmless no-op
     assert db.delete_by_ingestor_id(table, "run-failed") == 0
+
+
+def test_blob_columns_roundtrip_from_string_cells(db, table):
+    """BLOB/LONGBLOB columns accept str cells (CSV/JSON deliver strings) —
+    encoded to bytes at insert (Bugbot on #330: the blob example could never
+    ingest; SQLAlchemy raised StatementError(TypeError) on every row)."""
+    db.create_table(table, {"payload": "LONGBLOB", "thumb": "BLOB"})
+    ids, failures = db.insert_batch(
+        table,
+        [_rec("a", payload="JVBERi0xLjQ=", thumb="iVBOR")],
+    )
+    assert failures == []
+    rows = _query(f"SELECT payload, thumb FROM `{table}`")
+    assert rows[0][0] == b"JVBERi0xLjQ=" and rows[0][1] == b"iVBOR"

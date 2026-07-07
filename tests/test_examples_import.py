@@ -48,3 +48,19 @@ def test_example_imports_cleanly(script: Path, clean_env, tmp_path, monkeypatch)
         spec.loader.exec_module(module)
     finally:
         sys.modules.pop(module_name, None)
+
+
+def test_example_data_paths_exist():
+    """Every `... / "data" / "<file>"` an example references must ship in the
+    repo — a dangling path means the documented example cannot run as
+    shipped (Bugbot on #330: blob_documents_sample.csv was missing)."""
+    import re
+    from pathlib import Path
+
+    examples_dir = Path(__file__).resolve().parent.parent / "examples"
+    missing = []
+    for script in sorted(examples_dir.glob("*.py")):
+        for name in re.findall(r'/\s*"data"\s*/\s*"([^"]+)"', script.read_text()):
+            if not (examples_dir / "data" / name).is_file():
+                missing.append(f"{script.name} -> data/{name}")
+    assert not missing, f"examples reference data files that don't exist: {missing}"
