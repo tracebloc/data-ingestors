@@ -218,6 +218,7 @@ class JSONIngestor(BaseIngestor):
         file_options: Optional[Dict[str, Any]] = None,
         log_level: Optional[int] = None,
         label_policy: str = label_policy_module.PASSTHROUGH,
+        data_id_strategy: str = "uuid",
     ):
         """Initialize JSON Ingestor.
 
@@ -255,6 +256,7 @@ class JSONIngestor(BaseIngestor):
             data_format,
             file_options,
             label_policy=label_policy,
+            data_id_strategy=data_id_strategy,
         )
         self.json_options = json_options or {}
         if log_level is not None:

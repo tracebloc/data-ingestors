@@ -190,7 +190,8 @@ class ResolvedConfig:
     label_policy: str = "passthrough"  # "passthrough" | "bucket"
 
     # ----- data_id -----
-    unique_id_column: Optional[str] = None  # None ⇒ UUID generation
+    unique_id_column: Optional[str] = None  # None ⇒ strategy below decides
+    data_id_strategy: str = "uuid"  # uuid | content_hash (column ⇒ unique_id_column)
 
     # ----- Pass-through to ingestors -----
     annotation_column: Optional[str] = None
@@ -267,13 +268,18 @@ def resolve(config: Dict[str, Any]) -> ResolvedConfig:
         resolved.label_column = label["column"]
         resolved.label_policy = label.get("policy", "passthrough")
 
-    # 5. data_id — strategy: uuid (default, no source col leaves the cluster)
-    #    or column (loud, opt-in, captured in unique_id_column for the
-    #    BaseIngestor warning we added in #43).
+    # 5. data_id — strategy: uuid (default, no source col leaves the cluster),
+    #    column (loud, opt-in, captured in unique_id_column for the
+    #    BaseIngestor warning we added in #43), or content_hash (#225:
+    #    deterministic salted hash — a Job retry re-claims its previous rows
+    #    via the data_id UNIQUE upsert instead of duplicating them; landed
+    #    dark, default stays uuid until a release of soak).
     data_id = config.get("data_id") or {}
     if data_id.get("strategy") == "column":
         resolved.unique_id_column = data_id["column"]
-    # else: leave unique_id_column = None ⇒ UUID generation
+    elif data_id.get("strategy") == "content_hash":
+        resolved.data_id_strategy = "content_hash"
+    # else: leave defaults ⇒ UUID generation
 
     # 6. csv_options — merge customer overrides over defaults.
     csv_overrides = (config.get("spec") or {}).get("csv_options") or {}

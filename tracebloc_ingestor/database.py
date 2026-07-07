@@ -23,6 +23,7 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.dialects.mysql import insert, LONGBLOB, BLOB
 from sqlalchemy.exc import OperationalError, InterfaceError, DBAPIError
 import logging
+import secrets
 
 from .utils import redaction
 from urllib.parse import quote
@@ -225,6 +226,11 @@ class Database:
                 column (e.g. a user CSV with its own ``id``), which would
                 otherwise surface as a cryptic SQLAlchemy DuplicateColumnError.
         """
+        if table_name == self.SALT_TABLE:
+            raise ValueError(
+                f"{table_name!r} is reserved for the content-hash salt store "
+                "(#225) and cannot be used as a dataset table."
+            )
         # Fail fast on reserved-column collisions before any DB I/O. `label`
         # is intentionally excluded — it's the user-facing label column the
         # framework maps onto the standard `label` column.
@@ -525,6 +531,56 @@ class Database:
 
         return result["success_ids"], result["failures"]
 
+    SALT_TABLE = "tracebloc_ingest_meta"
+
+    def get_or_create_table_salt(self, table_name: str) -> str:
+        """
+        Return the per-table salt for content-hash ``data_id`` derivation
+        (#225), creating it atomically on first use.
+
+        The salt is 32 random bytes (hex) stored ONLY in the cluster's MySQL
+        — it never appears in any payload that leaves the cluster. Salting
+        per table means identical content in two tables (or two clusters)
+        yields unrelated ids, so the opaque sample ids in the ingest summary
+        can't be correlated across datasets, while a retried run on the SAME
+        table reproduces its ids exactly (the point of #225).
+
+        Concurrency-safe without the table lock: ``INSERT IGNORE`` makes the
+        create atomic — the loser of a race simply reads the winner's salt.
+        """
+        with self.engine.connect() as connection:
+            _execute_with_retry(
+                connection,
+                text(
+                    f"CREATE TABLE IF NOT EXISTS `{self.SALT_TABLE}` ("
+                    "  table_name VARCHAR(64) NOT NULL PRIMARY KEY,"
+                    "  salt CHAR(64) NOT NULL,"
+                    "  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
+                    ")"
+                ),
+            )
+            _execute_with_retry(
+                connection,
+                text(
+                    f"INSERT IGNORE INTO `{self.SALT_TABLE}` (table_name, salt) "
+                    "VALUES (:table_name, :salt)"
+                ).bindparams(table_name=table_name, salt=secrets.token_hex(32)),
+            )
+            connection.commit()
+            row = _execute_with_retry(
+                connection,
+                text(
+                    f"SELECT salt FROM `{self.SALT_TABLE}` "
+                    "WHERE table_name = :table_name"
+                ).bindparams(table_name=table_name),
+            ).fetchone()
+        if row is None:  # pragma: no cover — insert+select on one connection
+            raise RuntimeError(
+                f"Could not create or read the content-hash salt for "
+                f"table {table_name!r}."
+            )
+        return row[0]
+
     def get_label_counts(self, table_name: str, ingestor_id: str) -> Dict[str, int]:
         """
         Return ``{label: row_count}`` for every label inserted by *ingestor_id*.
@@ -555,6 +611,48 @@ class Database:
             key = label if label is not None else ""
             counts[key] = counts.get(key, 0) + cnt
         return counts
+
+    def delete_by_ingestor_id(self, table_name: str, ingestor_id: str) -> int:
+        """
+        Compensating delete (#227): remove every row a single ingest run
+        inserted, identified by its per-process ``ingestor_id``.
+
+        Called from the ingestion failure path when the run will NOT register
+        its dataset with the backend. Rows commit per batch during the ingest
+        loop, so without this a failed run leaves rows that no consumer can
+        reach (training queries are scoped to REGISTERED ingestor_ids) but
+        that inflate the heartbeat's availability report and occupy disk
+        with no remote delete path (the live wound in #336).
+
+        Staged files are deliberately left in place: they are keyed by source
+        filename and idempotently overwritten on re-run.
+
+        Uses ``_execute_with_retry`` so a transient MySQL hiccup does not
+        leave a partial cleanup; a permanent failure propagates to the caller,
+        which logs it loudly while preserving the ORIGINAL ingestion error.
+
+        Args:
+            table_name: Name of the table to clean
+            ingestor_id: UUID of the failed ingest run
+
+        Returns:
+            Number of rows removed
+        """
+        with self.engine.connect() as connection:
+            result = _execute_with_retry(
+                connection,
+                text(
+                    f"DELETE FROM `{table_name.replace('`', '``')}` "
+                    f"WHERE ingestor_id = :ingestor_id"
+                ).bindparams(ingestor_id=ingestor_id),
+            )
+            connection.commit()
+        deleted = result.rowcount if result is not None else 0
+        logger.info(
+            f"Removed {deleted} unregistered row(s) for "
+            f"ingestor_id={ingestor_id!r} from `{table_name}`."
+        )
+        return deleted
 
     def get_samples(
         self, table_name: str, ingestor_id: str, limit: int = 10
