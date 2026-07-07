@@ -20,6 +20,7 @@ from sqlalchemy import (
 
 )
 from sqlalchemy.engine import Engine
+from sqlalchemy import LargeBinary
 from sqlalchemy.dialects.mysql import insert, LONGBLOB, BLOB
 from sqlalchemy.exc import OperationalError, InterfaceError, DBAPIError
 import logging
@@ -403,6 +404,16 @@ class Database:
                 current_time = datetime.now()
                 processed_records = []
 
+                # BLOB/LONGBLOB columns need bytes at bind time — CSV/JSON
+                # cells arrive as str, and SQLAlchemy raises StatementError
+                # (TypeError) on every such row (Bugbot on #330: the blob
+                # example could never actually ingest). Encode once here so
+                # both ingestion paths are covered.
+                blob_columns = {
+                    c.name
+                    for c in table.columns
+                    if isinstance(c.type, (BLOB, LONGBLOB, LargeBinary))
+                }
                 for record in records:
                     processed_record = {
                         **record,
@@ -411,6 +422,11 @@ class Database:
 
                     if "created_at" not in record:
                         processed_record["created_at"] = current_time
+
+                    for col in blob_columns:
+                        val = processed_record.get(col)
+                        if isinstance(val, str):
+                            processed_record[col] = val.encode("utf-8")
 
                     processed_records.append(processed_record)
 
