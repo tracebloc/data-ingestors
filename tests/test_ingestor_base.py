@@ -1241,3 +1241,133 @@ def test_mlm_all_files_missing_fails_before_table_creation(clean_env, tmp_path):
             ing.ingest(str(csv), batch_size=10)
 
     ing.database.create_table.assert_not_called()
+
+
+# ── #227: compensating delete on failed registration ────────────────────────
+# Rows commit per batch during the loop; when the run fails before its dataset
+# registers, the failure path must delete exactly this run's rows (identified
+# by ingestor_id) so the table is clean for a re-run — instead of leaving
+# orphans that trip the stale-table guard (#336).
+
+
+def _ingest_expecting(ing, exc_type):
+    with patch.object(base_mod, "Session") as Sess, patch.object(
+        ing, "validate_data", return_value=True
+    ), patch.object(
+        base_mod,
+        "map_file_transfer",
+        side_effect=lambda c, r, o, cfg=None, source_record=None: r,
+    ):
+        Sess.return_value.__enter__.return_value = MagicMock()
+        with pytest.raises(exc_type):
+            ing.ingest("src", batch_size=10)
+
+
+def test_failed_registration_triggers_compensating_delete():
+    """send_ingest_summary fails terminally → the run's rows are deleted by
+    ingestor_id and the original error still propagates."""
+    from tracebloc_ingestor.utils.constants import TaskCategory
+
+    ing = make_ingestor(
+        records=[{"a": "1", "filename": "f1"}],
+        category=TaskCategory.IMAGE_CLASSIFICATION,
+        label_column="a",
+    )
+    ing.api_client.send_ingest_summary.side_effect = RuntimeError("backend rejected")
+    _ingest_expecting(ing, RuntimeError)
+    ing.database.delete_by_ingestor_id.assert_called_once_with(
+        ing.table_name, ing.ingestor_id
+    )
+
+
+def test_successful_registration_never_deletes():
+    """Happy path: registration succeeds → the compensating delete must not run."""
+    from tracebloc_ingestor.utils.constants import TaskCategory
+
+    ing = make_ingestor(
+        records=[{"a": "1", "filename": "f1"}],
+        category=TaskCategory.IMAGE_CLASSIFICATION,
+        label_column="a",
+    )
+    with patch.object(base_mod, "Session") as Sess, patch.object(
+        ing, "validate_data", return_value=True
+    ), patch.object(
+        base_mod,
+        "map_file_transfer",
+        side_effect=lambda c, r, o, cfg=None, source_record=None: r,
+    ):
+        Sess.return_value.__enter__.return_value = MagicMock()
+        ing.ingest("src", batch_size=10)
+    ing.database.delete_by_ingestor_id.assert_not_called()
+
+
+def test_cleanup_failure_preserves_original_error(caplog):
+    """The delete itself failing must not mask the registration error — the
+    original exception propagates and the orphan state is logged CRITICAL."""
+    import logging
+    from tracebloc_ingestor.utils.constants import TaskCategory
+
+    ing = make_ingestor(
+        records=[{"a": "1", "filename": "f1"}],
+        category=TaskCategory.IMAGE_CLASSIFICATION,
+        label_column="a",
+    )
+    ing.api_client.send_ingest_summary.side_effect = RuntimeError("backend rejected")
+    ing.database.delete_by_ingestor_id.side_effect = Exception("mysql went away")
+    with caplog.at_level(logging.CRITICAL):
+        _ingest_expecting(ing, RuntimeError)  # ORIGINAL error, not the cleanup one
+    assert any("Compensating delete FAILED" in r.message for r in caplog.records)
+
+
+def test_no_rows_inserted_no_delete():
+    """A failure before any row was inserted must not attempt a delete —
+    the table may not even exist yet."""
+    from tracebloc_ingestor.utils.constants import TaskCategory
+
+    ing = make_ingestor(
+        records=[],
+        category=TaskCategory.IMAGE_CLASSIFICATION,
+        label_column="a",
+    )
+    # Force a failure after the commit point but before registration, with
+    # zero inserted rows: get_label_counts blows up on an empty run.
+    ing.database.get_label_counts.side_effect = RuntimeError("boom")
+    with patch.object(base_mod, "Session") as Sess, patch.object(
+        ing, "validate_data", return_value=True
+    ), patch.object(
+        base_mod,
+        "map_file_transfer",
+        side_effect=lambda c, r, o, cfg=None, source_record=None: r,
+    ):
+        Sess.return_value.__enter__.return_value = MagicMock()
+        with pytest.raises(RuntimeError):
+            ing.ingest("src", batch_size=10)
+    ing.database.delete_by_ingestor_id.assert_not_called()
+
+
+def test_late_failure_after_registration_never_deletes():
+    """The dataset_registered guard: an exception AFTER send_ingest_summary
+    succeeded (e.g. in summary rendering) must propagate WITHOUT deleting the
+    now-registered dataset's rows. Mutation check: dropping the
+    `and not dataset_registered` condition fails this test."""
+    from tracebloc_ingestor.utils.constants import TaskCategory
+
+    ing = make_ingestor(
+        records=[{"a": "1", "filename": "f1"}],
+        category=TaskCategory.IMAGE_CLASSIFICATION,
+        label_column="a",
+    )
+    with patch.object(base_mod, "Session") as Sess, patch.object(
+        ing, "validate_data", return_value=True
+    ), patch.object(
+        ing, "_log_summary", side_effect=RuntimeError("render blew up")
+    ), patch.object(
+        base_mod,
+        "map_file_transfer",
+        side_effect=lambda c, r, o, cfg=None, source_record=None: r,
+    ):
+        Sess.return_value.__enter__.return_value = MagicMock()
+        with pytest.raises(RuntimeError):
+            ing.ingest("src", batch_size=10)
+    ing.api_client.send_ingest_summary.assert_called_once()
+    ing.database.delete_by_ingestor_id.assert_not_called()

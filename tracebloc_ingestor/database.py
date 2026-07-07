@@ -589,6 +589,48 @@ class Database:
             counts[key] = counts.get(key, 0) + cnt
         return counts
 
+    def delete_by_ingestor_id(self, table_name: str, ingestor_id: str) -> int:
+        """
+        Compensating delete (#227): remove every row a single ingest run
+        inserted, identified by its per-process ``ingestor_id``.
+
+        Called from the ingestion failure path when the run will NOT register
+        its dataset with the backend. Rows commit per batch during the ingest
+        loop, so without this a failed run leaves rows that no consumer can
+        reach (training queries are scoped to REGISTERED ingestor_ids) but
+        that inflate the heartbeat's availability report and occupy disk
+        with no remote delete path (the live wound in #336).
+
+        Staged files are deliberately left in place: they are keyed by source
+        filename and idempotently overwritten on re-run.
+
+        Uses ``_execute_with_retry`` so a transient MySQL hiccup does not
+        leave a partial cleanup; a permanent failure propagates to the caller,
+        which logs it loudly while preserving the ORIGINAL ingestion error.
+
+        Args:
+            table_name: Name of the table to clean
+            ingestor_id: UUID of the failed ingest run
+
+        Returns:
+            Number of rows removed
+        """
+        with self.engine.connect() as connection:
+            result = _execute_with_retry(
+                connection,
+                text(
+                    f"DELETE FROM `{table_name.replace('`', '``')}` "
+                    f"WHERE ingestor_id = :ingestor_id"
+                ).bindparams(ingestor_id=ingestor_id),
+            )
+            connection.commit()
+        deleted = result.rowcount if result is not None else 0
+        logger.info(
+            f"Removed {deleted} unregistered row(s) for "
+            f"ingestor_id={ingestor_id!r} from `{table_name}`."
+        )
+        return deleted
+
     def get_samples(
         self, table_name: str, ingestor_id: str, limit: int = 10
     ) -> List[Dict[str, Any]]:

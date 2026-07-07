@@ -170,3 +170,26 @@ def test_table_salts_are_per_table(db, table):
         assert len(s1) == 64
     finally:
         _query(f"DROP TABLE IF EXISTS `{other}`")
+
+
+def test_delete_by_ingestor_id_removes_only_that_run(db, table):
+    """#227 compensating delete: removes exactly one run's rows, leaves the
+    other run's rows untouched, and reports the deleted count."""
+    db.create_table(table, {"feature": "FLOAT"})
+    db.insert_batch(
+        table,
+        [
+            _rec("a", feature=1.0, ingestor_id="run-failed"),
+            _rec("b", feature=2.0, ingestor_id="run-failed"),
+            _rec("c", feature=3.0, ingestor_id="run-registered"),
+        ],
+    )
+    assert _query(f"SELECT COUNT(*) FROM `{table}`")[0][0] == 3
+
+    deleted = db.delete_by_ingestor_id(table, "run-failed")
+
+    assert deleted == 2
+    rows = _query(f"SELECT data_id, ingestor_id FROM `{table}`")
+    assert rows == [("c", "run-registered")]
+    # idempotent: a second delete is a harmless no-op
+    assert db.delete_by_ingestor_id(table, "run-failed") == 0
