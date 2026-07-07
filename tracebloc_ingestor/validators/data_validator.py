@@ -14,6 +14,7 @@ from typing import Any, List, Dict, Optional, Union
 from datetime import datetime
 
 import numpy as np
+from ..utils import redaction
 import pandas as pd
 
 from .base import BaseValidator, ValidationResult
@@ -678,10 +679,10 @@ class DataValidator(BaseValidator):
         count = int(mask.sum())
         if count == 0:
             return None
-        sample = series[mask].head(5).tolist()
+        offender_rows = series.index[mask][:5].tolist()
         return (
             f"Column '{column_name}' contains {count} non-finite value(s) "
-            f"(inf/-inf): {sample}"
+            f"(inf/-inf) at {redaction.row_refs(offender_rows, int(mask.sum()))}"
         )
 
     def _validate_int(
@@ -710,10 +711,10 @@ class DataValidator(BaseValidator):
         non_numeric_count = int(non_numeric_mask.sum())
 
         if non_numeric_count > 0:
-            sample = series[non_numeric_mask].head(5).tolist()
+            offender_rows = series.index[non_numeric_mask][:5].tolist()
             errors.append(
-                f"Column '{column_name}' contains {non_numeric_count} non-numeric value(s). "
-                f"Sample invalid values: {sample}"
+                f"Column '{column_name}' contains {non_numeric_count} non-numeric value(s) "
+                f"at {redaction.row_refs(offender_rows, non_numeric_count)}."
             )
 
         non_finite = self._non_finite_error(series, numeric_series, column_name)
@@ -783,10 +784,10 @@ class DataValidator(BaseValidator):
         non_numeric_count = int(non_numeric_mask.sum())
 
         if non_numeric_count > 0:
-            sample = series[non_numeric_mask].head(5).tolist()
+            offender_rows = series.index[non_numeric_mask][:5].tolist()
             errors.append(
-                f"Column '{column_name}' contains {non_numeric_count} non-numeric value(s). "
-                f"Sample invalid values: {sample}"
+                f"Column '{column_name}' contains {non_numeric_count} non-numeric value(s) "
+                f"at {redaction.row_refs(offender_rows, non_numeric_count)}."
             )
 
         non_finite = self._non_finite_error(series, numeric_series, column_name)
@@ -866,7 +867,8 @@ class DataValidator(BaseValidator):
                 if len(invalid_values) > 0:
                     errors.append(
                         f"Column '{column_name}' contains non-boolean values. "
-                        f"Found {len(invalid_values)} invalid value(s): {set(invalid_values.tolist())}"
+                        f"Found {len(invalid_values)} invalid value(s) at "
+                        f"{redaction.row_refs(invalid_values.index[:5].tolist(), len(invalid_values))}."
                     )
             
             elif series.dtype in ["float64", "float32", "Float64", "Float32"]:
@@ -875,7 +877,8 @@ class DataValidator(BaseValidator):
                 if len(invalid_values) > 0:
                     errors.append(
                         f"Column '{column_name}' contains non-boolean values. "
-                        f"Found {len(invalid_values)} invalid value(s): {set(invalid_values.tolist())}"
+                        f"Found {len(invalid_values)} invalid value(s) at "
+                        f"{redaction.row_refs(invalid_values.index[:5].tolist(), len(invalid_values))}."
                     )
             
             elif series.dtype == "object" or series.dtype == "string":
@@ -904,7 +907,8 @@ class DataValidator(BaseValidator):
                 if len(invalid_values) > 0:
                     errors.append(
                         f"Column '{column_name}' contains non-boolean values. "
-                        f"Found {len(invalid_values)} invalid value(s): {set(invalid_values.tolist())}"
+                        f"Found {len(invalid_values)} invalid value(s) at "
+                        f"{redaction.row_refs(invalid_values.index[:5].tolist(), len(invalid_values))}."
                     )
             
             else:

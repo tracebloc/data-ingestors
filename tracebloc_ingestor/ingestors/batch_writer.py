@@ -16,6 +16,7 @@ slice stays a pure relocation.
 """
 
 import logging
+from ..utils import redaction
 from typing import Any, Dict, List
 
 from sqlalchemy.orm import Session
@@ -61,10 +62,11 @@ class BatchWriter:
                 stats["failed_records"] += len(db_failures)
                 failed_records.extend(db_failures)
         except Exception as e:
-            logger.error(f"Batch processing failed: {str(e)}")
+            safe = redaction.safe_db_error(e)
+            logger.error(f"Batch processing failed: {safe}")
             stats["failed_records"] += len(batch)
             failed_records.extend(
-                {"record": record, "error": str(e)} for record in batch
+                {"record": record, "error": safe} for record in batch
             )
 
     def _process(
@@ -94,7 +96,9 @@ class BatchWriter:
             return ids if ids else [], db_failures
 
         except Exception as e:
-            logger.error(f"{RED}Error processing batch: {str(e)}{RESET}")
+            logger.error(
+                f"{RED}Error processing batch: {redaction.safe_db_error(e)}{RESET}"
+            )
             # Guard the attribute chain: a non-HTTP exception (e.g. a DB
             # error) has no .response at all, and the old
             # hasattr(e.response, "text") raised AttributeError INSIDE the

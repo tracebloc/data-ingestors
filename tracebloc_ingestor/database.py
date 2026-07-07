@@ -24,6 +24,8 @@ from sqlalchemy.dialects.mysql import insert, LONGBLOB, BLOB
 from sqlalchemy.exc import OperationalError, InterfaceError, DBAPIError
 import logging
 import secrets
+
+from .utils import redaction
 from urllib.parse import quote
 from typing import List, Dict, Any, Optional
 from datetime import datetime
@@ -116,7 +118,12 @@ class Database:
             f"mysql+mysqlconnector://{self.config.DB_USER}:{quote(self.config.DB_PASSWORD)}"
             f"@{self.config.DB_HOST}:{self.config.DB_PORT}"
         )
-        engine = create_engine(base_connection_string, pool_pre_ping=True)
+        # hide_parameters: SQLAlchemy otherwise appends every statement
+        # parameter — i.e. whole rows of customer data — to error strings
+        # that get logged (#226).
+        engine = create_engine(
+            base_connection_string, pool_pre_ping=True, hide_parameters=True
+        )
 
         with engine.connect() as connection:
             connection.execute(
@@ -126,7 +133,9 @@ class Database:
 
         # Now connect to the specific database
         connection_string = f"{base_connection_string}/{self.config.DB_NAME}"
-        return create_engine(connection_string, pool_pre_ping=True)
+        return create_engine(
+            connection_string, pool_pre_ping=True, hide_parameters=True
+        )
 
     def _get_sqlalchemy_type(self, mysql_type: str):
         """Convert MySQL type to SQLAlchemy type.
@@ -467,7 +476,8 @@ class Database:
                     # If batch insert fails, try one by one to identify problematic records
                     connection.rollback()
                     logger.warning(
-                        f"Batch insert failed, attempting individual inserts: {str(e)}"
+                        f"Batch insert failed, attempting individual inserts: "
+                        f"{redaction.safe_db_error(e)}"
                     )
 
                     for record in processed_records:
@@ -490,18 +500,31 @@ class Database:
 
                         except Exception as individual_error:
                             result["failures"].append(
-                                {"record": record, "error": str(individual_error)}
+                                {
+                                    "record": record,
+                                    "error": redaction.safe_db_error(
+                                        individual_error
+                                    ),
+                                }
                             )
                             connection.rollback()
                             logger.error(
-                                f"Failed to process record {record['data_id']}: {str(individual_error)}"
+                                f"Failed to process record {record['data_id']}: "
+                                f"{redaction.safe_db_error(individual_error)}"
                             )
 
         except Exception as e:
-            logger.error(f"Database connection error in insert_batch: {str(e)}")
+            logger.error(
+                f"Database connection error in insert_batch: "
+                f"{redaction.safe_db_error(e)}"
+            )
             result["failures"].extend(
                 [
-                    {"record": record, "error": f"Database connection error: {str(e)}"}
+                    {
+                        "record": record,
+                        "error": f"Database connection error: "
+                        f"{redaction.safe_db_error(e)}",
+                    }
                     for record in records
                 ]
             )

@@ -29,6 +29,7 @@ import pandas as pd
 from .base import BaseValidator, ValidationResult
 from ..config import Config
 from ..utils.constants import FileExtension
+from ..utils import redaction
 
 config = Config()
 logger = logging.getLogger(__name__)
@@ -139,7 +140,8 @@ class BIOLabelValidator(BaseValidator):
         warnings: List[str] = []
         if bad:
             errors.append(
-                f"{row_label} ('{filename}'): invalid BIO tag(s) {bad[:5]}; "
+                f"{row_label} ('{filename}'): {len(bad)} invalid BIO tag(s), "
+                f"masked shapes {sorted({redaction.mask_shape(t) for t in bad[:5]})}; "
                 f"each tag must be 'O' or 'B-<TYPE>' / 'I-<TYPE>'."
             )
         else:

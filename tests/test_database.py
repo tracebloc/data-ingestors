@@ -354,7 +354,10 @@ def test_insert_batch_individual_failure_recorded(db, mock_engine_factory):
     ids, failures = db.insert_batch("tbl", [{"data_id": "a", "feat": 1}])
     assert ids == []
     assert len(failures) == 1
-    assert "always fails" in failures[0]["error"]
+    # #226: the raw driver message can embed cell values — the stored
+    # error carries the exception class, never the message.
+    assert "RuntimeError" in failures[0]["error"]
+    assert "always fails" not in failures[0]["error"]
 
 
 def test_insert_batch_connection_error(db, mock_engine_factory):
@@ -465,7 +468,9 @@ def test_insert_batch_gives_up_after_max_retries(db, mock_engine_factory):
     # All paths fail; the record lands in failures with the underlying error.
     assert ids == []
     assert len(failures) == 1
-    assert "gone away" in failures[0]["error"]
+    # #226: class + errno instead of the raw driver message.
+    assert "OperationalError" in failures[0]["error"]
+    assert "gone away" not in failures[0]["error"]
 
 
 def test_insert_batch_rolls_back_between_transient_retries(db, mock_engine_factory):

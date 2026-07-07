@@ -106,7 +106,8 @@ class RecordProcessor:
 
         if columns_not_found:
             logger.warning(
-                f"Record {record} does not contain the required columns: {columns_not_found}"
+                f"Record is missing required column(s) {columns_not_found}; "
+                f"present columns: {sorted(record.keys())}"
             )
 
         if self.label_column:
@@ -182,7 +183,11 @@ class RecordProcessor:
             cleaned_record["data_id"] = str(unique_id).strip()
             return cleaned_record
         else:
-            logger.warning(f"Missing or invalid unique ID for record: {record}")
+            logger.warning(
+                f"Missing or invalid value in unique-id column "
+                f"{self.unique_id_column!r}; record skipped (content not "
+                f"logged — #226)."
+            )
             return None
 
     def _content_hash(self, cleaned_record: Dict[str, Any]) -> str:
@@ -265,7 +270,6 @@ class RecordProcessor:
             # Map unique ID if specified
             cleaned_record = self._map_unique_id(record, cleaned_record)
 
-            logger.info(f"Cleaned record: {cleaned_record}")
 
             if cleaned_record is None:
                 return None

@@ -219,7 +219,10 @@ def test_ingest_batch_exception_counts_whole_batch_as_failed():
     failed, summary = _run_ingest(ing)
 
     assert len(failed) == 2
-    assert all("db gone" in f["error"] for f in failed)
+    # #226: raw driver messages can embed cell values — failures carry the
+    # exception class, never the message.
+    assert all("RuntimeError" in f["error"] for f in failed)
+    assert all("db gone" not in f["error"] for f in failed)
     assert summary.failed_records == 2
     assert summary.inserted_records == 0
     assert summary.has_failures is True
