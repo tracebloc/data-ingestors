@@ -118,6 +118,60 @@ def test_get_table_schema_reports_real_mysql_types(db, table):
     assert schema["annotation"] == "TEXT"
 
 
+def test_content_hash_retry_reclaims_rows_instead_of_duplicating(db, table):
+    """#225 end-to-end against real MySQL: a retried run inserting the SAME
+    content under deterministic ids re-claims the prior attempt's rows via
+    the data_id UNIQUE upsert — row count stays constant and ownership moves
+    to the retry's ingestor_id (whose scoped label counts then match)."""
+    from tracebloc_ingestor.ingestors.record_processor import RecordProcessor
+    from tracebloc_ingestor.utils import label_policy as label_policy_module
+
+    db.create_table(table, {"feature": "FLOAT"})
+    salt = db.get_or_create_table_salt(table)
+    assert db.get_or_create_table_salt(table) == salt  # stable across calls
+
+    def run(ingestor_id):
+        rp = RecordProcessor(
+            schema={"feature": "FLOAT"},
+            intent="train",
+            label_column="target",
+            annotation_column=None,
+            unique_id_column=None,
+            label_policy=label_policy_module.PASSTHROUGH,
+            ingestor_id=ingestor_id,
+            data_id_strategy="content_hash",
+            table_salt=salt,
+        )
+        records = []
+        for i, label in [(1, "cat"), (2, "dog")]:
+            rec = rp.process({"feature": float(i), "target": label})
+            rec["ingestor_id"] = ingestor_id
+            records.append(rec)
+        db.insert_batch(table, records)
+
+    run("attempt-1")               # first attempt: rows land
+    assert _query(f"SELECT COUNT(*) FROM `{table}`")[0][0] == 2
+
+    run("attempt-2-retry")         # k8s Job retry: SAME content, new run id
+    assert _query(f"SELECT COUNT(*) FROM `{table}`")[0][0] == 2  # no duplication
+    owners = {r[0] for r in _query(f"SELECT ingestor_id FROM `{table}`")}
+    assert owners == {"attempt-2-retry"}  # re-claimed by the retry
+    # the retry's scoped label counts see the full dataset
+    assert db.get_label_counts(table, "attempt-2-retry") == {"cat": 1, "dog": 1}
+
+
+def test_table_salts_are_per_table(db, table):
+    """Identical content in different tables must be unlinkable."""
+    other = table + "_b"
+    try:
+        s1 = db.get_or_create_table_salt(table)
+        s2 = db.get_or_create_table_salt(other)
+        assert s1 != s2
+        assert len(s1) == 64
+    finally:
+        _query(f"DROP TABLE IF EXISTS `{other}`")
+
+
 def test_delete_by_ingestor_id_removes_only_that_run(db, table):
     """#227 compensating delete: removes exactly one run's rows, leaves the
     other run's rows untouched, and reports the deleted count."""

@@ -23,6 +23,7 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.dialects.mysql import insert, LONGBLOB, BLOB
 from sqlalchemy.exc import OperationalError, InterfaceError, DBAPIError
 import logging
+import secrets
 from urllib.parse import quote
 from typing import List, Dict, Any, Optional
 from datetime import datetime
@@ -216,6 +217,11 @@ class Database:
                 column (e.g. a user CSV with its own ``id``), which would
                 otherwise surface as a cryptic SQLAlchemy DuplicateColumnError.
         """
+        if table_name == self.SALT_TABLE:
+            raise ValueError(
+                f"{table_name!r} is reserved for the content-hash salt store "
+                "(#225) and cannot be used as a dataset table."
+            )
         # Fail fast on reserved-column collisions before any DB I/O. `label`
         # is intentionally excluded — it's the user-facing label column the
         # framework maps onto the standard `label` column.
@@ -501,6 +507,56 @@ class Database:
             )
 
         return result["success_ids"], result["failures"]
+
+    SALT_TABLE = "tracebloc_ingest_meta"
+
+    def get_or_create_table_salt(self, table_name: str) -> str:
+        """
+        Return the per-table salt for content-hash ``data_id`` derivation
+        (#225), creating it atomically on first use.
+
+        The salt is 32 random bytes (hex) stored ONLY in the cluster's MySQL
+        — it never appears in any payload that leaves the cluster. Salting
+        per table means identical content in two tables (or two clusters)
+        yields unrelated ids, so the opaque sample ids in the ingest summary
+        can't be correlated across datasets, while a retried run on the SAME
+        table reproduces its ids exactly (the point of #225).
+
+        Concurrency-safe without the table lock: ``INSERT IGNORE`` makes the
+        create atomic — the loser of a race simply reads the winner's salt.
+        """
+        with self.engine.connect() as connection:
+            _execute_with_retry(
+                connection,
+                text(
+                    f"CREATE TABLE IF NOT EXISTS `{self.SALT_TABLE}` ("
+                    "  table_name VARCHAR(64) NOT NULL PRIMARY KEY,"
+                    "  salt CHAR(64) NOT NULL,"
+                    "  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
+                    ")"
+                ),
+            )
+            _execute_with_retry(
+                connection,
+                text(
+                    f"INSERT IGNORE INTO `{self.SALT_TABLE}` (table_name, salt) "
+                    "VALUES (:table_name, :salt)"
+                ).bindparams(table_name=table_name, salt=secrets.token_hex(32)),
+            )
+            connection.commit()
+            row = _execute_with_retry(
+                connection,
+                text(
+                    f"SELECT salt FROM `{self.SALT_TABLE}` "
+                    "WHERE table_name = :table_name"
+                ).bindparams(table_name=table_name),
+            ).fetchone()
+        if row is None:  # pragma: no cover — insert+select on one connection
+            raise RuntimeError(
+                f"Could not create or read the content-hash salt for "
+                f"table {table_name!r}."
+            )
+        return row[0]
 
     def get_label_counts(self, table_name: str, ingestor_id: str) -> Dict[str, int]:
         """

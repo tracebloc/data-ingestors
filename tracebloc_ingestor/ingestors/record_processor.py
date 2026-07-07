@@ -23,6 +23,8 @@ former blanket ``mask_id`` pop (#212) — the cleaned record carries only the
 columns the schema declares.
 """
 
+import hashlib
+import json
 import logging
 import uuid
 from typing import Any, Dict, Optional
@@ -49,12 +51,22 @@ class RecordProcessor:
         unique_id_column: Optional[str],
         label_policy: Any,
         ingestor_id: str,
+        data_id_strategy: str = "uuid",
+        table_salt: Optional[str] = None,
     ):
         self.schema = schema
         self.intent = intent
         self.label_column = label_column
         self.annotation_column = annotation_column
         self.unique_id_column = unique_id_column
+        # #225: content-hash strategy needs the per-table salt; failing at
+        # construction beats minting unsalted (correlatable) ids at row time.
+        if data_id_strategy == "content_hash" and not unique_id_column and not table_salt:
+            raise ValueError(
+                "data_id_strategy='content_hash' requires a table_salt"
+            )
+        self.data_id_strategy = data_id_strategy
+        self.table_salt = table_salt
         self.label_policy = label_policy
         self.ingestor_id = ingestor_id
 
@@ -148,8 +160,21 @@ class RecordProcessor:
             cleaned_record["annotation"] = record.get(self.annotation_column)
 
         if not self.unique_id_column:
-            # logger.warning("No unique ID column specified, generating unique ID mapping")
-            cleaned_record["data_id"] = str(uuid.uuid4())
+            if self.data_id_strategy == "content_hash":
+                # #225: deterministic id — a retried k8s Job reproduces the
+                # same ids, so the data_id UNIQUE upsert re-claims the prior
+                # attempt's rows instead of duplicating them. The source
+                # filename MUST participate: for file-bearing categories the
+                # schema-filtered dict is just {label, data_intent, ...}, so
+                # without it two different images with the same label would
+                # collide and the upsert would collapse the dataset. It is
+                # merged here (not read from cleaned_record) because process()
+                # attaches filename only AFTER this method returns.
+                cleaned_record["data_id"] = self._content_hash(
+                    {**cleaned_record, "filename": record.get("filename")}
+                )
+            else:
+                cleaned_record["data_id"] = str(uuid.uuid4())
             return cleaned_record
 
         unique_id = record.get(self.unique_id_column)
@@ -159,6 +184,33 @@ class RecordProcessor:
         else:
             logger.warning(f"Missing or invalid unique ID for record: {record}")
             return None
+
+    def _content_hash(self, cleaned_record: Dict[str, Any]) -> str:
+        """
+        Deterministic ``data_id`` from the record's cleaned content (#225).
+
+        SHA-256 over the per-table salt + a canonical JSON serialization of
+        every cleaned field (sorted keys, ASCII, compact separators,
+        ``default=str`` so dates/decimals serialize stably post-cast). The
+        record is hashed AFTER schema cleaning and label policy, so the
+        digest reflects exactly what will be stored — identical source
+        records produce identical ids across process restarts.
+
+        Privacy: the salt (random per table, cluster-MySQL-only) makes the
+        digest unlinkable across tables/clusters and defeats dictionary
+        attacks on low-cardinality records; only 10 opaque ``{data_id,
+        label}`` samples ever leave the cluster in the ingest summary.
+        """
+        canonical = json.dumps(
+            cleaned_record,
+            sort_keys=True,
+            ensure_ascii=True,
+            separators=(",", ":"),
+            default=str,
+        )
+        return hashlib.sha256(
+            (self.table_salt + canonical).encode("utf-8")
+        ).hexdigest()
 
     def process(self, record: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Process a single record"""

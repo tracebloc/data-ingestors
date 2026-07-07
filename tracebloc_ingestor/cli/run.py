@@ -313,6 +313,7 @@ def _build_ingestor(
         table_name=resolved.table_name,
         schema=resolved.schema,
         unique_id_column=resolved.unique_id_column,
+        data_id_strategy=resolved.data_id_strategy,
         label_column=resolved.label_column,
         intent=resolved.intent,
         annotation_column=resolved.annotation_column,

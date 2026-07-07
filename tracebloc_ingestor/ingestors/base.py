@@ -146,6 +146,7 @@ class BaseIngestor(ABC):
         data_format: Optional[str] = None,
         file_options: Optional[Dict[str, Any]] = None,
         label_policy: str = label_policy_module.PASSTHROUGH,
+        data_id_strategy: str = "uuid",
     ):
         """Initialize the base ingestor.
 
@@ -172,6 +173,14 @@ class BaseIngestor(ABC):
             ValueError: If unique_id_column is not provided
         """
         self.ingestor_id = str(uuid.uuid4())
+        # #225: deterministic content-hash data_id (opt-in, landed dark).
+        # unique_id_column wins if both are set (schema can't express both;
+        # belt-and-suspenders). The salt fetch is DEFERRED to ingest() —
+        # mirroring #260's deferred create_table — so a validator-rejected
+        # run leaves no salt row behind. get_or_create is atomic
+        # (INSERT IGNORE), so it needs no table lock even then.
+        self.data_id_strategy = data_id_strategy
+        self._table_salt: Optional[str] = None
         self.database = database
         self.engine: Engine = database.engine
         self.api_client = api_client
@@ -246,6 +255,8 @@ class BaseIngestor(ABC):
             unique_id_column=self.unique_id_column,
             label_policy=self.label_policy,
             ingestor_id=self.ingestor_id,
+            data_id_strategy=self.data_id_strategy,
+            table_salt=self._table_salt,
         )
 
     def process_record(self, record: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -427,6 +438,18 @@ class BaseIngestor(ABC):
         # input (#260). Deferring to here ensures a validator-rejected ingest
         # leaves no orphaned empty table behind that the next retry's
         # stale-table guard would trip on.
+        # #225: fetch the per-table salt only now — the run survived
+        # validation, so it will actually write rows (mirrors the deferred
+        # create_table below, #260); a rejected run leaves no salt row.
+        if (
+            self.data_id_strategy == "content_hash"
+            and not self.unique_id_column
+            and self._table_salt is None
+        ):
+            self._table_salt = self.database.get_or_create_table_salt(
+                self.table_name
+            )
+
         if self.table is None:
             self.table = self.database.create_table(self.table_name, self._table_schema)
 
