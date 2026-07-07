@@ -449,6 +449,11 @@ class BaseIngestor(ABC):
         total = self._count_records(source)
         stats["total_records"] = total or 0
 
+        # Flipped only after send_ingest_summary returns: gates the #227
+        # compensating delete so a dataset that DID register never has its
+        # rows deleted by a late failure (e.g. in summary rendering).
+        dataset_registered = False
+
         with Session(self.engine) as session:
             try:
                 pbar = tqdm(total=total, desc="Ingesting records", unit="records")
@@ -566,8 +571,9 @@ class BaseIngestor(ABC):
                         f"Inserted {stats['inserted_records']} row(s) but "
                         f"get_label_counts returned nothing for "
                         f"ingestor_id={self.ingestor_id!r}. "
-                        "Rows are committed to MySQL but the dataset was not "
-                        "registered with the backend."
+                        "The dataset was not registered with the backend; "
+                        "this run's rows will be removed by the "
+                        "compensating delete (#227)."
                     )
                 else:
                     samples = self.database.get_samples(
@@ -596,21 +602,64 @@ class BaseIngestor(ABC):
                         samples=samples,
                         meta_data=self.file_options,
                     )
+                    dataset_registered = True
                     stats["api_sent_records"] = stats["inserted_records"]
 
                 summary = IngestionSummary(**stats)
                 self._log_summary(summary)
 
             except Exception as e:
-                # NOTE: rows are already committed above (session.commit()),
-                # so this rollback is a no-op on the inserted data — it only
-                # discards any uncommitted state. If send_ingest_summary
-                # fails for real (a genuine 400/500), the rows remain in
-                # MySQL with no registered dataset; we raise loudly rather
-                # than silently swallow that. A 409 is handled inside the
-                # client as an idempotent success and does not reach here.
-                session.rollback()
+                # Rows commit PER BATCH during the loop, so by the time any
+                # failure lands here — mid-loop, or a genuine 4xx/5xx from
+                # send_ingest_summary — this run's rows are already durable
+                # in MySQL while its dataset will never be registered
+                # (session.rollback() only discards uncommitted state).
+                # Compensate by deleting exactly this run's rows, identified
+                # by the per-process ingestor_id, so a failed run leaves the
+                # table clean for a re-run (#227) instead of leaving orphans
+                # that inflate the heartbeat's availability report and
+                # occupy disk with no delete path (the live wound in #336).
+                # A 409 from the summary call is idempotent success inside
+                # the client and never reaches here; dataset_registered
+                # guards the late-failure case so a REGISTERED dataset's
+                # rows are never deleted. Residual two-generals window: if
+                # the backend registered but the client-side call still
+                # raised (e.g. a 2xx whose body failed to parse, after
+                # retries), this delete removes rows of a backend-registered
+                # dataset — narrow (POST is retried; 409 absorbs re-sends),
+                # and a re-run re-ingests from source. Staged files stay —
+                # they are keyed by filename and idempotently overwritten on
+                # re-run. A cleanup failure must not mask the original
+                # error: log CRITICAL and re-raise the original (the
+                # leftover rows are the pre-#227 status quo, and remain
+                # sweepable by ingestor_id).
+                try:
+                    session.rollback()
+                except Exception as rollback_error:
+                    # A dead connection can make the rollback itself throw —
+                    # exactly the conditions this block fires under. It must
+                    # not mask the original error or skip the cleanup.
+                    logger.warning(f"session.rollback() failed: {rollback_error}")
                 logger.error(f"Error during ingestion: {str(e)}")
+                if stats.get("inserted_records") and not dataset_registered:
+                    try:
+                        deleted = self.database.delete_by_ingestor_id(
+                            self.table_name, self.ingestor_id
+                        )
+                        logger.error(
+                            f"Compensating delete removed {deleted} "
+                            f"unregistered row(s) for "
+                            f"ingestor_id={self.ingestor_id!r} — the table "
+                            "is clean; re-running is safe (#227)."
+                        )
+                    except Exception as cleanup_error:
+                        logger.critical(
+                            f"Compensating delete FAILED for "
+                            f"ingestor_id={self.ingestor_id!r} in table "
+                            f"{self.table_name!r}: {cleanup_error}. "
+                            f"{stats.get('inserted_records', 0)} unregistered "
+                            "row(s) remain orphaned (#227)."
+                        )
                 raise e
 
         return failed_records
