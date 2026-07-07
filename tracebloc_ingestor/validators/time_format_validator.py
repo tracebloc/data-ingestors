@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 import pandas as pd
+from ..utils import redaction
 
 from .base import BaseValidator, ValidationResult
 from ..config import Config
@@ -95,10 +96,18 @@ class TimeFormatValidator(BaseValidator):
             )
             if ambiguous_mask.any():
                 ambiguous_count = int(ambiguous_mask.sum())
-                samples = df["timestamp"][ambiguous_mask].astype(str).head(5).tolist()
+                offender_rows = df.index[ambiguous_mask][:5].tolist()
+                shapes = sorted(
+                    {
+                        redaction.mask_shape(v)
+                        for v in df["timestamp"][ambiguous_mask].astype(str).head(5)
+                    }
+                )
                 errors.append(
                     f"Found {ambiguous_count} ambiguous date(s) in 'timestamp' that parse "
-                    f"differently day-first vs month-first (e.g. {samples}). Use ISO 8601 "
+                    f"differently day-first vs month-first, at "
+                    f"{redaction.row_refs(offender_rows, ambiguous_count)} "
+                    f"(masked shapes: {shapes}). Use ISO 8601 "
                     f"(YYYY-MM-DD or YYYY-MM-DD HH:MM:SS) to remove the ambiguity."
                 )
                 metadata["ambiguous_timestamps"] = ambiguous_count

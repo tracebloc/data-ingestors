@@ -118,6 +118,18 @@ CASES = [
         roundtrip_col=None,
     ),
     dict(
+        id="sentence_pair_classification",
+        cfg=_cfg(
+            table="char_spc",
+            category="sentence_pair_classification",
+            csv=str(T / "sentence_pair_classification/data/labels_file_sample.csv"),
+            texts=str(T / "sentence_pair_classification/data/texts"),
+            label="label",
+        ),
+        sidecars=[str(T / "sentence_pair_classification/data/texts")],
+        roundtrip_col=None,
+    ),
+    dict(
         id="time_to_event_prediction",
         cfg=_cfg(
             table="char_tte",
@@ -234,6 +246,17 @@ CASES = [
         sidecars=[str(T / "seq2seq/data/texts")],
         roundtrip_col=None,
     ),
+    dict(
+        id="embeddings",
+        cfg=_cfg(
+            table="char_emb",
+            category="embeddings",
+            csv=str(T / "embeddings/data/labels_file_sample.csv"),
+            texts=str(T / "embeddings/data/texts"),
+        ),
+        sidecars=[str(T / "embeddings/data/texts")],
+        roundtrip_col=None,
+    ),
     # semantic_segmentation: the one file-bearing modality the harness never
     # characterized (audit gap). mask_id is DECLARED in schema so it's stored
     # (the training client SELECTs it to locate masks — backend#816); the masks
@@ -290,29 +313,17 @@ def _fetch_rows(table):
 
 @pytest.fixture
 def capture_api(monkeypatch):
-    """Record the args every APIClient backend method is called with, then
-    delegate to the original (which returns the local-mode value). Captures the
-    engine's INTENT to send even though local mode skips the actual POST."""
-    calls = {
-        n: []
-        for n in (
-            "send_batch",
-            "send_global_meta_meta",
-            "prepare_dataset",
-            "create_dataset",
-        )
-    }
-    for name in calls:
-        orig = getattr(client_mod.APIClient, name)
+    """Record the kwargs send_ingest_summary is called with, then delegate to
+    the original (which returns the local-mode value without making an HTTP
+    call). Captures the engine's intent to send the summary payload."""
+    calls = {"send_ingest_summary": []}
+    orig = client_mod.APIClient.send_ingest_summary
 
-        def make(name, orig):
-            def wrapper(self, *args, **kwargs):
-                calls[name].append({"args": args, "kwargs": kwargs})
-                return orig(self, *args, **kwargs)
+    def wrapper(self, *args, **kwargs):
+        calls["send_ingest_summary"].append({"args": args, "kwargs": kwargs})
+        return orig(self, *args, **kwargs)
 
-            return wrapper
-
-        monkeypatch.setattr(client_mod.APIClient, name, make(name, orig))
+    monkeypatch.setattr(client_mod.APIClient, "send_ingest_summary", wrapper)
     return calls
 
 
@@ -377,29 +388,35 @@ def test_characterization(case, tmp_path, monkeypatch, capture_api):
             ], f"{case['id']}: tabular ingest copied unexpected files"
 
     # ── Dimension 3: backend payloads ────────────────────────────────────
-    # send_batch(records, table_name, ingestor_id) — records is [(id, dict)].
-    sent = [rec for c in capture_api["send_batch"] for (_id, rec) in c["args"][0]]
-    assert (
-        len(sent) == expected_rows
-    ), f"{case['id']}: {len(sent)} records sent to API, {expected_rows} expected"
-    for rec in sent:
-        assert rec.get("data_id"), "sent record missing data_id"
-        assert rec.get("data_intent") == cfg["intent"]
-    # The dataset-registration trio each fires exactly once.
-    assert len(capture_api["send_global_meta_meta"]) == 1
-    assert len(capture_api["prepare_dataset"]) == 1
-    assert len(capture_api["create_dataset"]) == 1
-    # global_meta carries the table name + a schema whose columns are a
-    # superset of the user schema (plus the framework's standard columns).
-    meta_args = capture_api["send_global_meta_meta"][0]["args"]
-    assert meta_args[0] == table
-    schema_sent = meta_args[1]
-    # The label column is mapped onto the framework's standard `label` column,
-    # not stored under its own name (e.g. regression's `price` -> `label`), so
-    # exclude it: the remaining FEATURE columns must all be in the payload.
+    # send_ingest_summary fires exactly once, carrying the full ingest summary.
+    assert len(capture_api["send_ingest_summary"]) == 1, (
+        f"{case['id']}: send_ingest_summary called "
+        f"{len(capture_api['send_ingest_summary'])} times"
+    )
+    summary_kw = capture_api["send_ingest_summary"][0]["kwargs"]
+    # Table name must be passed through.
+    assert summary_kw.get("table_name") == table, (
+        f"{case['id']}: table_name in summary payload is "
+        f"{summary_kw.get('table_name')!r}, expected {table!r}"
+    )
+    # Intent must match the configured intent.
+    assert summary_kw.get("data_intent") == cfg["intent"], (
+        f"{case['id']}: data_intent {summary_kw.get('data_intent')!r} != "
+        f"{cfg['intent']!r}"
+    )
+    # Label counts: the sum of all label bucket counts must equal the total
+    # inserted rows (every row lands in exactly one bucket).
+    total_labelled = sum(summary_kw.get("labels", {}).values())
+    assert total_labelled == expected_rows, (
+        f"{case['id']}: labels total {total_labelled} != {expected_rows} expected rows"
+    )
+    # Schema: the user-declared feature columns must all be present in the
+    # schema payload sent to the backend. The label column maps to the
+    # framework's standard `label` column and is excluded from the check.
     label = cfg.get("label")
     label_col = label.get("column") if isinstance(label, dict) else label
     feature_cols = set(cfg.get("schema", {})) - {label_col}
+    schema_sent = summary_kw.get("schema", {})
     assert feature_cols <= set(schema_sent), (
         f"{case['id']}: schema payload missing feature columns "
         f"{feature_cols - set(schema_sent)}"

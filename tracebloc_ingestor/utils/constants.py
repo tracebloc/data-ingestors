@@ -40,6 +40,7 @@ class TaskCategory:
     KEYPOINT_DETECTION = "keypoint_detection"
     TEXT_CLASSIFICATION = "text_classification"
     TOKEN_CLASSIFICATION = "token_classification"
+    SENTENCE_PAIR_CLASSIFICATION = "sentence_pair_classification"
     TABULAR_CLASSIFICATION = "tabular_classification"
     TABULAR_REGRESSION = "tabular_regression"
     TIME_SERIES_FORECASTING = "time_series_forecasting"
@@ -48,6 +49,7 @@ class TaskCategory:
     MASKED_LANGUAGE_MODELING = "masked_language_modeling"
     CAUSAL_LANGUAGE_MODELING = "causal_language_modeling"
     SEQ2SEQ = "seq2seq"
+    EMBEDDINGS = "embeddings"
 
     # instance_segmentation is deliberately absent: it briefly shipped here
     # and in the schema enum with no validators and no file transfer, so
@@ -69,6 +71,7 @@ class TaskCategory:
             cls.KEYPOINT_DETECTION,
             cls.TEXT_CLASSIFICATION,
             cls.TOKEN_CLASSIFICATION,
+            cls.SENTENCE_PAIR_CLASSIFICATION,
             cls.TABULAR_CLASSIFICATION,
             cls.TABULAR_REGRESSION,
             cls.TIME_SERIES_FORECASTING,
@@ -77,6 +80,7 @@ class TaskCategory:
             cls.MASKED_LANGUAGE_MODELING,
             cls.CAUSAL_LANGUAGE_MODELING,
             cls.SEQ2SEQ,
+            cls.EMBEDDINGS,
         ]
 
     @classmethod

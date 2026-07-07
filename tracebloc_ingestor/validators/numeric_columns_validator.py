@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 import pandas as pd
+from ..utils import redaction
 
 from .base import BaseValidator, ValidationResult
 from ..config import Config
@@ -110,10 +111,11 @@ class NumericColumnsValidator(BaseValidator):
                     non_numeric_actual = (numeric_series.isna() & df[column].notna()).sum()
                     
                     if non_numeric_actual > 0:
-                        non_numeric_values = df[column][numeric_series.isna() & df[column].notna()].head(10).tolist()
+                        offender_mask = numeric_series.isna() & df[column].notna()
+                        offender_rows = df.index[offender_mask][:5].tolist()
                         error_msg = (
-                            f"Column '{column}' contains {non_numeric_actual} non-numeric value(s). "
-                            f"Sample invalid values: {non_numeric_values}"
+                            f"Column '{column}' contains {non_numeric_actual} non-numeric value(s) "
+                            f"at {redaction.row_refs(offender_rows, int(non_numeric_actual))}."
                         )
                         errors.append(error_msg)
                         metadata[f"{column}_non_numeric_count"] = non_numeric_actual

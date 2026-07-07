@@ -59,15 +59,17 @@ def test_derived_sets_match_spec_flags():
 
 
 def test_nlp_categories_are_exactly_the_text_categories():
-    """#805: the NLP set is exactly the text categories (text/token
-    classification + masked & causal language modeling + seq2seq) — never
-    image/tabular."""
+    """#805: the NLP set is exactly the text categories (text/token/sentence-pair
+    classification + masked & causal language modeling + seq2seq + embeddings) —
+    never image/tabular."""
     assert NLP_CATEGORIES == {
         TaskCategory.TEXT_CLASSIFICATION,
         TaskCategory.TOKEN_CLASSIFICATION,
+        TaskCategory.SENTENCE_PAIR_CLASSIFICATION,
         TaskCategory.MASKED_LANGUAGE_MODELING,
         TaskCategory.CAUSAL_LANGUAGE_MODELING,
         TaskCategory.SEQ2SEQ,
+        TaskCategory.EMBEDDINGS,
     }
 
 
@@ -94,6 +96,23 @@ def test_known_flag_values():
     assert s2s.is_file_bearing and s2s.is_self_supervised and s2s.is_nlp
     assert not s2s.is_tabular_family and not s2s.is_classification
     assert s2s.file_subdir == "texts"
+
+    # embeddings mirrors seq2seq's flags exactly (file-bearing + self-supervised
+    # + NLP, raw text from texts/) — the contrastive modality adds only a
+    # structural validator, not a new flag.
+    emb = spec_for(TaskCategory.EMBEDDINGS)
+    assert emb.is_file_bearing and emb.is_self_supervised and emb.is_nlp
+    assert not emb.is_tabular_family and not emb.is_classification
+    assert emb.file_subdir == "texts"
+
+    # sentence_pair_classification is SUPERVISED text classification: NLP +
+    # file-bearing + is_classification, raw text from texts/, but (unlike the
+    # self-supervised text categories) NOT self-supervised — the class label
+    # travels in the labels CSV, mirroring text_classification.
+    spc = spec_for(TaskCategory.SENTENCE_PAIR_CLASSIFICATION)
+    assert spc.is_file_bearing and spc.is_nlp and spc.is_classification
+    assert not spc.is_self_supervised and not spc.is_tabular_family
+    assert spc.file_subdir == "texts"
 
     tab = spec_for(TaskCategory.TABULAR_CLASSIFICATION)
     assert (

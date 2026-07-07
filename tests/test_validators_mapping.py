@@ -118,6 +118,7 @@ def test_classification_categories_include_label_diversity():
         TaskCategory.KEYPOINT_DETECTION,
         TaskCategory.TABULAR_CLASSIFICATION,
         TaskCategory.TEXT_CLASSIFICATION,
+        TaskCategory.SENTENCE_PAIR_CLASSIFICATION,
     ):
         assert LabelDiversityValidator in _types(map_validators(cat, IMAGE_OPTS)), cat
 
@@ -129,6 +130,7 @@ def test_classification_categories_include_label_diversity():
         TaskCategory.MASKED_LANGUAGE_MODELING,
         TaskCategory.CAUSAL_LANGUAGE_MODELING,
         TaskCategory.SEQ2SEQ,
+        TaskCategory.EMBEDDINGS,
     ):
         assert LabelDiversityValidator not in _types(
             map_validators(cat, {"schema": {"a": "INT"}})
@@ -354,10 +356,10 @@ def test_map_validators_without_config_falls_back_to_module_global(monkeypatch):
 
 def test_nlp_categories_include_content_hygiene_validators():
     """The text categories (text/token classification, masked & causal LM,
-    seq2seq) gain BOTH the zero-record guard and the (text-only) UTF-8 content
-    validator. The zero-record guard now also covers file-bearing vision
-    categories, but TextContentValidator stays NLP-only (it decodes UTF-8 text,
-    meaningless for images); tabular has neither."""
+    seq2seq, embeddings) gain BOTH the zero-record guard and the (text-only)
+    UTF-8 content validator. The zero-record guard now also covers file-bearing
+    vision categories, but TextContentValidator stays NLP-only (it decodes UTF-8
+    text, meaningless for images); tabular has neither."""
     from tracebloc_ingestor.validators.ingestable_records_validator import (
         IngestableRecordsValidator,
     )
@@ -368,9 +370,11 @@ def test_nlp_categories_include_content_hygiene_validators():
     for cat in (
         TaskCategory.TEXT_CLASSIFICATION,
         TaskCategory.TOKEN_CLASSIFICATION,
+        TaskCategory.SENTENCE_PAIR_CLASSIFICATION,
         TaskCategory.MASKED_LANGUAGE_MODELING,
         TaskCategory.CAUSAL_LANGUAGE_MODELING,
         TaskCategory.SEQ2SEQ,
+        TaskCategory.EMBEDDINGS,
     ):
         types = _types(map_validators(cat, {}))
         # 0-record guard leads (composed centrally); the category's own
@@ -447,9 +451,7 @@ def test_causal_lm_excludes_all_label_validators():
 
 
 def test_causal_lm_with_schema_adds_data_validator():
-    v = map_validators(
-        TaskCategory.CAUSAL_LANGUAGE_MODELING, {"schema": {"a": "INT"}}
-    )
+    v = map_validators(TaskCategory.CAUSAL_LANGUAGE_MODELING, {"schema": {"a": "INT"}})
     assert DataValidator in _types(v)
 
 
@@ -487,6 +489,155 @@ def test_seq2seq_excludes_all_label_validators():
 
 def test_seq2seq_with_schema_adds_data_validator():
     v = map_validators(TaskCategory.SEQ2SEQ, {"schema": {"a": "INT"}})
+    assert DataValidator in _types(v)
+
+
+def test_embeddings_content_validators_target_texts_subdir():
+    """embeddings stages RAW text under ``texts/`` (not the pre-tokenized
+    ``sequences/`` MLM uses); the content validators must point there."""
+    from tracebloc_ingestor.validators.ingestable_records_validator import (
+        IngestableRecordsValidator,
+    )
+    from tracebloc_ingestor.validators.text_content_validator import (
+        TextContentValidator,
+    )
+
+    v = map_validators(TaskCategory.EMBEDDINGS, {})
+    rec = next(x for x in v if isinstance(x, IngestableRecordsValidator))
+    txt = next(x for x in v if isinstance(x, TextContentValidator))
+    assert rec.file_subdir == "texts"
+    assert txt.texts_path == "texts"
+
+
+def test_embeddings_includes_contrastive_pairs_validator():
+    """embeddings carries the structural ContrastivePairsValidator (the
+    pair/triplet check) ON TOP of the shared content hygiene — that structural
+    check is what distinguishes it from seq2seq / causal LM (free-form text)."""
+    from tracebloc_ingestor.validators.contrastive_pairs_validator import (
+        ContrastivePairsValidator,
+    )
+    from tracebloc_ingestor.validators.text_content_validator import (
+        TextContentValidator,
+    )
+
+    types = _types(map_validators(TaskCategory.EMBEDDINGS, {}))
+    assert ContrastivePairsValidator in types
+    assert TextContentValidator in types
+    # seq2seq / causal LM do NOT structurally constrain their .txt content.
+    assert ContrastivePairsValidator not in _types(
+        map_validators(TaskCategory.SEQ2SEQ, {})
+    )
+    assert ContrastivePairsValidator not in _types(
+        map_validators(TaskCategory.CAUSAL_LANGUAGE_MODELING, {})
+    )
+
+
+def test_embeddings_threads_custom_extension_to_contrastive_validator():
+    """A custom extension reaches both the FileType and the contrastive
+    structural validator so the resolved path matches what text_transfer copies."""
+    from tracebloc_ingestor.validators.contrastive_pairs_validator import (
+        ContrastivePairsValidator,
+    )
+
+    v = map_validators(TaskCategory.EMBEDDINGS, {"extension": ".text"})
+    cp = next(x for x in v if isinstance(x, ContrastivePairsValidator))
+    assert cp.extension == ".text"
+
+
+def test_embeddings_excludes_all_label_validators():
+    """embeddings is self-supervised: only ``filename`` is required, no label
+    column. It must carry none of the label-oriented validators (mirrors
+    seq2seq)."""
+    from tracebloc_ingestor.validators.label_column_validator import (
+        LabelColumnValidator,
+    )
+    from tracebloc_ingestor.validators.bio_label_validator import BIOLabelValidator
+
+    types = _types(map_validators(TaskCategory.EMBEDDINGS, {}))
+    assert LabelColumnValidator not in types
+    assert BIOLabelValidator not in types
+    assert LabelDiversityValidator not in types
+
+
+def test_embeddings_with_schema_adds_data_validator():
+    v = map_validators(TaskCategory.EMBEDDINGS, {"schema": {"a": "INT"}})
+    assert DataValidator in _types(v)
+
+
+def test_sentence_pair_content_validators_target_texts_subdir():
+    """sentence_pair_classification stages RAW text under ``texts/`` (the same
+    layout as text_classification); the content validators must point there."""
+    from tracebloc_ingestor.validators.ingestable_records_validator import (
+        IngestableRecordsValidator,
+    )
+    from tracebloc_ingestor.validators.text_content_validator import (
+        TextContentValidator,
+    )
+
+    v = map_validators(TaskCategory.SENTENCE_PAIR_CLASSIFICATION, {})
+    rec = next(x for x in v if isinstance(x, IngestableRecordsValidator))
+    txt = next(x for x in v if isinstance(x, TextContentValidator))
+    assert rec.file_subdir == "texts"
+    assert txt.texts_path == "texts"
+
+
+def test_sentence_pair_includes_structural_and_label_validators():
+    """sentence_pair carries the structural SentencePairValidator (the exactly-2
+    tab-fields check) ON TOP of the shared content hygiene — that structural
+    check is what distinguishes it from text_classification (free-form text). As
+    a SUPERVISED category it also keeps LabelColumnValidator, which must run
+    BEFORE the (centrally-composed) LabelDiversityValidator."""
+    from tracebloc_ingestor.validators.sentence_pair_validator import (
+        SentencePairValidator,
+    )
+    from tracebloc_ingestor.validators.label_column_validator import (
+        LabelColumnValidator,
+    )
+    from tracebloc_ingestor.validators.text_content_validator import (
+        TextContentValidator,
+    )
+
+    types = _types(map_validators(TaskCategory.SENTENCE_PAIR_CLASSIFICATION, {}))
+    assert SentencePairValidator in types
+    assert TextContentValidator in types
+    assert LabelColumnValidator in types
+    assert types.index(LabelColumnValidator) < types.index(LabelDiversityValidator)
+    # text_classification does NOT structurally constrain its .txt content.
+    assert SentencePairValidator not in _types(
+        map_validators(TaskCategory.TEXT_CLASSIFICATION, {})
+    )
+
+
+def test_sentence_pair_threads_custom_extension_to_structural_validator():
+    """A custom extension reaches the structural validator so the resolved path
+    matches what text_transfer copies."""
+    from tracebloc_ingestor.validators.sentence_pair_validator import (
+        SentencePairValidator,
+    )
+
+    v = map_validators(
+        TaskCategory.SENTENCE_PAIR_CLASSIFICATION, {"extension": ".text"}
+    )
+    sp = next(x for x in v if isinstance(x, SentencePairValidator))
+    assert sp.extension == ".text"
+
+
+def test_sentence_pair_threads_custom_label_column():
+    from tracebloc_ingestor.validators.label_column_validator import (
+        LabelColumnValidator,
+    )
+
+    v = map_validators(
+        TaskCategory.SENTENCE_PAIR_CLASSIFICATION, {"label_column": "relation"}
+    )
+    lc = next(x for x in v if isinstance(x, LabelColumnValidator))
+    assert lc.label_column == "relation"
+
+
+def test_sentence_pair_with_schema_adds_data_validator():
+    v = map_validators(
+        TaskCategory.SENTENCE_PAIR_CLASSIFICATION, {"schema": {"a": "INT"}}
+    )
     assert DataValidator in _types(v)
 
 
@@ -537,9 +688,11 @@ ALL_CATEGORIES = (
     TaskCategory.KEYPOINT_DETECTION,
     TaskCategory.TEXT_CLASSIFICATION,
     TaskCategory.TOKEN_CLASSIFICATION,
+    TaskCategory.SENTENCE_PAIR_CLASSIFICATION,
     TaskCategory.MASKED_LANGUAGE_MODELING,
     TaskCategory.CAUSAL_LANGUAGE_MODELING,
     TaskCategory.SEQ2SEQ,
+    TaskCategory.EMBEDDINGS,
     TaskCategory.TABULAR_CLASSIFICATION,
     TaskCategory.TABULAR_REGRESSION,
     TaskCategory.TIME_SERIES_FORECASTING,
@@ -551,6 +704,7 @@ _CLASSIFICATION = {
     TaskCategory.SEMANTIC_SEGMENTATION,
     TaskCategory.KEYPOINT_DETECTION,
     TaskCategory.TEXT_CLASSIFICATION,
+    TaskCategory.SENTENCE_PAIR_CLASSIFICATION,
     TaskCategory.TABULAR_CLASSIFICATION,
 }
 

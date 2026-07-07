@@ -1,13 +1,12 @@
-"""Tests for APIClient request methods (send_batch, metadata, prepare, create).
+"""Tests for APIClient request methods (send_ingest_summary).
 
 Auth boot paths are covered in test_api_client_auth.py. Here we build a client
 with BACKEND_TOKEN set (so __init__ does no network call) and patch the
-session's get/post to exercise each method's success / error / local-mode path.
+session's post to exercise each method's success / error / local-mode path.
 """
 
 from __future__ import annotations
 
-import logging
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -15,12 +14,9 @@ import requests
 
 from tracebloc_ingestor.config import Config
 from tracebloc_ingestor.api.client import APIClient
-from tracebloc_ingestor.utils.constants import TaskCategory
 
 
 def _client(**overrides):
-    # TITLE=None by default so create_dataset's title-generation path is
-    # deterministic regardless of any TITLE exported in the host/CI env.
     defaults = dict(
         BACKEND_TOKEN="tok",
         CLIENT_USERNAME=None,
@@ -58,235 +54,83 @@ def test_authenticate_http_error_raises():
 
 
 # ---------------------------------------------------------------------------
-# send_batch
+# send_ingest_summary
 # ---------------------------------------------------------------------------
 
 
-def test_send_batch_success():
+def _summary_call(client):
+    return client.send_ingest_summary(
+        table_name="tbl", ingestor_id="ing", labels={"cat": 1},
+        dataset_title="T", data_format="image", data_intent="train",
+        category="image_classification", schema={}, samples=[],
+    )
+
+
+def test_send_ingest_summary_success():
     client = _client()
-    records = [(1, {"data_id": "a", "label": "cat"}), (2, {"data_id": "b"})]
-    with patch.object(client.session, "post", return_value=_resp(200)) as post:
-        assert client.send_batch(records, "tbl", ingestor_id="ing") is True
-    post.assert_called_once()
-    assert "/global_meta/tbl/" in post.call_args[0][0]
+    with patch.object(
+        client.session, "post",
+        return_value=_resp(200, {"dataset_id": 1, "dataset_key": "key"}),
+    ):
+        result = _summary_call(client)
+    assert result == {"dataset_id": 1, "dataset_key": "key"}
 
 
-def test_send_batch_http_error_returns_false():
+def test_send_ingest_summary_http_error_raises():
     client = _client()
     with patch.object(client.session, "post", return_value=_resp(500, text="boom")):
-        assert client.send_batch([(1, {"data_id": "a"})], "tbl", "ing") is False
-
-
-def test_send_batch_local_mode_skips_network():
-    client = _client(EDGE_ENV="local")
-    with patch.object(client.session, "post") as post:
-        assert client.send_batch([(1, {})], "tbl", "ing") is True
-    post.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
-# send_global_meta_meta
-# ---------------------------------------------------------------------------
-
-
-def test_send_global_meta_success():
-    client = _client()
-    with patch.object(client.session, "post", return_value=_resp(200, {"ok": 1})):
-        assert client.send_global_meta_meta("tbl", {"a": "INT"}, {"k": "v"}) is True
-
-
-def test_send_global_meta_error_returns_false():
-    client = _client()
-    with patch.object(client.session, "post", return_value=_resp(400, text="bad")):
-        assert client.send_global_meta_meta("tbl", {}, {}) is False
-
-
-def test_send_global_meta_local_mode():
-    client = _client(EDGE_ENV="local")
-    with patch.object(client.session, "post") as post:
-        assert client.send_global_meta_meta("tbl", {}, {}) is True
-    post.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
-# send_generate_edge_label_meta
-# ---------------------------------------------------------------------------
-
-
-def test_generate_edge_label_success():
-    client = _client()
-    with patch.object(client.session, "get", return_value=_resp(200)) as get:
-        assert client.send_generate_edge_label_meta("tbl", "ing", "train") is True
-    assert "generate-edge-labels-meta" in get.call_args[0][0]
-
-
-def test_generate_edge_label_error_returns_false():
-    client = _client()
-    with patch.object(client.session, "get", return_value=_resp(503, text="down")):
-        assert client.send_generate_edge_label_meta("tbl", "ing", "train") is False
-
-
-def test_generate_edge_label_local_mode():
-    client = _client(EDGE_ENV="local")
-    with patch.object(client.session, "get") as get:
-        assert client.send_generate_edge_label_meta("tbl", "ing", "train") is True
-    get.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
-# prepare_dataset
-# ---------------------------------------------------------------------------
-
-
-def test_prepare_dataset_success():
-    client = _client()
-    with patch.object(client.session, "get", return_value=_resp(200, {"ok": 1})):
-        assert (
-            client.prepare_dataset(
-                TaskCategory.IMAGE_CLASSIFICATION, "ing", "image", "train"
-            )
-            is True
-        )
-
-
-def test_prepare_dataset_invalid_category_returns_false():
-    client = _client()
-    with patch.object(client.session, "get") as get:
-        assert client.prepare_dataset("nonsense", "ing", "image", "train") is False
-    get.assert_not_called()
-
-
-def test_prepare_dataset_error_returns_false():
-    client = _client()
-    with patch.object(client.session, "get", return_value=_resp(500, text="x")):
-        assert (
-            client.prepare_dataset(
-                TaskCategory.IMAGE_CLASSIFICATION, "ing", "image", "train"
-            )
-            is False
-        )
-
-
-def test_prepare_dataset_local_mode():
-    client = _client(EDGE_ENV="local")
-    with patch.object(client.session, "get") as get:
-        assert client.prepare_dataset("anything", "ing", "image", "train") is True
-    get.assert_not_called()
-
-
-def test_prepare_dataset_error_captures_response_body():
-    """On HTTP error, `prepare_dataset` must stash the backend response body
-    on `self.last_prepare_error` so callers can surface the actual reason
-    in their user-visible error — instead of pointing at "the logged API
-    error above". Issue #251.
-
-    The body retained must include the status code and the response text
-    (capped) so a downstream RuntimeError can include both.
-    """
-    client = _client()
-    body = '{"message":"Please provide atleast 2 labels."}'
-    with patch.object(client.session, "get", return_value=_resp(400, text=body)):
-        ok = client.prepare_dataset(
-            TaskCategory.TABULAR_CLASSIFICATION, "ing", "tabular", "train"
-        )
-    assert ok is False
-    assert client.last_prepare_error is not None
-    # Status code + body both surface so the user sees the backend reason.
-    assert "HTTP 400" in client.last_prepare_error
-    assert "Please provide" in client.last_prepare_error
-
-
-def test_prepare_dataset_last_error_starts_unset():
-    """On a clean ingestor with no prior failure, `last_prepare_error`
-    is None — base.py falls back to its generic 'see logged API error
-    above' message only when this attribute is truly absent."""
-    client = _client()
-    assert client.last_prepare_error is None
-
-
-def test_prepare_dataset_network_error_captures_string():
-    """When `e.response` is None (DNS / connection refused / timeout),
-    last_prepare_error should still be populated with the stringified
-    exception — never silently fall through to None."""
-    import requests as _req
-
-    client = _client()
-    err = _req.exceptions.ConnectionError("name resolution failed")
-    with patch.object(client.session, "get", side_effect=err):
-        ok = client.prepare_dataset(
-            TaskCategory.TABULAR_CLASSIFICATION, "ing", "tabular", "train"
-        )
-    assert ok is False
-    assert client.last_prepare_error is not None
-    assert "name resolution failed" in client.last_prepare_error
-
-
-# ---------------------------------------------------------------------------
-# create_dataset
-# ---------------------------------------------------------------------------
-
-
-def test_create_dataset_success_generates_title():
-    client = _client()
-    captured = {}
-
-    def fake_post(url, data=None, headers=None, timeout=None):
-        captured["data"] = data
-        return _resp(200, {"id": 7})
-
-    with patch.object(client.session, "post", side_effect=fake_post):
-        result = client.create_dataset(
-            ingestor_id="ing", category=TaskCategory.IMAGE_CLASSIFICATION
-        )
-    assert result == {"id": 7}
-    assert "image_classification_ing" in captured["data"]
-
-
-def test_create_dataset_tabular_allows_feature_modification():
-    client = _client()
-    captured = {}
-    with patch.object(
-        client.session,
-        "post",
-        side_effect=lambda url, data=None, **k: captured.update(data=data)
-        or _resp(200, {"id": 1}),
-    ):
-        client.create_dataset(
-            ingestor_id="ing", category=TaskCategory.TABULAR_CLASSIFICATION
-        )
-    assert '"allow_feature_modification": true' in captured["data"]
-
-
-def test_create_dataset_uses_config_title():
-    client = _client(TITLE="My Title")
-    captured = {}
-    with patch.object(
-        client.session,
-        "post",
-        side_effect=lambda url, data=None, **k: captured.update(data=data)
-        or _resp(200, {"id": 1}),
-    ):
-        client.create_dataset(
-            ingestor_id="ing", category=TaskCategory.IMAGE_CLASSIFICATION
-        )
-    assert "My Title" in captured["data"]
-
-
-def test_create_dataset_error_raises():
-    client = _client()
-    with patch.object(client.session, "post", return_value=_resp(500, text="err")):
         with pytest.raises(requests.exceptions.RequestException):
-            client.create_dataset(
-                ingestor_id="ing", category=TaskCategory.IMAGE_CLASSIFICATION
-            )
+            _summary_call(client)
 
 
-def test_create_dataset_local_mode():
+def test_send_ingest_summary_409_returns_existing_dataset():
+    """Backend #900 returns 409 + {dataset_id, dataset_key} when the
+    (owner, ingestor_id) dataset already exists (e.g. a transport-level POST
+    retry after a dropped 201). That 409 is a success signal for the retry —
+    the client must return the existing dataset, not raise (issue #332)."""
+    client = _client()
+    with patch.object(
+        client.session, "post",
+        return_value=_resp(409, {"dataset_id": 7, "dataset_key": "existing"}),
+    ):
+        result = _summary_call(client)
+    assert result == {"dataset_id": 7, "dataset_key": "existing"}
+
+
+def test_send_ingest_summary_local_mode():
     client = _client(EDGE_ENV="local")
     with patch.object(client.session, "post") as post:
-        result = client.create_dataset(ingestor_id="ing", category="x")
-    assert result["id"] == "mock_dataset_id"
+        result = _summary_call(client)
     post.assert_not_called()
+    assert result["dataset_id"] == "mock_dataset_id"
+
+
+def test_send_ingest_summary_payload_shape():
+    import json as _json
+
+    client = _client()
+    with patch.object(
+        client.session, "post",
+        return_value=_resp(200, {"dataset_id": 42, "dataset_key": "k"}),
+    ) as post:
+        client.send_ingest_summary(
+            table_name="tbl",
+            ingestor_id="ing-42",
+            labels={"cat": 5, "dog": 3},
+            dataset_title="My Dataset",
+            data_format="image",
+            data_intent="train",
+            category="image_classification",
+            schema={"col": "INT"},
+            samples=[{"data_id": "a"}],
+            meta_data={"source": "test"},
+        )
+
+    sent = _json.loads(post.call_args.kwargs["data"])
+    for key in ("ingestor_id", "labels", "dataset_title", "data_format",
+                "data_intent", "category", "schema", "samples", "meta_data"):
+        assert key in sent, f"missing key: {key}"
+    assert sent["meta_data"] == {"source": "test"}
 
 
 # ---------------------------------------------------------------------------
@@ -297,7 +141,7 @@ def test_create_dataset_local_mode():
 def test_authed_request_refreshes_token_on_401():
     """A 401 on an authenticated call triggers ONE refresh + retry. The
     refresh path rotates the token to a fresh value; the second call
-    succeeds with the new token. The terminal create_dataset / metadata
+    succeeds with the new token. The terminal send_ingest_summary
     callback used to fail outright on multi-hour runs when the token
     aged out — now it transparently re-mints."""
     client = _client(BACKEND_TOKEN="old_token")
@@ -308,7 +152,7 @@ def test_authed_request_refreshes_token_on_401():
         calls.append(headers["Authorization"])
         if len(calls) == 1:
             return _resp(401, text='{"detail":"Invalid token."}')
-        return _resp(200, {"id": 7})
+        return _resp(200, {"dataset_id": 7, "dataset_key": "k"})
 
     # Stub _refresh_token to simulate a successful rotation.
     def fake_refresh():
@@ -318,9 +162,7 @@ def test_authed_request_refreshes_token_on_401():
     with patch.object(client.session, "post", side_effect=fake_post), patch.object(
         client, "_refresh_token", side_effect=fake_refresh
     ):
-        client.create_dataset(
-            ingestor_id="ing", category=TaskCategory.IMAGE_CLASSIFICATION
-        )
+        _summary_call(client)
 
     assert len(calls) == 2, "expected one 401 + one retry"
     assert calls[0] == "TOKEN old_token"
@@ -342,9 +184,7 @@ def test_authed_request_gives_up_after_one_retry(monkeypatch):
 
     with patch.object(client.session, "post", side_effect=fake_post):
         with pytest.raises(requests.exceptions.RequestException):
-            client.create_dataset(
-                ingestor_id="ing", category=TaskCategory.IMAGE_CLASSIFICATION
-            )
+            _summary_call(client)
 
     # One attempt only — refresh saw no change so no retry.
     assert len(calls) == 1
@@ -356,11 +196,10 @@ def test_authed_request_passes_through_non_401_unchanged():
     failure — the per-call error handling already covers those."""
     client = _client()
     with patch.object(
-        client.session, "post", return_value=_resp(200, {"id": 1})
+        client.session, "post",
+        return_value=_resp(200, {"dataset_id": 1, "dataset_key": "k"}),
     ) as post:
-        client.create_dataset(
-            ingestor_id="ing", category=TaskCategory.IMAGE_CLASSIFICATION
-        )
+        _summary_call(client)
     # Exactly one call — no refresh, no retry on the happy path.
     assert post.call_count == 1
 
@@ -424,39 +263,3 @@ def test_refresh_token_false_when_reauth_raises():
     client.token = "old_token"
     with patch.object(client, "authenticate", side_effect=RuntimeError("auth down")):
         assert client._refresh_token() is False
-
-
-# ---------------------------------------------------------------------------
-# send_batch payload contract — the per-record body the backend depends on,
-# including defaults and the misspelled-but-load-bearing `injestor_id` key. A
-# typo/default drift here would silently break registration with green tests.
-# ---------------------------------------------------------------------------
-
-
-def test_send_batch_payload_shape():
-    import json as _json
-
-    client = _client()
-    records = [
-        (1, {"data_id": "a", "data_intent": "test", "label": "cat"}),
-        (2, {"data_id": "b"}),  # exercises the data_intent / label defaults
-    ]
-    with patch.object(client.session, "post", return_value=_resp(200)) as post:
-        assert client.send_batch(records, "tbl", ingestor_id="ing-42") is True
-
-    sent = _json.loads(post.call_args.kwargs["data"])
-    assert sent[0] == {
-        "data_id": "a",
-        "data_intent": "test",
-        "label": "cat",
-        "is_sample": False,
-        "injestor_id": "ing-42",
-    }
-    # Defaults: data_intent -> "train", label -> "".
-    assert sent[1] == {
-        "data_id": "b",
-        "data_intent": "train",
-        "label": "",
-        "is_sample": False,
-        "injestor_id": "ing-42",
-    }

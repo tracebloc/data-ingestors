@@ -34,12 +34,10 @@ def make_ingestor(records=None, **overrides):
     db.create_table.return_value = MagicMock(name="table")
     db.insert_batch.return_value = ([1, 2], [])  # ids, db_failures
     db.get_table_schema.return_value = {"a": "INT"}
+    db.get_label_counts.return_value = {"cat": 2}
+    db.get_samples.return_value = []
     api = MagicMock(name="APIClient")
-    api.send_batch.return_value = True
-    api.send_generate_edge_label_meta.return_value = True
-    api.send_global_meta_meta.return_value = True
-    api.prepare_dataset.return_value = True
-    api.create_dataset.return_value = {"id": 1}
+    api.send_ingest_summary.return_value = {"dataset_id": 1, "dataset_key": "key"}
 
     kwargs = dict(
         database=db,
@@ -394,11 +392,10 @@ def test_process_record_omits_mask_id_for_non_semseg_categories():
 def test_process_batch_success():
     ing = make_ingestor()
     session = MagicMock()
-    ids, api_success, db_failures = ing._batch_writer._process(
+    ids, db_failures = ing._batch_writer._process(
         [{"data_id": "a"}], session
     )
     assert ids == [1, 2]
-    assert api_success is True
     assert db_failures == []
 
 
@@ -406,12 +403,11 @@ def test_process_batch_no_ids_skips_api():
     ing = make_ingestor()
     ing.database.insert_batch.return_value = ([], [{"err": "x"}])
     session = MagicMock()
-    ids, api_success, db_failures = ing._batch_writer._process(
+    ids, db_failures = ing._batch_writer._process(
         [{"data_id": "a"}], session
     )
     assert ids == []
-    assert api_success is False
-    ing.api_client.send_batch.assert_not_called()
+    assert db_failures == [{"err": "x"}]
 
 
 def test_process_batch_reraises_on_insert_error():
@@ -543,49 +539,25 @@ def test_ingest_happy_path():
         failed = ing.ingest("src", batch_size=10)
     assert failed == []
     ing.database.insert_batch.assert_called()
-    ing.api_client.create_dataset.assert_called_once()
+    ing.api_client.send_ingest_summary.assert_called_once()
 
 
-@pytest.mark.parametrize(
-    "failing_step",
-    [
-        "send_generate_edge_label_meta",
-        "send_global_meta_meta",
-        "prepare_dataset",
-    ],
-)
-def test_ingest_fails_loud_when_backend_registration_step_fails(failing_step):
-    # REGRESSION GUARD: a False return from ANY backend registration step leaves
-    # the dataset half-created — rows are committed to MySQL but the dataset is
-    # not registered. The old nested-if cascade silently skipped the remaining
-    # steps (including create_dataset) and the run STILL returned cleanly (exit
-    # 0), so the user saw a "success" over an unregistered dataset. Each step
-    # must now RAISE so the run exits non-zero and the failure is visible.
+def test_ingest_fails_loud_when_backend_registration_fails():
+    # REGRESSION GUARD: if send_ingest_summary raises, rows are committed to
+    # MySQL but the dataset is not registered. The exception must propagate so
+    # the run exits non-zero and the failure is visible.
     records = [{"a": "1", "filename": "f1"}]
     ing = make_ingestor(records=records, category=None)
-    getattr(ing.api_client, failing_step).return_value = False
+    ing.api_client.send_ingest_summary.side_effect = RuntimeError("backend rejected")
     with patch.object(base_mod, "Session") as Sess:
         Sess.return_value.__enter__.return_value = MagicMock()
-        with pytest.raises(RuntimeError, match="NOT registered"):
+        with pytest.raises(RuntimeError):
             ing.ingest("src", batch_size=10)
-    # The chain must stop — create_dataset is never reached on a failed step.
-    ing.api_client.create_dataset.assert_not_called()
 
 
-def test_ingest_calls_edge_label_for_self_supervised_categories():
-    """Self-supervised categories (MLM, …) MUST call the edge-label endpoint
-    like every other category.
-
-    Originally (#213) the call was SKIPPED for self-supervised categories
-    because they carry no `label` and the old backend rejected blank labels,
-    returning a misleading HTTP 400. Backend PR #683 ('allow blank label for
-    self-supervised categories') fixed that: GenerateEdgeLabelsMeta now buckets
-    the single '' label into ``edge_labels_meta = {"": N}`` (HTTP 200). The
-    skip was the only thing left blocking self-supervised registration —
-    without an ``edge_labels_meta`` document the backend's get_edges finds no
-    candidate edges and ``prepare`` returns 'No edges found', so the dataset
-    never registers and stays invisible in the app. The call must now run for
-    self-supervised too; the remaining registration steps still run."""
+def test_ingest_calls_summary_for_self_supervised_categories():
+    """Self-supervised categories (MLM, …) MUST call send_ingest_summary like
+    every other category — the single-call flow handles all categories uniformly."""
     from tracebloc_ingestor.utils.constants import TaskCategory
 
     records = [{"a": "1", "filename": "f1"}]
@@ -594,8 +566,6 @@ def test_ingest_calls_edge_label_for_self_supervised_categories():
         category=TaskCategory.MASKED_LANGUAGE_MODELING,
         label_column=None,
     )
-    # Patch validate_data + map_file_transfer to skip real-filesystem checks;
-    # the behaviour we're testing lives at the registration block AFTER ingest.
     with patch.object(base_mod, "Session") as Sess, patch.object(
         ing, "validate_data", return_value=True
     ), patch.object(
@@ -605,17 +575,12 @@ def test_ingest_calls_edge_label_for_self_supervised_categories():
     ):
         Sess.return_value.__enter__.return_value = MagicMock()
         ing.ingest("src", batch_size=10)
-    ing.api_client.send_generate_edge_label_meta.assert_called_once()
-    ing.api_client.send_global_meta_meta.assert_called_once()
-    ing.api_client.prepare_dataset.assert_called_once()
-    ing.api_client.create_dataset.assert_called_once()
+    ing.api_client.send_ingest_summary.assert_called_once()
 
 
-def test_ingest_fails_loud_when_edge_label_fails_for_self_supervised():
-    """A False return from the edge-label call for a self-supervised category
-    must RAISE (it is no longer skipped — see the test above), leaving the
-    dataset unregistered rather than silently exiting 0. Mirrors the
-    label-carrying fail-loud guard for the self-supervised path."""
+def test_ingest_fails_loud_when_summary_fails_for_self_supervised():
+    """If send_ingest_summary raises for a self-supervised category, the ingest
+    must fail loudly — not silently exit 0 with an unregistered dataset."""
     from tracebloc_ingestor.utils.constants import TaskCategory
 
     records = [{"a": "1", "filename": "f1"}]
@@ -624,7 +589,7 @@ def test_ingest_fails_loud_when_edge_label_fails_for_self_supervised():
         category=TaskCategory.MASKED_LANGUAGE_MODELING,
         label_column=None,
     )
-    ing.api_client.send_generate_edge_label_meta.return_value = False
+    ing.api_client.send_ingest_summary.side_effect = RuntimeError("backend rejected")
     with patch.object(base_mod, "Session") as Sess, patch.object(
         ing, "validate_data", return_value=True
     ), patch.object(
@@ -633,16 +598,12 @@ def test_ingest_fails_loud_when_edge_label_fails_for_self_supervised():
         side_effect=lambda c, r, o, cfg=None, source_record=None: r,
     ):
         Sess.return_value.__enter__.return_value = MagicMock()
-        with pytest.raises(RuntimeError, match="NOT registered"):
+        with pytest.raises(RuntimeError):
             ing.ingest("src", batch_size=10)
-    ing.api_client.send_generate_edge_label_meta.assert_called_once()
-    # The chain must stop — create_dataset is never reached on a failed step.
-    ing.api_client.create_dataset.assert_not_called()
 
 
-def test_ingest_still_calls_edge_label_for_label_carrying_categories():
-    """Regression guard for the gate above: a non-self-supervised category
-    still calls the edge-label endpoint."""
+def test_ingest_calls_summary_for_label_carrying_categories():
+    """Non-self-supervised categories also call send_ingest_summary."""
     from tracebloc_ingestor.utils.constants import TaskCategory
 
     records = [{"a": "1", "filename": "f1"}]
@@ -660,7 +621,7 @@ def test_ingest_still_calls_edge_label_for_label_carrying_categories():
     ):
         Sess.return_value.__enter__.return_value = MagicMock()
         ing.ingest("src", batch_size=10)
-    ing.api_client.send_generate_edge_label_meta.assert_called_once()
+    ing.api_client.send_ingest_summary.assert_called_once()
 
 
 def test_ingest_fails_fast_on_invalid_intent():
@@ -1068,7 +1029,7 @@ _TEXT_PROFILE = {
 )
 def test_ingest_attaches_text_profile_for_nlp(category):
     """For every NLP category, the data-derived text profile is attached to
-    file_options so it rides the existing global-metadata channel."""
+    file_options and sent as meta_data in the ingest summary."""
     from tracebloc_ingestor.utils.constants import TaskCategory
 
     cat = getattr(TaskCategory, category)
@@ -1085,8 +1046,8 @@ def test_ingest_attaches_text_profile_for_nlp(category):
     ):
         Sess.return_value.__enter__.return_value = MagicMock()
         ing.ingest("src", batch_size=10)
-    args, _ = ing.api_client.send_global_meta_meta.call_args
-    assert args[2].get("text_profile") == _TEXT_PROFILE
+    call_kwargs = ing.api_client.send_ingest_summary.call_args[1]
+    assert call_kwargs["meta_data"].get("text_profile") == _TEXT_PROFILE
 
 
 def test_ingest_omits_text_profile_when_none_for_nlp():
@@ -1111,8 +1072,8 @@ def test_ingest_omits_text_profile_when_none_for_nlp():
     ):
         Sess.return_value.__enter__.return_value = MagicMock()
         ing.ingest("src", batch_size=10)
-    args, _ = ing.api_client.send_global_meta_meta.call_args
-    assert "text_profile" not in args[2]
+    call_kwargs = ing.api_client.send_ingest_summary.call_args[1]
+    assert "text_profile" not in call_kwargs["meta_data"]
 
 
 def test_ingest_does_not_profile_non_nlp():
@@ -1137,8 +1098,84 @@ def test_ingest_does_not_profile_non_nlp():
         Sess.return_value.__enter__.return_value = MagicMock()
         ing.ingest("src", batch_size=10)
     profile.assert_not_called()
-    args, _ = ing.api_client.send_global_meta_meta.call_args
-    assert "text_profile" not in args[2]
+    call_kwargs = ing.api_client.send_ingest_summary.call_args[1]
+    assert "text_profile" not in call_kwargs["meta_data"]
+
+
+# --- meta_data forwarding: file_options reach send_ingest_summary -----------
+
+
+def test_ingest_forwards_file_options_as_meta_data():
+    """Caller-supplied file_options (e.g. extension, target_size) must appear
+    verbatim in the meta_data kwarg of send_ingest_summary."""
+    records = [{"a": "1", "filename": "f1"}]
+    ing = make_ingestor(
+        records=records,
+        category=None,
+        file_options={"extension": ".jpeg", "target_size": [256, 256]},
+    )
+    with patch.object(base_mod, "Session") as Sess, patch.object(
+        ing, "validate_data", return_value=True
+    ), patch.object(
+        base_mod,
+        "map_file_transfer",
+        side_effect=lambda c, r, o, cfg=None, source_record=None: r,
+    ):
+        Sess.return_value.__enter__.return_value = MagicMock()
+        ing.ingest("src", batch_size=10)
+    call_kwargs = ing.api_client.send_ingest_summary.call_args[1]
+    assert call_kwargs["meta_data"]["extension"] == ".jpeg"
+    assert call_kwargs["meta_data"]["target_size"] == [256, 256]
+
+
+def test_ingest_includes_number_of_columns_in_meta_data_for_tabular():
+    """For tabular-family categories, number_of_columns is injected into
+    file_options and must therefore appear in meta_data."""
+    from tracebloc_ingestor.utils.constants import TaskCategory
+
+    records = [{"a": "1", "b": "2", "filename": "f1"}]
+    ing = make_ingestor(
+        records=records,
+        category=TaskCategory.TABULAR_CLASSIFICATION,
+        schema={"a": "INT", "b": "FLOAT"},
+    )
+    ing.database.get_table_schema.return_value = {"a": "INT", "b": "FLOAT"}
+    with patch.object(base_mod, "Session") as Sess, patch.object(
+        ing, "validate_data", return_value=True
+    ), patch.object(
+        base_mod,
+        "map_file_transfer",
+        side_effect=lambda c, r, o, cfg=None, source_record=None: r,
+    ):
+        Sess.return_value.__enter__.return_value = MagicMock()
+        ing.ingest("src", batch_size=10)
+    call_kwargs = ing.api_client.send_ingest_summary.call_args[1]
+    assert call_kwargs["meta_data"]["number_of_columns"] == 2
+
+
+def test_ingest_does_not_inject_number_of_columns_for_non_tabular():
+    """Non-tabular categories (e.g. image_classification) must NOT get
+    number_of_columns in meta_data — the count would be meaningless there."""
+    from tracebloc_ingestor.utils.constants import TaskCategory
+
+    records = [{"a": "1", "filename": "f1"}]
+    ing = make_ingestor(
+        records=records,
+        category=TaskCategory.IMAGE_CLASSIFICATION,
+        schema={"a": "INT"},
+    )
+    ing.database.get_table_schema.return_value = {"a": "INT"}
+    with patch.object(base_mod, "Session") as Sess, patch.object(
+        ing, "validate_data", return_value=True
+    ), patch.object(
+        base_mod,
+        "map_file_transfer",
+        side_effect=lambda c, r, o, cfg=None, source_record=None: r,
+    ):
+        Sess.return_value.__enter__.return_value = MagicMock()
+        ing.ingest("src", batch_size=10)
+    call_kwargs = ing.api_client.send_ingest_summary.call_args[1]
+    assert "number_of_columns" not in call_kwargs["meta_data"]
 
 
 # --- Truthful registration-failure message about row state (0-record case) ---
@@ -1154,21 +1191,31 @@ def test_rows_state_clause_phrasing():
     assert "3 already-ingested row(s)" in base_mod._rows_state_clause(3)
 
 
-def test_zero_inserted_registration_failure_message_is_truthful():
-    """A registration failure with 0 inserted rows must NOT say rows are already
-    in the database (the misleading message the adversarial run surfaced)."""
-    # insert_batch reports 0 inserted ids -> inserted_records stays 0.
+def test_zero_inserted_skips_registration():
+    """stats['inserted_records'] == 0 → send_ingest_summary is skipped and
+    ingest completes without error. The guard is on inserted_records, not on
+    the return value of get_label_counts."""
     ing = make_ingestor(records=[{"a": "1", "filename": "f1"}], category=None)
-    ing.database.insert_batch.return_value = ([], [])  # no ids inserted
-    ing.api_client.send_generate_edge_label_meta.return_value = False
+    ing.database.insert_batch.return_value = ([], [])  # nothing committed
     with patch.object(base_mod, "Session") as Sess:
         Sess.return_value.__enter__.return_value = MagicMock()
-        with pytest.raises(RuntimeError) as exc:
+        ing.ingest("src", batch_size=10)  # must NOT raise
+    ing.api_client.send_ingest_summary.assert_not_called()
+
+
+def test_label_counts_empty_despite_inserts_raises():
+    """If rows were inserted (inserted_records > 0) but get_label_counts returns
+    {} — a DB accounting mismatch — ingest must raise RuntimeError rather than
+    silently skip registration and leave committed MySQL rows unregistered."""
+    ing = make_ingestor(records=[{"a": "1", "filename": "f1"}], category=None)
+    # insert_batch reports 1 row committed, but the DB query returns nothing.
+    ing.database.insert_batch.return_value = ([42], [])
+    ing.database.get_label_counts.return_value = {}
+    with patch.object(base_mod, "Session") as Sess:
+        Sess.return_value.__enter__.return_value = MagicMock()
+        with pytest.raises(RuntimeError, match="get_label_counts returned nothing"):
             ing.ingest("src", batch_size=10)
-    msg = str(exc.value)
-    assert "NOT registered" in msg
-    assert "already in the database" not in msg
-    assert "no rows were ingested" in msg
+    ing.api_client.send_ingest_summary.assert_not_called()
 
 
 def test_mlm_header_only_csv_fails_before_table_creation(clean_env, tmp_path):
@@ -1230,3 +1277,133 @@ def test_mlm_all_files_missing_fails_before_table_creation(clean_env, tmp_path):
             ing.ingest(str(csv), batch_size=10)
 
     ing.database.create_table.assert_not_called()
+
+
+# ── #227: compensating delete on failed registration ────────────────────────
+# Rows commit per batch during the loop; when the run fails before its dataset
+# registers, the failure path must delete exactly this run's rows (identified
+# by ingestor_id) so the table is clean for a re-run — instead of leaving
+# orphans that trip the stale-table guard (#336).
+
+
+def _ingest_expecting(ing, exc_type):
+    with patch.object(base_mod, "Session") as Sess, patch.object(
+        ing, "validate_data", return_value=True
+    ), patch.object(
+        base_mod,
+        "map_file_transfer",
+        side_effect=lambda c, r, o, cfg=None, source_record=None: r,
+    ):
+        Sess.return_value.__enter__.return_value = MagicMock()
+        with pytest.raises(exc_type):
+            ing.ingest("src", batch_size=10)
+
+
+def test_failed_registration_triggers_compensating_delete():
+    """send_ingest_summary fails terminally → the run's rows are deleted by
+    ingestor_id and the original error still propagates."""
+    from tracebloc_ingestor.utils.constants import TaskCategory
+
+    ing = make_ingestor(
+        records=[{"a": "1", "filename": "f1"}],
+        category=TaskCategory.IMAGE_CLASSIFICATION,
+        label_column="a",
+    )
+    ing.api_client.send_ingest_summary.side_effect = RuntimeError("backend rejected")
+    _ingest_expecting(ing, RuntimeError)
+    ing.database.delete_by_ingestor_id.assert_called_once_with(
+        ing.table_name, ing.ingestor_id
+    )
+
+
+def test_successful_registration_never_deletes():
+    """Happy path: registration succeeds → the compensating delete must not run."""
+    from tracebloc_ingestor.utils.constants import TaskCategory
+
+    ing = make_ingestor(
+        records=[{"a": "1", "filename": "f1"}],
+        category=TaskCategory.IMAGE_CLASSIFICATION,
+        label_column="a",
+    )
+    with patch.object(base_mod, "Session") as Sess, patch.object(
+        ing, "validate_data", return_value=True
+    ), patch.object(
+        base_mod,
+        "map_file_transfer",
+        side_effect=lambda c, r, o, cfg=None, source_record=None: r,
+    ):
+        Sess.return_value.__enter__.return_value = MagicMock()
+        ing.ingest("src", batch_size=10)
+    ing.database.delete_by_ingestor_id.assert_not_called()
+
+
+def test_cleanup_failure_preserves_original_error(caplog):
+    """The delete itself failing must not mask the registration error — the
+    original exception propagates and the orphan state is logged CRITICAL."""
+    import logging
+    from tracebloc_ingestor.utils.constants import TaskCategory
+
+    ing = make_ingestor(
+        records=[{"a": "1", "filename": "f1"}],
+        category=TaskCategory.IMAGE_CLASSIFICATION,
+        label_column="a",
+    )
+    ing.api_client.send_ingest_summary.side_effect = RuntimeError("backend rejected")
+    ing.database.delete_by_ingestor_id.side_effect = Exception("mysql went away")
+    with caplog.at_level(logging.CRITICAL):
+        _ingest_expecting(ing, RuntimeError)  # ORIGINAL error, not the cleanup one
+    assert any("Compensating delete FAILED" in r.message for r in caplog.records)
+
+
+def test_no_rows_inserted_no_delete():
+    """A failure before any row was inserted must not attempt a delete —
+    the table may not even exist yet."""
+    from tracebloc_ingestor.utils.constants import TaskCategory
+
+    ing = make_ingestor(
+        records=[],
+        category=TaskCategory.IMAGE_CLASSIFICATION,
+        label_column="a",
+    )
+    # Force a failure after the commit point but before registration, with
+    # zero inserted rows: get_label_counts blows up on an empty run.
+    ing.database.get_label_counts.side_effect = RuntimeError("boom")
+    with patch.object(base_mod, "Session") as Sess, patch.object(
+        ing, "validate_data", return_value=True
+    ), patch.object(
+        base_mod,
+        "map_file_transfer",
+        side_effect=lambda c, r, o, cfg=None, source_record=None: r,
+    ):
+        Sess.return_value.__enter__.return_value = MagicMock()
+        with pytest.raises(RuntimeError):
+            ing.ingest("src", batch_size=10)
+    ing.database.delete_by_ingestor_id.assert_not_called()
+
+
+def test_late_failure_after_registration_never_deletes():
+    """The dataset_registered guard: an exception AFTER send_ingest_summary
+    succeeded (e.g. in summary rendering) must propagate WITHOUT deleting the
+    now-registered dataset's rows. Mutation check: dropping the
+    `and not dataset_registered` condition fails this test."""
+    from tracebloc_ingestor.utils.constants import TaskCategory
+
+    ing = make_ingestor(
+        records=[{"a": "1", "filename": "f1"}],
+        category=TaskCategory.IMAGE_CLASSIFICATION,
+        label_column="a",
+    )
+    with patch.object(base_mod, "Session") as Sess, patch.object(
+        ing, "validate_data", return_value=True
+    ), patch.object(
+        ing, "_log_summary", side_effect=RuntimeError("render blew up")
+    ), patch.object(
+        base_mod,
+        "map_file_transfer",
+        side_effect=lambda c, r, o, cfg=None, source_record=None: r,
+    ):
+        Sess.return_value.__enter__.return_value = MagicMock()
+        with pytest.raises(RuntimeError):
+            ing.ingest("src", batch_size=10)
+    ing.api_client.send_ingest_summary.assert_called_once()
+    ing.database.delete_by_ingestor_id.assert_not_called()

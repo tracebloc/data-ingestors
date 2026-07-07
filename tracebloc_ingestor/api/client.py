@@ -1,4 +1,4 @@
-from typing import List, Tuple, Dict, Any, Optional
+from typing import List, Dict, Any, Optional
 import os
 import requests, json
 import logging
@@ -6,15 +6,12 @@ from requests.adapters import HTTPAdapter
 from requests.packages.urllib3.util.retry import Retry
 from ..config import Config
 from ..utils.constants import (
-    TaskCategory,
     API_TIMEOUT,
     RESET,
     BOLD,
     GREEN,
     RED,
     YELLOW,
-    BLUE,
-    CYAN,
 )
 
 # Logger for this module. Level is set by `setup_logging()` on the root
@@ -40,13 +37,6 @@ class APIClient:
 
         self.config = config
         self.session = self._create_session()
-
-        # Last `prepare_dataset` HTTP-error body, retained so callers
-        # can include the actual backend reason in the user-visible
-        # RuntimeError instead of just pointing at "the logged API
-        # error above" (issue #251). Set by `prepare_dataset`'s error
-        # handler; remains None on a clean run.
-        self.last_prepare_error: Optional[str] = None
 
         # Auth resolution order:
         #   1. local mode  → mock token, no network call
@@ -221,343 +211,115 @@ class APIClient:
         headers["Authorization"] = f"TOKEN {self.token}"
         return send(url, headers=headers, **kwargs)
 
-    def send_batch(
+    def send_ingest_summary(
         self,
-        records: List[Tuple[int, Dict[str, Any]]],
         table_name: str,
         ingestor_id: str,
-    ) -> bool:
+        labels: Dict[str, int],
+        dataset_title: str,
+        data_format: str,
+        data_intent: str,
+        category: str,
+        schema: Dict[str, str],
+        samples: List[Dict[str, Any]],
+        meta_data: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         """
-        Send a batch of records to the remote API.
+        Send a single ingest summary to the backend, creating the UserDataSet in one
+        call. Replaces the legacy per-row POST → generate_edge_labels_meta →
+        send_global_meta_meta → prepare_dataset → create_dataset flow.
 
         Args:
-            records: List of tuples containing (id, record) pairs
-            table_name: Name of the table to send data to
-            ingestor_id: Unique ID for the ingestor
+            table_name: Dataset table name (used as the URL path segment)
+            ingestor_id: UUID identifying this ingest run
+            labels: ``{label: row_count}`` — computed locally after DB insert
+            dataset_title: Human-readable name for the new dataset
+            data_format: One of "image", "tabular", "text", "audio", "video"
+            data_intent: "train" or "test"
+            category: TaskCategory value, e.g. "image_classification"
+            schema: Column schema written to GlobalMetaData
+            samples: Small list of representative records shown in the UI
+
         Returns:
-            bool: True if successful, False otherwise
+            ``{"dataset_id": ..., "dataset_key": ...}``
+
+        Raises:
+            requests.exceptions.RequestException: If the API call fails after retries
         """
-        # Skip API calls in local mode
         if self.config.EDGE_ENV == "local":
-            logger.info(f"Mock: Would send {len(records)} records to API")
-            return True
+            logger.info(
+                f"Mock: Would send ingest summary for {table_name} "
+                f"({sum(labels.values())} rows across {len(labels)} label(s))"
+            )
+            return {"dataset_id": "mock_dataset_id", "dataset_key": "mock_dataset_key"}
 
         try:
             payload = json.dumps(
-                [
-                    {
-                        "data_id": record_data.get("data_id"),
-                        "data_intent": record_data.get("data_intent", "train"),
-                        "label": record_data.get("label", ""),
-                        "is_sample": False,
-                        "injestor_id": ingestor_id,
-                    }
-                    for _, record_data in records
-                ]
+                {
+                    "ingestor_id": ingestor_id,
+                    "labels": labels,
+                    "dataset_title": dataset_title,
+                    "data_format": data_format,
+                    "data_intent": data_intent,
+                    "category": category,
+                    "schema": schema,
+                    "samples": samples,
+                    "meta_data": meta_data or {},
+                }
             )
-
-            logger.info(f"Data to send: {payload}")
-
+            logger.info(
+                f"Sending ingest summary for {table_name}: "
+                f"{len(labels)} label(s), {sum(labels.values())} total rows"
+            )
             response = self._authed_request(
                 "POST",
-                f"{self.config.API_ENDPOINT}/global_meta/{table_name}/",
-                data=payload,
+                f"{self.config.API_ENDPOINT}/global_meta/summary/{table_name}/",
                 extra_headers={"Content-Type": "application/json"},
+                data=payload,
                 timeout=API_TIMEOUT,
             )
+
+            # 409 = backend idempotency guard (backend #900): the
+            # (owner, ingestor_id) dataset already exists — e.g. urllib3
+            # re-sent this POST after a dropped/timed-out 201 on a long
+            # ingest (POST is in the retry adapter's allowed_methods). The
+            # body carries the existing {dataset_id, dataset_key}. This is a
+            # success signal for the retry, not a failure — parse and return
+            # it rather than crashing an ingest whose dataset was created.
+            if response.status_code == 409:
+                result = self._parse_json(response, required=True)
+                logger.info(
+                    f"{GREEN}Dataset already registered (idempotent retry): "
+                    f"key={result.get('dataset_key')} "
+                    f"id={result.get('dataset_id')}{RESET}"
+                )
+                return result
 
             # Check status after retries are exhausted. Attach the response
             # so the handler below can log the status and body — a bare
-            # HTTPError has e.response = None, which used to route a DRF 400
-            # into the str(e)[:100] branch, truncating the message right
-            # after "HTTP 400: " and hiding the field error that explains
-            # why every batch was rejected.
+            # HTTPError has e.response = None, which would hide the field
+            # error that explains why the call was rejected.
             if response.status_code >= 400:
                 raise requests.exceptions.HTTPError(
                     f"HTTP {response.status_code}: {response.text}",
                     response=response,
                 )
-            return True
+            result = self._parse_json(response, required=True)
+            logger.info(
+                f"{GREEN}Dataset created: key={result.get('dataset_key')} "
+                f"id={result.get('dataset_id')}{RESET}"
+            )
+            return result
 
         except requests.exceptions.RequestException as e:
             if e.response is not None:
                 body = (e.response.text or "")[:2000]
                 logger.error(
-                    f"{RED}Error sending batch to API: "
+                    f"{RED}Error sending ingest summary: "
                     f"HTTP {e.response.status_code}: {body}{RESET}"
                 )
             else:
-                logger.error(f"{RED}Error sending batch to API: {str(e)[:500]}{RESET}")
-            return False
-
-    def send_global_meta_meta(
-        self, table_name: str, schema: Dict[str, str], add_info
-    ) -> bool:
-        """
-        Sends global metadata, including the schema, to the remote server.
-
-        Args:
-            table_name: The type of the dataset
-            schema: A dictionary representing the schema
-
-        Returns:
-            bool: True if successful, False otherwise
-        """
-        # Skip API calls in local mode
-        if self.config.EDGE_ENV == "local":
-            logger.info(f"Mock: Would send schema for {table_name}")
-            return True
-
-        try:
-            payload = json.dumps(
-                {
-                    "table_name": table_name,
-                    "schema": schema,
-                    "meta_data": add_info,
-                }
-            )
-
-            logger.info(f"Global metadata to send: {(payload)}")
-
-            response = self._authed_request(
-                "POST",
-                f"{self.config.API_ENDPOINT}/global_meta/global_metadata/",
-                data=payload,
-                extra_headers={"Content-Type": "application/json"},
-                timeout=API_TIMEOUT,
-            )
-
-            # Check status after retries are exhausted. Attach the response
-            # so the handler below can log the status and the full body —
-            # a bare HTTPError has e.response = None, which routed a DRF 400
-            # into a str(e)[:100] branch that truncated the message right
-            # after "HTTP 400: ", hiding the field error (same swallow point
-            # send_batch had — fixed in #223).
-            if response.status_code >= 400:
-                raise requests.exceptions.HTTPError(
-                    f"HTTP {response.status_code}: {response.text}",
-                    response=response,
-                )
-            logger.info(
-                f"{GREEN}Successfully sent global metadata. "
-                f"Response: {self._parse_json(response, required=False)}{RESET}"
-            )
-            return True
-
-        except requests.exceptions.RequestException as e:
-            if e.response is not None:
-                body = (e.response.text or "")[:2000]
-                logger.error(
-                    f"{RED}Error sending global metadata to API: "
-                    f"HTTP {e.response.status_code}: {body}{RESET}"
-                )
-            else:
-                logger.error(
-                    f"{RED}Error sending global metadata to API: {str(e)[:500]}{RESET}"
-                )
-            return False
-
-    def send_generate_edge_label_meta(
-        self, table_name: str, ingestor_id: str, intent: str
-    ) -> bool:
-        """
-        Send a request to generate edge label metadata for the specified dataset type.
-
-        Args:
-            table_name: The type of the dataset
-
-        Returns:
-            bool: True if successful, False otherwise
-        """
-        # Skip API calls in local mode
-        if self.config.EDGE_ENV == "local":
-            logger.info(f"Mock: Would generate edge labels for {table_name}")
-            return True
-
-        try:
-            url = f"{self.config.API_ENDPOINT}/global_meta/generate-edge-labels-meta/?table_name={table_name}&injestor_id={ingestor_id}&data_intent={intent}"
-
-            logger.info(
-                f"Sending request to generate edge label metadata for dataset type: {table_name}"
-            )
-            response = self._authed_request("GET", url, timeout=API_TIMEOUT)
-
-            # Check status after retries are exhausted. Response attached so
-            # the handler logs the full backend error (see send_batch / #223).
-            if response.status_code >= 400:
-                raise requests.exceptions.HTTPError(
-                    f"HTTP {response.status_code}: {response.text}",
-                    response=response,
-                )
-            logger.info(
-                f"{GREEN}Successfully generated edge label metadata. Response{RESET}"
-            )
-            return True
-
-        except requests.exceptions.RequestException as e:
-            if e.response is not None:
-                body = (e.response.text or "")[:2000]
-                logger.error(
-                    f"{RED}Error generating edge label metadata: "
-                    f"HTTP {e.response.status_code}: {body}{RESET}"
-                )
-            else:
-                logger.error(
-                    f"{RED}Error generating edge label metadata: {str(e)[:500]}{RESET}"
-                )
-            return False
-
-    def prepare_dataset(
-        self, category: str, ingestor_id: str, data_format: str, intent: str
-    ) -> bool:
-        """
-        Prepare data for a specific category and ingestor.
-
-        Args:
-            category: The category of data (must be one of TaskCategory values)
-            injester_id: The unique identifier for the injester
-            data_format: The format of the data
-
-        Returns:
-            bool: True if successful, False otherwise
-        """
-        # Clear any error stashed by a previous prepare_dataset call up front,
-        # so an early `return False` below (local mode, invalid category)
-        # can't leave a stale message that base.py then attaches to an
-        # unrelated failure (bugbot #252). Only the exception handler in THIS
-        # call should ever populate it.
-        self.last_prepare_error = None
-
-        # Skip API calls in local mode
-        if self.config.EDGE_ENV == "local":
-            logger.info(f"Mock: Would prepare dataset {category}")
-            return True
-
-        if not TaskCategory.is_valid_category(category):
-            print(
-                f"return {TaskCategory.is_valid_category(category)} for input : {category}"
-            )
-            logger.error(f"Invalid category: {category}")
-            return False
-
-        try:
-            url = f"{self.config.API_ENDPOINT}/global_meta/prepare/?category={category}&injestor_id={ingestor_id}&data_format={data_format}&data_intent={intent}"
-
-            logger.info(
-                f"Sending prepare request for category: {category}, injester_id: {ingestor_id}, data_format: {data_format} , data_intent: {intent}"
-            )
-            response = self._authed_request("GET", url, timeout=API_TIMEOUT)
-
-            # Check status after retries are exhausted. Response attached so
-            # the handler logs the full backend error (see send_batch / #223).
-            if response.status_code >= 400:
-                raise requests.exceptions.HTTPError(
-                    f"HTTP {response.status_code}: {response.text}",
-                    response=response,
-                )
-            logger.info(
-                f"{GREEN}Successfully prepared data. "
-                f"Response: {self._parse_json(response, required=False)}{RESET}"
-            )
-            return True
-
-        except requests.exceptions.RequestException as e:
-            if e.response is not None:
-                body = (e.response.text or "")[:2000]
-                logger.error(
-                    f"{RED}Error preparing data: "
-                    f"HTTP {e.response.status_code}: {body}{RESET}"
-                )
-                # Stash the backend's response so callers can surface the
-                # actual reason (e.g. "Please provide atleast 2 labels.")
-                # in the user-visible error — instead of pointing at "the
-                # logged API error above" which the user has to grep for.
-                # Issue #251: misleading "Backend failed to prepare the
-                # dataset" message that buried a clear backend reason.
-                self.last_prepare_error = (
-                    f"HTTP {e.response.status_code}: {body}"
-                )
-            else:
-                logger.error(f"{RED}Error preparing data: {str(e)[:500]}{RESET}")
-                self.last_prepare_error = str(e)[:500]
-            return False
-
-    def create_dataset(
-        self,
-        allow_feature_modification: bool = False,
-        ingestor_id: str = None,
-        category: str = None,
-    ) -> Dict[str, Any]:
-        """
-        Create a new dataset with the specified parameters.
-
-        Args:
-            title: The title of the dataset (if None, will be generated from category and ingestor_id)
-            allow_feature_modification: Whether feature modification is allowed
-            ingestor_id: The unique identifier for the ingestor
-
-        Returns:
-            Dict[str, Any]: The created dataset information if successful
-
-        Raises:
-            requests.exceptions.RequestException: If the API request fails
-        """
-        # Skip API calls in local mode
-        if self.config.EDGE_ENV == "local":
-            logger.info(f"Mock: Would create dataset {category}")
-            return {"id": "mock_dataset_id", "title": "Mock Dataset"}
-
-        try:
-            # Generate title from category and ingestor_id if not provided
-            if self.config.TITLE is None:
-                title = f"{category}_{ingestor_id}"
-            else:
-                title = self.config.TITLE  # Fallback to config title if no ingestor_id
-
-            if category == TaskCategory.TABULAR_CLASSIFICATION:
-                allow_feature_modification = True
-            else:
-                allow_feature_modification = False
-
-            payload = json.dumps(
-                {
-                    "title": title,
-                    "allow_feature_modification": allow_feature_modification,
-                }
-            )
-
-            logger.info(f"{GREEN}Creating dataset with payload: {payload}{RESET}")
-
-            response = self._authed_request(
-                "POST",
-                f"{self.config.API_ENDPOINT}/dataset/",
-                data=payload,
-                extra_headers={"Content-Type": "application/json"},
-                timeout=API_TIMEOUT,
-            )
-
-            # Check status after retries are exhausted. Response attached so
-            # the handler logs the full backend error (see send_batch / #223).
-            if response.status_code >= 400:
-                raise requests.exceptions.HTTPError(
-                    f"HTTP {response.status_code}: {response.text}",
-                    response=response,
-                )
-            dataset = self._parse_json(response, required=True)
-            logger.info(
-                f"{GREEN}Successfully created dataset. Response: {dataset}{RESET}"
-            )
-            return dataset
-
-        except requests.exceptions.RequestException as e:
-            if e.response is not None:
-                body = (e.response.text or "")[:2000]
-                logger.error(
-                    f"{RED}Error creating dataset: "
-                    f"HTTP {e.response.status_code}: {body}{RESET}"
-                )
-            else:
-                logger.error(f"{RED}Error creating dataset: {str(e)[:500]}{RESET}")
+                logger.error(f"{RED}Error sending ingest summary: {str(e)[:500]}{RESET}")
             raise
 
     def __del__(self):

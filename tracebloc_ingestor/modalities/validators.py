@@ -24,6 +24,7 @@ from typing import Any, Dict, List
 from ..utils.constants import FileExtension
 from ..validators.base import BaseValidator
 from ..validators.bio_label_validator import BIOLabelValidator
+from ..validators.contrastive_pairs_validator import ContrastivePairsValidator
 from ..validators.data_validator import DataValidator
 from ..validators.file_pairing_validator import FilePairingValidator
 from ..validators.file_validator import FileTypeValidator
@@ -33,6 +34,7 @@ from ..validators.keypoint_visibility_validator import KeypointVisibilityValidat
 from ..validators.label_column_validator import LabelColumnValidator
 from ..validators.label_diversity_validator import LabelDiversityValidator
 from ..validators.numeric_columns_validator import NumericColumnsValidator
+from ..validators.sentence_pair_validator import SentencePairValidator
 from ..validators.text_content_validator import TextContentValidator
 from ..validators.time_before_today_validator import TimeBeforeTodayValidator
 from ..validators.time_format_validator import TimeFormatValidator
@@ -192,6 +194,36 @@ def token_classification(options: Dict[str, Any]) -> List[BaseValidator]:
     return validators
 
 
+def sentence_pair_classification(options: Dict[str, Any]) -> List[BaseValidator]:
+    # SUPERVISED text classification (the class label travels in the labels CSV,
+    # exactly like text_classification) — so it carries the same FileType +
+    # content + LabelColumn validators, and map_validators adds LabelDiversity
+    # (is_classification) + DataValidator (with a schema) around them. What's
+    # DISTINCT: each .txt is a STRUCTURED tab-separated ``text_a\ttext_b`` pair,
+    # so beyond the shared TextContentValidator (UTF-8/binary hygiene) it adds a
+    # centralized SentencePairValidator that rejects any file that isn't exactly
+    # 2 non-empty tab fields (no plain prose, no empty side, one record/file).
+    validators: List[BaseValidator] = [
+        FileTypeValidator(
+            allowed_extension=options.get("extension", FileExtension.TXT),
+            path="texts",
+        ),
+        _text_content_validator(options, "texts"),
+        SentencePairValidator(
+            texts_path="texts",
+            extension=options.get("extension", FileExtension.TXT),
+        ),
+        # Fail fast when the configured label column is absent from the CSV
+        # header (otherwise every record cleans to label=None and the backend
+        # rejects each row with HTTP 400 "label: may not be null") — same as
+        # text_classification.
+        LabelColumnValidator(label_column=options.get("label_column") or "label"),
+    ]
+    if options.get("schema"):
+        validators.append(DataValidator(schema=options["schema"]))
+    return validators
+
+
 def masked_language_modeling(options: Dict[str, Any]) -> List[BaseValidator]:
     validators: List[BaseValidator] = [
         FileTypeValidator(
@@ -240,6 +272,32 @@ def seq2seq(options: Dict[str, Any]) -> List[BaseValidator]:
             path="texts",
         ),
         _text_content_validator(options, "texts"),
+    ]
+    if options.get("schema"):
+        validators.append(DataValidator(schema=options["schema"]))
+    return validators
+
+
+def embeddings(options: Dict[str, Any]) -> List[BaseValidator]:
+    # Self-supervised (contrastive), like seq2seq — only a ``filename`` column
+    # is required, no label column, so no LabelColumn/BIO/LabelDiversity
+    # validators. Each sample is one ``.txt`` of RAW text staged from ``texts/``.
+    # UNLIKE seq2seq / causal LM (free-form text), the on-disk shape is
+    # STRUCTURED: a tab-separated ``anchor\tpositive`` pair OR an
+    # ``anchor\tpositive\tnegative`` triplet. So beyond the shared
+    # TextContentValidator (UTF-8 / binary hygiene) it adds a structural
+    # ContrastivePairsValidator that rejects any file that isn't exactly 2 or 3
+    # non-empty tab fields.
+    validators: List[BaseValidator] = [
+        FileTypeValidator(
+            allowed_extension=options.get("extension", FileExtension.TXT),
+            path="texts",
+        ),
+        _text_content_validator(options, "texts"),
+        ContrastivePairsValidator(
+            texts_path="texts",
+            extension=options.get("extension", FileExtension.TXT),
+        ),
     ]
     if options.get("schema"):
         validators.append(DataValidator(schema=options["schema"]))

@@ -58,7 +58,6 @@ from tracebloc_ingestor.utils.constants import (
 )
 from tracebloc_ingestor.utils.label_policy import BUCKET, PASSTHROUGH
 
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
 EXAMPLES_DIR = REPO_ROOT / "examples" / "yaml"
 
@@ -70,6 +69,7 @@ EXAMPLES_DIR = REPO_ROOT / "examples" / "yaml"
 # so we can control intent / label_column / data_id strategy to match the
 # template exactly.
 # ---------------------------------------------------------------------------
+
 
 def _yaml(**fields) -> Dict[str, Any]:
     """Helper: build a YAML config dict with apiVersion/kind boilerplate."""
@@ -103,11 +103,13 @@ CASES = [
             "label_policy": PASSTHROUGH,
             "unique_id_column": None,
             "annotation_column": None,
-            "file_options": {"target_size": [256, 256], "extension": FileExtension.JPEG},
+            "file_options": {
+                "target_size": [256, 256],
+                "extension": FileExtension.JPEG,
+            },
         },
         id="image_classification",
     ),
-
     # -----------------------------------------------------------------------
     # object_detection — template + convention default now align with the
     # bundled VisDrone aerial sample (1920×1080, #199). The sample is kept at
@@ -132,11 +134,13 @@ CASES = [
             "label_policy": PASSTHROUGH,
             "unique_id_column": None,
             "annotation_column": None,
-            "file_options": {"target_size": [1920, 1080], "extension": FileExtension.JPG},
+            "file_options": {
+                "target_size": [1920, 1080],
+                "extension": FileExtension.JPG,
+            },
         },
         id="object_detection",
     ),
-
     # -----------------------------------------------------------------------
     # keypoint_detection — template uses 256×256 with 9 keypoints. No
     # convention defaults for these (both dataset-specific); schema requires
@@ -171,7 +175,6 @@ CASES = [
         },
         id="keypoint_detection",
     ),
-
     # -----------------------------------------------------------------------
     # semantic_segmentation — template uses 512×512, label_column="image_label",
     # unique_id_column="filename" (opt-in).
@@ -199,7 +202,6 @@ CASES = [
         },
         id="semantic_segmentation",
     ),
-
     # -----------------------------------------------------------------------
     # text_classification — template uses extension=.txt, label_column="label"
     # -----------------------------------------------------------------------
@@ -228,7 +230,34 @@ CASES = [
         },
         id="text_classification",
     ),
-
+    # -----------------------------------------------------------------------
+    # sentence_pair_classification — SUPERVISED, like text_classification
+    # (.txt in texts/, label_column="label", extension .txt). The only on-disk
+    # difference is that each .txt holds a tab-separated text_a<TAB>text_b pair;
+    # the resolved ingestor kwargs are identical to text_classification.
+    # -----------------------------------------------------------------------
+    pytest.param(
+        _yaml(
+            category=TaskCategory.SENTENCE_PAIR_CLASSIFICATION,
+            table="sentence_pair_classification_train",
+            intent="train",
+            csv="/data/labels.csv",
+            texts="/data/texts/",
+            schema={"extra_feature": "VARCHAR(255)"},
+            label="label",
+        ),
+        {
+            "category": TaskCategory.SENTENCE_PAIR_CLASSIFICATION,
+            "data_format": DataFormat.TEXT,
+            "intent": Intent.TRAIN,
+            "label_column": "label",
+            "label_policy": PASSTHROUGH,
+            "unique_id_column": None,
+            "annotation_column": None,
+            "file_options": {"extension": FileExtension.TXT},
+        },
+        id="sentence_pair_classification",
+    ),
     # -----------------------------------------------------------------------
     # token_classification — same on-disk layout as text_classification
     # (.txt in texts/, label_column="label"); the label is a space-separated
@@ -256,7 +285,6 @@ CASES = [
         },
         id="token_classification",
     ),
-
     # -----------------------------------------------------------------------
     # masked_language_modeling — self-supervised, no label column. CSV manifest
     # points at .txt sidecar files containing space-separated token sequences;
@@ -283,7 +311,6 @@ CASES = [
         },
         id="masked_language_modeling",
     ),
-
     # -----------------------------------------------------------------------
     # causal_language_modeling — self-supervised, no label column. CSV manifest
     # points at .txt sidecar files holding RAW text (plain text or a
@@ -311,7 +338,6 @@ CASES = [
         },
         id="causal_language_modeling",
     ),
-
     # -----------------------------------------------------------------------
     # seq2seq — self-supervised, no label column. CSV manifest points at .txt
     # sidecar files holding RAW text (a source<TAB>target pair); the client
@@ -339,7 +365,33 @@ CASES = [
         },
         id="seq2seq",
     ),
-
+    # -----------------------------------------------------------------------
+    # embeddings — self-supervised (contrastive), no label column. CSV manifest
+    # points at .txt sidecar files holding RAW text (an anchor<TAB>positive pair
+    # or anchor<TAB>positive<TAB>negative triplet); the client builds the
+    # contrastive objective at train time. Sidecar dir is ``texts/`` (raw text —
+    # same layout as seq2seq), NOT MLM's ``sequences/`` (pre-tokenized).
+    # -----------------------------------------------------------------------
+    pytest.param(
+        _yaml(
+            category=TaskCategory.EMBEDDINGS,
+            table="embeddings_train",
+            intent="train",
+            csv="/data/labels.csv",
+            texts="/data/texts/",
+        ),
+        {
+            "category": TaskCategory.EMBEDDINGS,
+            "data_format": DataFormat.TEXT,
+            "intent": Intent.TRAIN,
+            "label_column": "",  # self-supervised — no label
+            "label_policy": PASSTHROUGH,
+            "unique_id_column": None,
+            "annotation_column": None,
+            "file_options": {"extension": FileExtension.TXT},
+        },
+        id="embeddings",
+    ),
     # -----------------------------------------------------------------------
     # tabular_classification — template label_column="name"
     # -----------------------------------------------------------------------
@@ -366,7 +418,6 @@ CASES = [
         },
         id="tabular_classification",
     ),
-
     # -----------------------------------------------------------------------
     # tabular_regression — regression-class, label_policy MUST be bucket
     # (#44 deliberate behavior change vs template's raw passthrough).
@@ -396,7 +447,6 @@ CASES = [
         },
         id="tabular_regression",
     ),
-
     # -----------------------------------------------------------------------
     # time_series_forecasting — regression-class, label_policy=bucket.
     # Template label_column="max_magnitude".
@@ -426,7 +476,6 @@ CASES = [
         },
         id="time_series_forecasting",
     ),
-
     # -----------------------------------------------------------------------
     # time_to_event_prediction — regression-class, label_policy=bucket,
     # plus time_column="time" (template's value).
@@ -481,15 +530,17 @@ def test_yaml_resolves_to_template_equivalent_kwargs(yaml_config, expected):
 # All existing templates have a YAML equivalent that's exercisable here.
 # ---------------------------------------------------------------------------
 
+
 def test_every_existing_template_has_a_case():
     """The acceptance criterion enumerates 'seven existing templates plus
     segmentation' (= 8). The repo also added keypoint_detection (+1 = 9).
     Every template directory under templates/ must have a parametrized
     case in this file."""
-    template_dirs = sorted(p.name for p in (REPO_ROOT / "templates").iterdir() if p.is_dir())
+    template_dirs = sorted(
+        p.name for p in (REPO_ROOT / "templates").iterdir() if p.is_dir()
+    )
     template_categories = {
-        d for d in template_dirs
-        if d != "example_data"  # the only non-template dir
+        d for d in template_dirs if d != "example_data"  # the only non-template dir
     }
 
     case_categories = {c.values[0]["category"] for c in CASES}
@@ -506,6 +557,7 @@ def test_every_existing_template_has_a_case():
 # and the same kwargs land on the ingestor constructor.
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.parametrize("yaml_config,expected", CASES)
 def test_yaml_config_reaches_ingestor_via_entrypoint(
     yaml_config, expected, tmp_path, monkeypatch
@@ -516,12 +568,15 @@ def test_yaml_config_reaches_ingestor_via_entrypoint(
     cfg_file.write_text(yaml.safe_dump(yaml_config), encoding="utf-8")
     monkeypatch.setenv("INGEST_CONFIG", str(cfg_file))
 
-    with patch("tracebloc_ingestor.cli.run.Config") as mock_config_cls, \
-         patch("tracebloc_ingestor.cli.run.Database"), \
-         patch("tracebloc_ingestor.cli.run.APIClient"), \
-         patch("tracebloc_ingestor.cli.run.CSVIngestor") as mock_csv_cls, \
-         patch("tracebloc_ingestor.cli.run.JSONIngestor") as mock_json_cls, \
-         patch("tracebloc_ingestor.cli.run.setup_logging"):
+    with patch("tracebloc_ingestor.cli.run.Config") as mock_config_cls, patch(
+        "tracebloc_ingestor.cli.run.Database"
+    ), patch("tracebloc_ingestor.cli.run.APIClient"), patch(
+        "tracebloc_ingestor.cli.run.CSVIngestor"
+    ) as mock_csv_cls, patch(
+        "tracebloc_ingestor.cli.run.JSONIngestor"
+    ) as mock_json_cls, patch(
+        "tracebloc_ingestor.cli.run.setup_logging"
+    ):
         mock_config = MagicMock()
         mock_config.BATCH_SIZE = 4000
         mock_config_cls.return_value = mock_config
@@ -533,13 +588,14 @@ def test_yaml_config_reaches_ingestor_via_entrypoint(
             cls_mock.return_value = inst
 
         from tracebloc_ingestor.cli.run import main
+
         rc = main()
 
     assert rc == 0
     # All current cases use csv source; assert CSV path was taken.
-    assert mock_csv_cls.call_count == 1, (
-        f"expected CSVIngestor for {yaml_config['category']}, got {mock_csv_cls.call_count} call(s)"
-    )
+    assert (
+        mock_csv_cls.call_count == 1
+    ), f"expected CSVIngestor for {yaml_config['category']}, got {mock_csv_cls.call_count} call(s)"
 
     _, kwargs = mock_csv_cls.call_args
     for key, want in expected.items():

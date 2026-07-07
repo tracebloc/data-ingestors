@@ -110,7 +110,7 @@ def test_loads_from_json_empty_string_is_missing(tmp_path):
 
     Regression: pd.read_json (unlike pd.read_csv with keep_default_na=True)
     preserves "" as the literal empty string. The INT validator then reported
-    `"Column 'age' contains N non-numeric value(s). Sample invalid values:
+    `"Column 'age' contains N non-numeric value(s) at rows [...]:
     ['', '']"` even though those rows would have been ingested as missing —
     so a JSON file that JSONIngestor handles fine was rejected by the
     validator that runs before it.
@@ -437,19 +437,24 @@ def test_float_with_missing_values_is_valid():
 
 def test_missing_values_do_not_mask_real_non_numeric():
     # Only the genuinely unparseable value is flagged; the NaN is ignored.
+    # #226: the offending ROW is surfaced, never the cell content.
     df = pd.DataFrame({"x": [1.5, None, "oops"]})
     result = DataValidator(schema={"x": "FLOAT"}).validate(df)
     assert not result.is_valid
     assert "1 non-numeric" in result.errors[0]
-    assert "oops" in result.errors[0]  # the offending value is surfaced
+    assert "rows [2]" in result.errors[0]  # where to look…
+    assert "oops" not in result.errors[0]  # …without leaking what's there
 
 
-def test_non_numeric_error_includes_sample_values():
+def test_non_numeric_error_points_at_rows_without_leaking_values():
+    # #226 Phase 2: error strings can land in logs that egress via failure
+    # reports, so they carry row references — never cell content.
     df = pd.DataFrame({"x": ["abc", "def"]})
     result = DataValidator(schema={"x": "FLOAT"}).validate(df)
     assert not result.is_valid
-    assert "Sample invalid values" in result.errors[0]
-    assert "abc" in result.errors[0]
+    assert "rows [0, 1]" in result.errors[0]
+    assert "abc" not in result.errors[0]
+    assert "def" not in result.errors[0]
 
 
 # ---------------------------------------------------------------------------
@@ -472,13 +477,15 @@ def test_int_infinity_is_rejected():
     assert "non-finite" in result.errors[0]
 
 
-def test_eu_comma_decimal_rejected_with_sample():
+def test_eu_comma_decimal_rejected_with_row_refs():
     # German/EU exports write "1,5" for 1.5 — non-numeric to pandas. It is
-    # correctly rejected, and the sample value shows the user what to fix.
+    # correctly rejected; the row reference shows the user where to fix
+    # (#226: the raw cell never appears in the error).
     df = pd.DataFrame({"x": ["1,5", "2,3"]})
     result = DataValidator(schema={"x": "FLOAT"}).validate(df)
     assert not result.is_valid
-    assert "1,5" in result.errors[0]
+    assert "rows [0, 1]" in result.errors[0]
+    assert "1,5" not in result.errors[0]
 
 
 def test_thousands_separator_rejected():
@@ -486,11 +493,12 @@ def test_thousands_separator_rejected():
     assert not DataValidator(schema={"n": "INT"}).validate(df).is_valid
 
 
-def test_units_in_numeric_rejected_with_sample():
+def test_units_in_numeric_rejected_without_leaking_values():
     df = pd.DataFrame({"x": ["95%", "3kg"]})
     result = DataValidator(schema={"x": "FLOAT"}).validate(df)
     assert not result.is_valid
-    assert "95%" in result.errors[0] or "3kg" in result.errors[0]
+    assert "rows [0, 1]" in result.errors[0]
+    assert "95%" not in result.errors[0] and "3kg" not in result.errors[0]
 
 
 def test_scientific_notation_is_valid():

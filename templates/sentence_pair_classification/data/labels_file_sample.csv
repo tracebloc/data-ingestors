@@ -1,0 +1,6 @@
+filename,extension,label
+pair1,'.txt',entailment
+pair2,'.txt',contradiction
+pair3,'.txt',neutral
+pair4,'.txt',entailment
+pair5,'.txt',contradiction

@@ -354,7 +354,10 @@ def test_insert_batch_individual_failure_recorded(db, mock_engine_factory):
     ids, failures = db.insert_batch("tbl", [{"data_id": "a", "feat": 1}])
     assert ids == []
     assert len(failures) == 1
-    assert "always fails" in failures[0]["error"]
+    # #226: the raw driver message can embed cell values — the stored
+    # error carries the exception class, never the message.
+    assert "RuntimeError" in failures[0]["error"]
+    assert "always fails" not in failures[0]["error"]
 
 
 def test_insert_batch_connection_error(db, mock_engine_factory):
@@ -465,7 +468,9 @@ def test_insert_batch_gives_up_after_max_retries(db, mock_engine_factory):
     # All paths fail; the record lands in failures with the underlying error.
     assert ids == []
     assert len(failures) == 1
-    assert "gone away" in failures[0]["error"]
+    # #226: class + errno instead of the raw driver message.
+    assert "OperationalError" in failures[0]["error"]
+    assert "gone away" not in failures[0]["error"]
 
 
 def test_insert_batch_rolls_back_between_transient_retries(db, mock_engine_factory):
@@ -729,3 +734,36 @@ def test_upsert_doubles_embedded_backticks_in_column_name():
     assert "VALUES(`ev``il`)" in sql
     # Unescaped form would close the identifier early — must not appear.
     assert "VALUES(`ev`il`)" not in sql
+
+
+# ---------------------------------------------------------------------------
+# get_samples / get_label_counts: SQL NULL label normalisation
+# ---------------------------------------------------------------------------
+
+
+def test_get_samples_null_label_normalised_to_empty_string(db, mock_engine_factory):
+    """SQL NULL labels in sample rows must be normalised to '' so the JSON
+    payload matches get_label_counts, which already maps NULL → '' (the same
+    convention the old per-row API always sent when no label was present)."""
+    _, _, conn = mock_engine_factory
+    conn.execute.return_value.fetchall.return_value = [
+        ("id-1", None),   # self-supervised / no label column → SQL NULL
+        ("id-2", "cat"),
+    ]
+    result = db.get_samples("tbl", "ing-uuid")
+    assert result == [
+        {"data_id": "id-1", "label": ""},
+        {"data_id": "id-2", "label": "cat"},
+    ]
+
+
+def test_get_label_counts_null_label_normalised_to_empty_string(db, mock_engine_factory):
+    """SQL NULL and '' both map to '' so they merge into a single count."""
+    _, _, conn = mock_engine_factory
+    conn.execute.return_value.fetchall.return_value = [
+        (None, 3),
+        ("",   2),
+        ("cat", 5),
+    ]
+    result = db.get_label_counts("tbl", "ing-uuid")
+    assert result == {"": 5, "cat": 5}

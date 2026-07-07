@@ -12,6 +12,7 @@ import pandas as pd
 
 from .base import BaseValidator, ValidationResult
 from ..config import Config
+from ..utils import redaction
 
 config = Config()
 logger = logging.getLogger(__name__)
@@ -95,7 +96,8 @@ class KeypointVisibilityValidator(BaseValidator):
         for key, val in visibility.items():
             if val not in (0, 1):
                 errors.append(
-                    f"{row_label}: Visibility['{key}'] must be 0 or 1, got {val}"
+                    f"{row_label}: Visibility['{key}'] must be 0 or 1, got "
+                    f"(masked) {redaction.mask_shape(val)}"
                 )
 
         # Check keys match annotation keys if annotation column exists

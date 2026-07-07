@@ -100,6 +100,16 @@ def token_classification(
     return text_transfer(record, options, cfg=cfg)
 
 
+def sentence_pair_classification(
+    record: Dict[str, Any], options: Dict[str, Any], cfg: Optional[Config] = None
+) -> Optional[Dict[str, Any]]:
+    # Same on-disk layout as text classification: one .txt per sample in the
+    # ``texts`` subdir. Supervised — the class label travels in the labels CSV,
+    # not on disk; the .txt holds a tab-separated ``text_a\ttext_b`` sentence
+    # pair (the default text_transfer subdir).
+    return text_transfer(record, options, cfg=cfg)
+
+
 def masked_language_modeling(
     record: Dict[str, Any], options: Dict[str, Any], cfg: Optional[Config] = None
 ) -> Optional[Dict[str, Any]]:
@@ -123,6 +133,16 @@ def seq2seq(
     # layout as causal_language_modeling — the default text_transfer subdir).
     # Self-supervised: the .txt holds a tab-separated ``source\ttarget`` pair,
     # never a label.
+    return text_transfer(record, options, cfg=cfg)
+
+
+def embeddings(
+    record: Dict[str, Any], options: Dict[str, Any], cfg: Optional[Config] = None
+) -> Optional[Dict[str, Any]]:
+    # Raw text, one .txt per sample in the ``texts`` subdir (same on-disk
+    # layout as seq2seq — the default text_transfer subdir). Self-supervised
+    # (contrastive): the .txt holds a tab-separated ``anchor\tpositive`` pair or
+    # ``anchor\tpositive\tnegative`` triplet, never a label.
     return text_transfer(record, options, cfg=cfg)
 
 

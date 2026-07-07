@@ -1,8 +1,8 @@
 """Text Content Validator Module.
 
 Content-level check for NLP categories (text_classification,
-token_classification, masked_language_modeling, causal_language_modeling,
-seq2seq). ``FileTypeValidator`` only
+token_classification, sentence_pair_classification, masked_language_modeling,
+causal_language_modeling, seq2seq, embeddings). ``FileTypeValidator`` only
 checks the file *extension*, so a file named ``doc1.txt`` that actually holds
 binary / non-UTF-8 bytes — or is empty — passed validation and was ingested
 silently; the dataset author only discovered the corruption at training time.

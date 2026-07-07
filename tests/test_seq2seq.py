@@ -59,12 +59,10 @@ def make_ingestor(records=None, **overrides):
     db.create_table.return_value = MagicMock(name="table")
     db.insert_batch.return_value = ([1, 2], [])
     db.get_table_schema.return_value = {"a": "INT"}
+    db.get_label_counts.return_value = {"cat": 2}
+    db.get_samples.return_value = []
     api = MagicMock(name="APIClient")
-    api.send_batch.return_value = True
-    api.send_generate_edge_label_meta.return_value = True
-    api.send_global_meta_meta.return_value = True
-    api.prepare_dataset.return_value = True
-    api.create_dataset.return_value = {"id": 1}
+    api.send_ingest_summary.return_value = {"dataset_id": 1, "dataset_key": "key"}
 
     kwargs = dict(
         database=db,
@@ -235,13 +233,12 @@ def test_s2s_binary_content_rejected(clean_env, tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_s2s_api_send_failure_counts_every_record(clean_env):
-    """Every batch POST rejected -> every seq2seq record returns as a failure, so
-    the run exits non-zero (the file-transfer branch runs since seq2seq is
-    file-bearing)."""
+def test_s2s_api_send_failure_propagates(clean_env):
+    """send_ingest_summary failing raises out of ingest() for seq2seq, so the
+    run exits non-zero (file-bearing modality still exercises file-transfer branch)."""
     records = [{"a": "1", "filename": "f1"}, {"a": "2", "filename": "f2"}]
     ing = make_ingestor(records=records)
-    ing.api_client.send_batch.return_value = False
+    ing.api_client.send_ingest_summary.side_effect = RuntimeError("backend rejected")
 
     with patch.object(base_mod, "Session") as Sess, patch.object(
         ing, "validate_data", return_value=True
@@ -251,7 +248,5 @@ def test_s2s_api_send_failure_counts_every_record(clean_env):
         side_effect=lambda c, r, o, cfg=None, source_record=None: r,
     ):
         Sess.return_value.__enter__.return_value = MagicMock()
-        failed = ing.ingest("src", batch_size=10)
-
-    assert len(failed) == 2
-    assert all(f["error"] == "api_send_failed" for f in failed)
+        with pytest.raises(RuntimeError, match="backend rejected"):
+            ing.ingest("src", batch_size=10)

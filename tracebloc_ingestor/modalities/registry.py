@@ -91,6 +91,27 @@ _SPECS = (
         is_nlp=True,
         file_subdir="texts",
     ),
+    # sentence_pair_classification is SUPERVISED text classification — the class
+    # label travels in the labels CSV, exactly like text_classification (so
+    # is_classification=True, is_self_supervised=False, staged from ``texts/``).
+    # What's distinct is the on-disk shape: each ``.txt`` is a STRUCTURED
+    # tab-separated ``text_a\ttext_b`` sentence pair (the text_classification
+    # layout with a tab separating the pair), so its validator factory adds a
+    # structural SentencePairValidator that rejects malformed files. It is NLP,
+    # so it ships the #805 data-derived text profile for the
+    # contributor-tokenizer-fit check.
+    ModalitySpec(
+        TaskCategory.SENTENCE_PAIR_CLASSIFICATION,
+        is_file_bearing=True,
+        is_tabular_family=False,
+        is_self_supervised=False,
+        data_format=DataFormat.TEXT,
+        build_validators=v.sentence_pair_classification,
+        transfer=t.sentence_pair_classification,
+        is_nlp=True,
+        file_subdir="texts",
+        is_classification=True,
+    ),
     # masked_language_modeling is file-bearing AND self-supervised (no label).
     ModalitySpec(
         TaskCategory.MASKED_LANGUAGE_MODELING,
@@ -136,6 +157,27 @@ _SPECS = (
         data_format=DataFormat.TEXT,
         build_validators=v.seq2seq,
         transfer=t.seq2seq,
+        is_nlp=True,
+        file_subdir="texts",
+    ),
+    # embeddings is file-bearing AND self-supervised (no label) — the
+    # contrastive NLP modality. Each sample is one ``.txt`` of RAW text: a
+    # tab-separated ``anchor\tpositive`` pair OR an ``anchor\tpositive\tnegative``
+    # triplet (no label column). Same raw-text staging as seq2seq / causal LM —
+    # ``texts/``, not the pre-tokenized ``sequences/`` MLM uses. Unlike those two
+    # (which also accept free-form text), the on-disk shape here is STRUCTURED —
+    # exactly 2 or 3 tab-separated fields — so its validator factory adds a
+    # structural ContrastivePairsValidator that rejects malformed rows. It is
+    # NLP, so it ships the #805 data-derived text profile for the
+    # contributor-tokenizer-fit check.
+    ModalitySpec(
+        TaskCategory.EMBEDDINGS,
+        is_file_bearing=True,
+        is_tabular_family=False,
+        is_self_supervised=True,
+        data_format=DataFormat.TEXT,
+        build_validators=v.embeddings,
+        transfer=t.embeddings,
         is_nlp=True,
         file_subdir="texts",
     ),

@@ -1,14 +1,11 @@
 """Blob Data Ingestion Example.
 
-This example demonstrates how to ingest binary data (BLOBs) from a CSV file into a database
-and optionally send it to an API. It handles base64 encoded binary data.
+This example demonstrates how to ingest binary data (BLOBs) from a CSV file
+into a database using BLOB/LONGBLOB schema columns.
 """
 
-import base64
-import json
 import logging
 from pathlib import Path
-from typing import Dict, Any
 
 from tracebloc_ingestor import Config, Database, APIClient, CSVIngestor
 from tracebloc_ingestor.utils.logging import setup_logging
@@ -28,9 +25,11 @@ def main():
         api_client = APIClient(config)
 
         # Schema definition with BLOB/LONGBLOB fields
+        # document_type doubles as the classification label (label_column
+        # below) — BaseIngestor strips the label from the table schema, so
+        # it is deliberately not listed here.
         schema = {
             "name": "VARCHAR(255)",
-            "document_type": "VARCHAR(50)",
             "content_type": "VARCHAR(100)",
             "document_data": "LONGBLOB",  # For storing large binary objects
             "thumbnail": "BLOB",  # For storing smaller binary objects
@@ -46,25 +45,25 @@ def main():
             "on_bad_lines": "warn",  # Just warn about bad lines instead of failing
         }
 
-        # Create blob data processor
-        blob_processor = BlobDataProcessor(
-            config=config, storage_path=config.STORAGE_PATH
-        )
-
-        # Create ingestor with blob processor
+        # Create ingestor
+        # BLOB columns are schema-driven tabular ingestion — no sidecar
+        # files, no text validators. TEXT_CLASSIFICATION here (a previous
+        # revision) would run text sidecar validators against a workflow
+        # that has none (Bugbot on #330).
         ingestor = CSVIngestor(
             database=database,
             api_client=api_client,
             table_name=config.TABLE_NAME,
             schema=schema,
-            data_format=DataFormat.TEXT,
-            category=TaskCategory.TEXT_CLASSIFICATION,
+            data_format=DataFormat.TABULAR,
+            category=TaskCategory.TABULAR_CLASSIFICATION,
+            label_column="document_type",
             intent=Intent.TRAIN,
             csv_options=csv_options,
         )
 
         # Get the example data path
-        data_path = Path(__file__).parent / "data" / "text_classification_sample.csv"
+        data_path = Path(__file__).parent / "data" / "blob_documents_sample.csv"
 
         # Ingest data
         with ingestor:

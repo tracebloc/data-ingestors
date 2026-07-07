@@ -11,6 +11,8 @@ import logging
 from pathlib import Path
 from typing import Any, Optional
 
+from ..utils import redaction
+
 try:
     import pandas as pd
 
@@ -140,17 +142,13 @@ class TimeToEventValidator(BaseValidator):
             
             if non_numeric_count > 0:
                 # Get sample of non-numeric values for error message
-                non_numeric_values = time_series[non_numeric_mask].head(10).tolist()
-                error_msg = (
-                    f"Time column '{time_column_to_use}' contains {non_numeric_count} non-numeric value(s). "
-                    f"Time values must be numeric (int or float). "
-                    f"Sample invalid values: {non_numeric_values}"
+                offender_rows = time_series.index[non_numeric_mask][:5].tolist()
+                errors.append(
+                    f"Time column '{time_column_to_use}' contains {non_numeric_count} non-numeric value(s) "
+                    f"at {redaction.row_refs(offender_rows, int(non_numeric_count))}. "
+                    f"Time values must be numeric (int or float)."
                 )
-                if non_numeric_count > 10:
-                    error_msg += f" (and {non_numeric_count - 10} more)"
-                errors.append(error_msg)
                 metadata["non_numeric_count"] = non_numeric_count
-                metadata["non_numeric_sample"] = non_numeric_values
 
             # Check for negative time values (time should be non-negative)
             if non_numeric_count == 0:
@@ -159,17 +157,13 @@ class TimeToEventValidator(BaseValidator):
                 negative_count = negative_mask.sum()
                 
                 if negative_count > 0:
-                    negative_values = numeric_series[negative_mask].head(10).tolist()
-                    error_msg = (
-                        f"Time column '{time_column_to_use}' contains {negative_count} negative value(s). "
-                        f"Time values must be non-negative. "
-                        f"Sample negative values: {negative_values}"
+                    offender_rows = numeric_series.index[negative_mask][:5].tolist()
+                    errors.append(
+                        f"Time column '{time_column_to_use}' contains {negative_count} negative value(s) "
+                        f"at {redaction.row_refs(offender_rows, int(negative_count))}. "
+                        f"Time values must be non-negative."
                     )
-                    if negative_count > 10:
-                        error_msg += f" (and {negative_count - 10} more)"
-                    errors.append(error_msg)
                     metadata["negative_count"] = negative_count
-                    metadata["negative_sample"] = negative_values
                 
                 # Add statistics about time values
                 valid_times = numeric_series.dropna()

@@ -15,6 +15,7 @@ import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
+import requests
 
 from tracebloc_ingestor.api import client as client_mod
 from tracebloc_ingestor.api.client import APIClient
@@ -88,57 +89,62 @@ def _client(**overrides):
     return client
 
 
+def _summary_call(client):
+    return client.send_ingest_summary(
+        table_name="tbl", ingestor_id="ing", labels={"cat": 1},
+        dataset_title="T", data_format="image", data_intent="train",
+        category="image_classification", schema={}, samples=[],
+    )
+
+
 # --- retry on transient 5xx (proves the adapter retry actually fires) -------
 
-def test_send_batch_retries_transient_5xx_then_succeeds(mock_api):
-    mock_api.queue = [{"status": 503}, {"status": 503}, {"status": 200, "body": "{}"}]
+def test_send_ingest_summary_retries_transient_5xx_then_succeeds(mock_api):
+    body = '{"dataset_id": 1, "dataset_key": "k"}'
+    mock_api.queue = [{"status": 503}, {"status": 503}, {"status": 200, "body": body}]
     client = _client()
-    assert client.send_batch([(1, {"data_id": "a"})], "tbl", "ing") is True
+    result = _summary_call(client)
+    assert result.get("dataset_id") == 1
     assert mock_api.requests == 3  # 2 retries + the success
 
 
-def test_send_batch_persistent_5xx_returns_false(mock_api):
+def test_send_ingest_summary_persistent_5xx_raises(mock_api):
     mock_api.default = {"status": 503, "body": "down"}
     client = _client()
-    assert client.send_batch([(1, {"data_id": "a"})], "tbl", "ing") is False
+    with pytest.raises(requests.exceptions.RequestException):
+        _summary_call(client)
     assert mock_api.requests > 1  # it retried before giving up
 
 
 # --- non-retryable status ---------------------------------------------------
 
-def test_send_batch_401_returns_false_without_retry(mock_api):
+def test_send_ingest_summary_401_raises_without_retry(mock_api):
     mock_api.default = {"status": 401, "body": "unauthorized"}
     client = _client()
-    assert client.send_batch([(1, {"data_id": "a"})], "tbl", "ing") is False
+    with pytest.raises(requests.exceptions.HTTPError):
+        _summary_call(client)
     assert mock_api.requests == 1  # 401 isn't in the 5xx retry list
 
 
 # --- timeout (a hanging backend must not hang the ingest) -------------------
 
-def test_send_batch_timeout_is_handled(mock_api, monkeypatch):
+def test_send_ingest_summary_timeout_raises(mock_api, monkeypatch):
     monkeypatch.setattr(client_mod, "API_TIMEOUT", 0.5)
     mock_api.default = {"status": 200, "body": "{}", "delay": 2.0}
     client = _client()
     for adapter in client.session.adapters.values():
         adapter.max_retries.total = 0  # 1 attempt (~0.5s), no retry-on-timeout
-    assert client.send_batch([(1, {"data_id": "a"})], "tbl", "ing") is False
+    with pytest.raises(requests.exceptions.RequestException):
+        _summary_call(client)
 
 
 # --- non-JSON 200 body (regression for the JSONDecodeError fix) -------------
 
-def test_send_global_meta_non_json_200_still_succeeds(mock_api):
-    # A 200 whose body isn't JSON used to flip a successful send to False (the
-    # .json() in the log line raised). It must now warn + still report success.
-    mock_api.default = {"status": 200, "body": "OK", "content_type": "text/plain"}
-    client = _client()
-    assert client.send_global_meta_meta("tbl", {"a": "INT"}, {}) is True
-
-
-def test_create_dataset_non_json_200_raises_clear_error(mock_api):
+def test_send_ingest_summary_non_json_200_raises_clear_error(mock_api):
     mock_api.default = {"status": 200, "body": "<html>oops</html>", "content_type": "text/html"}
     client = _client()
     with pytest.raises(ValueError, match="non-JSON"):
-        client.create_dataset(ingestor_id="ing", category=TaskCategory.IMAGE_CLASSIFICATION)
+        _summary_call(client)
 
 
 def test_authenticate_non_json_200_raises_clear_error(mock_api):

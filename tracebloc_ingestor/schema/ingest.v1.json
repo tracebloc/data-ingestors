@@ -32,13 +32,15 @@
         "semantic_segmentation",
         "text_classification",
         "token_classification",
+        "sentence_pair_classification",
         "tabular_classification",
         "tabular_regression",
         "time_series_forecasting",
         "time_to_event_prediction",
         "masked_language_modeling",
         "causal_language_modeling",
-        "seq2seq"
+        "seq2seq",
+        "embeddings"
       ],
       "description": "Task category. Drives convention defaults: validators, data_format, default columns, default file extensions, default validator set."
     },
@@ -88,7 +90,7 @@
     "texts": {
       "type": "string",
       "minLength": 1,
-      "description": "Directory holding text files referenced by the labels CSV. Required for text_classification, token_classification, causal_language_modeling (raw .txt: plain text, or a tab-separated prompt\\tcompletion pair), and seq2seq (raw .txt: a tab-separated source\\ttarget pair)."
+      "description": "Directory holding text files referenced by the labels CSV. Required for text_classification, token_classification, sentence_pair_classification (raw .txt: a tab-separated text_a\\ttext_b sentence pair), causal_language_modeling (raw .txt: plain text, or a tab-separated prompt\\tcompletion pair), seq2seq (raw .txt: a tab-separated source\\ttarget pair), and embeddings (raw .txt: a tab-separated anchor\\tpositive pair, or anchor\\tpositive\\tnegative triplet)."
     },
 
     "sequences": {
@@ -161,9 +163,9 @@
       "properties": {
         "strategy": {
           "type": "string",
-          "enum": ["uuid", "column"],
+          "enum": ["uuid", "column", "content_hash"],
           "default": "uuid",
-          "description": "How `data_id` is generated. `uuid` (default) generates a fresh UUID per record — no source column leaves the cluster. `column` maps a source column's value, which is louder (logged warning) and only safe when the column doesn't carry PII."
+          "description": "How `data_id` is generated. `uuid` (default) generates a fresh UUID per record — no source column leaves the cluster, but a retried run re-inserts every row under new ids. `column` maps a source column's value, which is louder (logged warning) and only safe when the column doesn't carry PII. `content_hash` derives a deterministic id from the record's content (features + label + source filename), salted with a random per-table value that never leaves the cluster — a retried run re-claims its previous rows instead of duplicating them. Note: genuinely identical source rows therefore collapse into one stored row (content-level dedup)."
         },
         "column": {
           "type": "string",
@@ -331,6 +333,14 @@
       "then": { "required": ["texts"] }
     },
     {
+      "description": "sentence_pair_classification requires `texts` (raw .txt samples, each a tab-separated text_a\\ttext_b sentence pair). It is supervised, so it also requires `label` (see the label rule below).",
+      "if": {
+        "properties": { "category": { "const": "sentence_pair_classification" } },
+        "required": ["category"]
+      },
+      "then": { "required": ["texts"] }
+    },
+    {
       "description": "masked_language_modeling requires `sequences`.",
       "if": {
         "properties": { "category": { "const": "masked_language_modeling" } },
@@ -350,6 +360,14 @@
       "description": "seq2seq requires `texts` (raw .txt samples, each a tab-separated source\\ttarget pair). It is self-supervised, so unlike text/token classification it does NOT require `label`.",
       "if": {
         "properties": { "category": { "const": "seq2seq" } },
+        "required": ["category"]
+      },
+      "then": { "required": ["texts"] }
+    },
+    {
+      "description": "embeddings requires `texts` (raw .txt samples, each a tab-separated anchor\\tpositive pair or anchor\\tpositive\\tnegative triplet). It is self-supervised (contrastive), so unlike text/token classification it does NOT require `label`.",
+      "if": {
+        "properties": { "category": { "const": "embeddings" } },
         "required": ["category"]
       },
       "then": { "required": ["texts"] }
@@ -415,6 +433,7 @@
               "semantic_segmentation",
               "text_classification",
               "token_classification",
+              "sentence_pair_classification",
               "tabular_classification"
             ]
           }
@@ -431,7 +450,8 @@
             "enum": [
               "masked_language_modeling",
               "causal_language_modeling",
-              "seq2seq"
+              "seq2seq",
+              "embeddings"
             ]
           }
         },
