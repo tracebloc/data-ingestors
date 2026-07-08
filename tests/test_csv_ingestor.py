@@ -99,6 +99,20 @@ def test_read_data_rejects_bom_masked_duplicate_headers(tmp_path):
         list(ing.read_data(str(p)))
 
 
+def test_read_data_bom_guard_covers_utf8_aliases(tmp_path):
+    # Issue #338 follow-up: the BOM upgrade must fire for every UTF-8 spelling,
+    # not just "utf-8"/"utf8". "utf_8" (underscore) is a valid Python codec
+    # that does NOT strip a BOM, so a config using it would have slipped the
+    # BOM'd first header past the dup guard again. _bom_safe_encoding now
+    # canonicalises via codecs.lookup, so the duplicate is still caught.
+    p = tmp_path / "bom_dups_alias.csv"
+    p.write_text("a,a\n1,2\n3,4\n", encoding="utf-8-sig")
+    assert p.read_bytes().startswith(b"\xef\xbb\xbf")  # sanity: file has a BOM
+    ing = make_csv_ingestor(schema={"a": "INT"}, csv_options={"encoding": "utf_8"})
+    with pytest.raises(ValueError, match="Duplicate column"):
+        list(ing.read_data(str(p)))
+
+
 def test_read_data_schema_column_missing_raises(make_csv):
     path = make_csv({"a": [1]})
     ing = make_csv_ingestor(schema={"a": "INT", "missing": "INT"})

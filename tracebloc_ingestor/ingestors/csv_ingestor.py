@@ -5,6 +5,7 @@ pandas-based reading and validation capabilities.
 """
 
 from typing import Dict, Any, Generator, Optional, List
+import codecs
 import csv as _csv
 import numpy as np
 import pandas as pd
@@ -36,9 +37,22 @@ def _bom_safe_encoding(encoding: Optional[str]) -> str:
     silently misreads the first column, while every pandas read path (which
     strips the BOM) accepts the same file. Only the UTF-8 family is
     upgraded; an explicit non-UTF-8 encoding is returned unchanged.
+
+    Canonicalise via ``codecs.lookup`` rather than matching a hardcoded alias
+    tuple: Python accepts several spellings for UTF-8 (``utf_8``, ``U8``,
+    ``utf``, ``cp65001``, ...), none of which strip a BOM, so a config that
+    used one of those would silently reintroduce the bug this guards against.
     """
-    if not encoding or encoding.lower() in ("utf-8", "utf8"):
+    if not encoding:
         return "utf-8-sig"
+    try:
+        if codecs.lookup(encoding).name == "utf-8":
+            return "utf-8-sig"
+    except LookupError:
+        # Unknown encoding name — leave it untouched so the probe's own
+        # open() raises the real UnicodeDecodeError/LookupError, matching the
+        # main read's behaviour.
+        pass
     return encoding
 
 
