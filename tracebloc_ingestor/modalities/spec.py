@@ -25,7 +25,10 @@ So the spec is intentionally small here and grows over P3b–P3d.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
+
+if TYPE_CHECKING:  # annotations are strings (future import) — type-only import
+    from .layout import RecordFormat, Sidecar
 
 
 @dataclass(frozen=True)
@@ -90,3 +93,15 @@ class ModalitySpec:
     # regression / self-supervised / token-classification (per-token BIO) and
     # the time families.
     is_classification: bool = False
+    # The two per-task LAYOUT facts not already implied by the flags above
+    # (data-ingestors#347). Everything else about the on-disk layout is derived
+    # from the existing flags by ``modalities.layout.build_layout_contract``.
+    #
+    # sidecars: extra per-row directories beyond ``file_subdir`` —
+    #   object_detection's ``annotations/*.xml``, semantic_segmentation's
+    #   ``masks/*.png``. Empty for every other category.
+    # record_format: the structure inside each ``.txt`` for the structured text
+    #   tasks (sentence_pair / seq2seq / embeddings / causal LM); ``None`` when
+    #   the file is free text with no field structure the CLI must preview.
+    sidecars: Tuple["Sidecar", ...] = ()
+    record_format: Optional["RecordFormat"] = None

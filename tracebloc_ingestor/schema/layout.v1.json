@@ -1,0 +1,217 @@
+{
+  "tasks": {
+    "causal_language_modeling": {
+      "family": "text",
+      "manifest": {
+        "has_label_column": false,
+        "kind": "labels_csv",
+        "requires_filename_column": true
+      },
+      "primary_subdir": "texts",
+      "record_format": {
+        "enforced": false,
+        "fields": [
+          "prompt",
+          "completion"
+        ],
+        "min_fields": 1,
+        "separator": "\t"
+      },
+      "sidecars": []
+    },
+    "embeddings": {
+      "family": "text",
+      "manifest": {
+        "has_label_column": false,
+        "kind": "labels_csv",
+        "requires_filename_column": true
+      },
+      "primary_subdir": "texts",
+      "record_format": {
+        "enforced": true,
+        "fields": [
+          "anchor",
+          "positive",
+          "negative"
+        ],
+        "min_fields": 2,
+        "separator": "\t"
+      },
+      "sidecars": []
+    },
+    "image_classification": {
+      "family": "image",
+      "manifest": {
+        "has_label_column": true,
+        "kind": "labels_csv",
+        "requires_filename_column": true
+      },
+      "primary_subdir": "images",
+      "record_format": null,
+      "sidecars": []
+    },
+    "keypoint_detection": {
+      "family": "image",
+      "manifest": {
+        "has_label_column": true,
+        "kind": "labels_csv",
+        "requires_filename_column": true
+      },
+      "primary_subdir": "images",
+      "record_format": null,
+      "sidecars": []
+    },
+    "masked_language_modeling": {
+      "family": "text",
+      "manifest": {
+        "has_label_column": false,
+        "kind": "labels_csv",
+        "requires_filename_column": true
+      },
+      "primary_subdir": "sequences",
+      "record_format": null,
+      "sidecars": []
+    },
+    "object_detection": {
+      "family": "image",
+      "manifest": {
+        "has_label_column": true,
+        "kind": "labels_csv",
+        "requires_filename_column": true
+      },
+      "primary_subdir": "images",
+      "record_format": null,
+      "sidecars": [
+        {
+          "glob": "*.xml",
+          "link_column": null,
+          "required": true,
+          "subdir": "annotations"
+        }
+      ]
+    },
+    "semantic_segmentation": {
+      "family": "image",
+      "manifest": {
+        "has_label_column": true,
+        "kind": "labels_csv",
+        "requires_filename_column": true
+      },
+      "primary_subdir": "images",
+      "record_format": null,
+      "sidecars": [
+        {
+          "glob": "*.png",
+          "link_column": "mask_id",
+          "required": true,
+          "subdir": "masks"
+        }
+      ]
+    },
+    "sentence_pair_classification": {
+      "family": "text",
+      "manifest": {
+        "has_label_column": true,
+        "kind": "labels_csv",
+        "requires_filename_column": true
+      },
+      "primary_subdir": "texts",
+      "record_format": {
+        "enforced": true,
+        "fields": [
+          "text_a",
+          "text_b"
+        ],
+        "min_fields": 2,
+        "separator": "\t"
+      },
+      "sidecars": []
+    },
+    "seq2seq": {
+      "family": "text",
+      "manifest": {
+        "has_label_column": false,
+        "kind": "labels_csv",
+        "requires_filename_column": true
+      },
+      "primary_subdir": "texts",
+      "record_format": {
+        "enforced": false,
+        "fields": [
+          "source",
+          "target"
+        ],
+        "min_fields": 1,
+        "separator": "\t"
+      },
+      "sidecars": []
+    },
+    "tabular_classification": {
+      "family": "tabular",
+      "manifest": {
+        "has_label_column": true,
+        "kind": "data_csv",
+        "requires_filename_column": false
+      },
+      "primary_subdir": null,
+      "record_format": null,
+      "sidecars": []
+    },
+    "tabular_regression": {
+      "family": "tabular",
+      "manifest": {
+        "has_label_column": true,
+        "kind": "data_csv",
+        "requires_filename_column": false
+      },
+      "primary_subdir": null,
+      "record_format": null,
+      "sidecars": []
+    },
+    "text_classification": {
+      "family": "text",
+      "manifest": {
+        "has_label_column": true,
+        "kind": "labels_csv",
+        "requires_filename_column": true
+      },
+      "primary_subdir": "texts",
+      "record_format": null,
+      "sidecars": []
+    },
+    "time_series_forecasting": {
+      "family": "tabular",
+      "manifest": {
+        "has_label_column": true,
+        "kind": "data_csv",
+        "requires_filename_column": false
+      },
+      "primary_subdir": null,
+      "record_format": null,
+      "sidecars": []
+    },
+    "time_to_event_prediction": {
+      "family": "tabular",
+      "manifest": {
+        "has_label_column": true,
+        "kind": "data_csv",
+        "requires_filename_column": false
+      },
+      "primary_subdir": null,
+      "record_format": null,
+      "sidecars": []
+    },
+    "token_classification": {
+      "family": "text",
+      "manifest": {
+        "has_label_column": true,
+        "kind": "labels_csv",
+        "requires_filename_column": true
+      },
+      "primary_subdir": "texts",
+      "record_format": null,
+      "sidecars": []
+    }
+  },
+  "version": "1"
+}
