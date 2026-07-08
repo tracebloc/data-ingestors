@@ -17,6 +17,7 @@ from ..utils.constants import (
     CYAN,
 )
 from ..utils import label_policy as label_policy_module
+from ..utils.columns import resolve_column
 from ..utils.validators_mapping import map_validators
 from ..file_transfer import map_file_transfer
 from ..text_profile import compute_text_profile
@@ -268,6 +269,43 @@ class BaseIngestor(ABC):
         """
         return self._record_processor.process(record)
 
+    def _resolve_label_column(self, columns: Any) -> bool:
+        """Pin the configured label column to the actual header spelling (#340).
+
+        The label column is validated case-/whitespace-insensitively
+        (``LabelColumnValidator`` via the shared ``resolve_column`` rule), but
+        the read path pulls it out of each record by exact key — so a manifest
+        ``label: label`` against a header ``Label`` passes preflight and then
+        reads ``None`` for every row (silent all-NULL labels). Resolving the
+        configured name to the real header once, then reading with it, keeps
+        the read path and the validators in agreement.
+
+        Uses the SAME rule as the validators (single source of truth), so a
+        column that passed the label-presence check resolves identically here.
+
+        Returns ``True`` once resolution is settled — the name matched (exactly
+        or after remap) or no column is configured — and ``False`` when the
+        configured name is not present in ``columns`` yet. The caller pins on
+        the first record that *contains* the label: for CSV that's always the
+        first record (a stable full header), and for JSON — whose records may
+        be sparse (a leading object can omit the label) — it retries on later
+        records instead of giving up after the first. A name genuinely absent
+        from every record is left untouched so the existing missing-column
+        handling still fires.
+        """
+        if not self.label_column:
+            return True
+        resolved = resolve_column(columns, self.label_column)
+        if resolved is None:
+            return False
+        if resolved != self.label_column:
+            logger.info(
+                f"Resolved label column {self.label_column!r} to header "
+                f"{resolved!r} (case/whitespace-insensitive match)."
+            )
+            self.label_column = resolved
+        return True
+
     @property
     def _table_lock(self) -> TableLock:
         """The run's table lock (P5b). ``TableLock`` owns the file-lock
@@ -481,8 +519,20 @@ class BaseIngestor(ABC):
             try:
                 pbar = tqdm(total=total, desc="Ingesting records", unit="records")
 
+                _label_resolved = False
                 for record in self.read_data(source):
                     stats["total_records"] += 0 if total else 1
+
+                    # #340: pin the label column to the actual header spelling
+                    # before it is processed. The validators matched the label
+                    # case-/whitespace-insensitively, so a header like ``Label``
+                    # for a config ``label: label`` passed preflight; without
+                    # this the read path (exact key) would then read None for
+                    # every row. Pin on the first record that CONTAINS the label
+                    # — for CSV that's the first record (stable header); for
+                    # sparse JSON a leading object may omit it, so keep trying.
+                    if not _label_resolved:
+                        _label_resolved = self._resolve_label_column(record.keys())
 
                     try:
                         processed_record = self.process_record(record)

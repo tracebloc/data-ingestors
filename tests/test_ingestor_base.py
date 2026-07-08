@@ -160,6 +160,97 @@ def test_process_record_applies_bucket_label_policy():
     assert rec["label"] != "12345"
 
 
+def test_process_record_reads_label_by_configured_key():
+    """Baseline for #340: RecordProcessor reads the label by EXACT key. With
+    a mismatched key it reads None — this is why the ingestor must resolve the
+    label column to the real header before processing (see the
+    _resolve_label_column + end-to-end tests below)."""
+    ing = make_ingestor(label_column="label", schema={"a": "INT", "label": "VARCHAR(10)"}, category=None)
+    # exact key -> label present
+    assert ing.process_record({"a": "1", "label": "cat", "filename": "f"})["label"] == "cat"
+    # mismatched-case key with the SAME configured name -> None (the bug)
+    assert ing.process_record({"a": "1", "Label": "cat", "filename": "f"})["label"] is None
+
+
+# ---------------------------------------------------------------------------
+# _resolve_label_column (#340)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "columns,expected",
+    [
+        (["a", "Label"], "Label"),      # case mismatch -> real header
+        (["a", " label "], " label "),  # whitespace mismatch -> raw header
+        (["a", "label"], "label"),       # exact -> unchanged
+        (["a", "b"], "label"),           # absent -> configured name untouched
+    ],
+)
+def test_resolve_label_column(columns, expected):
+    ing = make_ingestor(label_column="label", schema={"a": "INT", "label": "VARCHAR(10)"})
+    ing._resolve_label_column(columns)
+    assert ing.label_column == expected
+
+
+def test_resolve_label_column_noop_when_unset():
+    ing = make_ingestor(label_column=None)
+    ing._resolve_label_column(["a", "b"])
+    assert ing.label_column is None
+
+
+def test_ingest_label_case_mismatch_survives_to_db():
+    """#340 end-to-end: config ``label: label`` against a header ``Label``.
+    The label column is validated case-insensitively, so the manifest passes
+    preflight; the ingest loop must resolve it to the real header or every
+    label reaches the DB as None (silent all-NULL labels)."""
+    records = [
+        {"a": "1", "Label": "cat", "filename": "f1"},
+        {"a": "2", "Label": "dog", "filename": "f2"},
+    ]
+    ing = make_ingestor(
+        records=records,
+        category=None,
+        label_column="label",
+        schema={"a": "INT", "label": "VARCHAR(10)"},
+    )
+    with patch.object(base_mod, "Session") as Sess, patch.object(
+        ing, "validate_data", return_value=True
+    ):
+        Sess.return_value.__enter__.return_value = MagicMock()
+        ing.ingest("src", batch_size=10)
+    ing.database.insert_batch.assert_called()
+    _table, batch = ing.database.insert_batch.call_args.args
+    assert [r.get("label") for r in batch] == ["cat", "dog"], (
+        f"labels nulled by case mismatch: {[r.get('label') for r in batch]}"
+    )
+
+
+def test_ingest_label_resolves_on_later_record_for_sparse_json():
+    """#340 JSON edge: records may be sparse — a leading object can omit the
+    label. Resolution must retry on later records, not give up after the first,
+    or a mis-cased label on every subsequent row would still null. The first
+    (label-less) record legitimately gets None; the second resolves 'Label'."""
+    records = [
+        {"a": "1", "filename": "f1"},                   # no label key at all
+        {"a": "2", "Label": "dog", "filename": "f2"},   # mis-cased label
+    ]
+    ing = make_ingestor(
+        records=records,
+        category=None,
+        label_column="label",
+        schema={"a": "INT", "label": "VARCHAR(10)"},
+    )
+    with patch.object(base_mod, "Session") as Sess, patch.object(
+        ing, "validate_data", return_value=True
+    ):
+        Sess.return_value.__enter__.return_value = MagicMock()
+        ing.ingest("src", batch_size=10)
+    _table, batch = ing.database.insert_batch.call_args.args
+    assert [r.get("label") for r in batch] == [None, "dog"], (
+        f"expected [None, 'dog']; got {[r.get('label') for r in batch]}"
+    )
+
+
 def test_process_record_strips_whitespace_from_string_label():
     """Issue #261: a raw label value like ``"  A  "`` must be stripped
     before the label policy runs, so MySQL stores ``"A"`` and a CSV
