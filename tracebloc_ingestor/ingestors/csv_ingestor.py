@@ -23,6 +23,25 @@ from ..config import Config
 config = Config()
 
 
+def _bom_safe_encoding(encoding: Optional[str]) -> str:
+    """Return a BOM-stripping encoding for the stdlib ``csv.reader`` header
+    probes (#338).
+
+    ``utf-8-sig`` decodes UTF-8 identically to ``utf-8`` but also strips a
+    leading byte-order mark. Excel's "CSV UTF-8" export prepends a BOM;
+    ``open(..., encoding="utf-8")`` leaves it on the first header (a U+FEFF
+    byte-order mark glued to ``age``) and ``str.strip()`` does not remove it
+    — so a probe keyed on that header (the string-dtype pin, the
+    duplicate-header check)
+    silently misreads the first column, while every pandas read path (which
+    strips the BOM) accepts the same file. Only the UTF-8 family is
+    upgraded; an explicit non-UTF-8 encoding is returned unchanged.
+    """
+    if not encoding or encoding.lower() in ("utf-8", "utf8"):
+        return "utf-8-sig"
+    return encoding
+
+
 def _raise_on_overflow(
     column: str, original: pd.Series, converted: pd.Series, dtype: str
 ) -> None:
@@ -420,7 +439,7 @@ class CSVIngestor(BaseIngestor):
                 with open(
                     file_path,
                     "r",
-                    encoding=self.csv_options.get("encoding", "utf-8"),
+                    encoding=_bom_safe_encoding(self.csv_options.get("encoding")),
                     newline="",
                 ) as _fh:
                     _raw = next(_csv.reader(_fh, delimiter=_sep_probe), [])
@@ -478,7 +497,7 @@ class CSVIngestor(BaseIngestor):
                 with open(
                     file_path,
                     "r",
-                    encoding=csv_options.get("encoding", "utf-8"),
+                    encoding=_bom_safe_encoding(csv_options.get("encoding")),
                     newline="",
                 ) as _fh:
                     _row = next(_csv.reader(_fh, delimiter=_sep), [])

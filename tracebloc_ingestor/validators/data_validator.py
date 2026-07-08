@@ -214,7 +214,12 @@ class DataValidator(BaseValidator):
         #   2. Reject duplicate headers up front so they fail in validation,
         #      not later in the ingestor — same error CSVIngestor raises.
         try:
-            with open(path, "r", encoding="utf-8", newline="") as _fh:
+            # utf-8-sig strips a leading BOM (Excel "CSV UTF-8" export) that
+            # plain utf-8 leaves on the first header — without it the
+            # schema-presence check below falsely reports the first column
+            # missing, while pandas' read path (which strips the BOM) accepts
+            # the same file (#338). Decodes ordinary utf-8 identically.
+            with open(path, "r", encoding="utf-8-sig", newline="") as _fh:
                 _raw_header = next(_csv.reader(_fh), [])
             _stripped = [str(h).strip() for h in _raw_header]
             _dups = sorted({h for h in _stripped if _stripped.count(h) > 1})
