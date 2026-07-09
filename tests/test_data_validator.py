@@ -339,6 +339,25 @@ def test_csv_schema_missing_lists_all_missing_columns(make_csv):
     assert "missing1" in err and "missing2" in err
 
 
+def test_csv_utf8_bom_header_not_falsely_missing(tmp_path):
+    """Issue #338: an Excel "CSV UTF-8" export prepends a byte-order mark, so
+    the stdlib ``csv.reader`` header probe (unlike pandas) reads the first
+    column as a BOM glued to ``age``. The schema-presence check then falsely
+    reports ``age`` missing — a misleading rejection of a file every pandas
+    read path accepts. The probe now opens with utf-8-sig, which strips the
+    BOM; this test also pins that pandas' chunk read strips it too (else the
+    per-column cast would see a BOM'd column and fail).
+    """
+    p = tmp_path / "excel_bom.csv"
+    # write_text with utf-8-sig prepends the BOM, exactly like Excel's export.
+    p.write_text("age,income\n30,50000\n41,72000\n", encoding="utf-8-sig")
+    # sanity: the file really does start with a UTF-8 BOM
+    assert p.read_bytes().startswith(b"\xef\xbb\xbf")
+    result = DataValidator(schema={"age": "INT", "income": "INT"}).validate(str(p))
+    assert result.is_valid, f"BOM'd CSV falsely rejected; errors={result.errors}"
+    assert not any("not present in CSV" in e for e in result.errors)
+
+
 def test_json_sparse_schema_field_still_passes(tmp_path):
     """JSON ingestion is intentionally permissive: JSONIngestor._validate_record
     only WARNS when a schema field is absent from a record and proceeds. A

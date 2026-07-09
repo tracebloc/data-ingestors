@@ -167,13 +167,16 @@ class BaseValidator(ABC):
         ingests fine fails preflight as if the column were missing (matches
         ``LabelDiversityValidator._resolve_column``). The ORIGINAL column name
         is returned so callers can still index the (un-stripped) raw frame.
+
+        The rule is single-sourced in
+        :func:`tracebloc_ingestor.utils.columns.resolve_column` so the ingest
+        read path resolves the label column identically — the two used to
+        diverge (validators case-insensitive, ``RecordProcessor`` exact),
+        silently nulling every label (#340).
         """
-        cols = list(columns)
-        if name in cols:
-            return name
-        target = str(name).strip().lower()
-        normalised = {str(c).strip().lower(): c for c in cols}
-        return normalised.get(target)
+        from ..utils.columns import resolve_column
+
+        return resolve_column(columns, name)
 
     @staticmethod
     def _parse_json(row: Any, column: str) -> Optional[Any]:

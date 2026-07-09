@@ -15,6 +15,7 @@ from typing import Dict
 from ..utils.constants import DataFormat, TaskCategory
 from . import transfer as t
 from . import validators as v
+from .layout import RecordFormat, Sidecar
 from .spec import ModalitySpec
 
 # One entry per supported category — the single source of truth. P3a: the three
@@ -45,6 +46,9 @@ _SPECS = (
         transfer=t.object_detection,
         file_subdir="images",
         is_classification=True,
+        # Pascal-VOC XML, one per image, paired by filename stem (transfer.py
+        # object_detection; xml_validator; file_pairing_validator).
+        sidecars=(Sidecar(subdir="annotations", glob="*.xml", required=True),),
     ),
     ModalitySpec(
         TaskCategory.KEYPOINT_DETECTION,
@@ -67,6 +71,12 @@ _SPECS = (
         transfer=t.semantic_segmentation,
         file_subdir="images",
         is_classification=True,
+        # One mask PNG per image, linked by the CSV `mask_id` column (not the
+        # filename stem), convention `<stem>_mask.png` (transfer.py
+        # semantic_segmentation + backend#816; validators require .png).
+        sidecars=(
+            Sidecar(subdir="masks", glob="*.png", required=True, link_column="mask_id"),
+        ),
     ),
     ModalitySpec(
         TaskCategory.TEXT_CLASSIFICATION,
@@ -111,6 +121,11 @@ _SPECS = (
         is_nlp=True,
         file_subdir="texts",
         is_classification=True,
+        # Each .txt is exactly `text_a\ttext_b` — enforced by
+        # SentencePairValidator (rejects != 2 non-empty tab fields).
+        record_format=RecordFormat(
+            separator="\t", fields=("text_a", "text_b"), min_fields=2, enforced=True
+        ),
     ),
     # masked_language_modeling is file-bearing AND self-supervised (no label).
     ModalitySpec(
@@ -141,6 +156,15 @@ _SPECS = (
         transfer=t.causal_language_modeling,
         is_nlp=True,
         file_subdir="texts",
+        # Raw plain text (pretraining) OR `prompt\tcompletion` (SFT). A
+        # convention only — no structural validator, so a mirror must NOT
+        # reject either shape (enforced=False; min_fields=1 allows raw text).
+        record_format=RecordFormat(
+            separator="\t",
+            fields=("prompt", "completion"),
+            min_fields=1,
+            enforced=False,
+        ),
     ),
     # seq2seq is file-bearing AND self-supervised (no label), exactly like
     # causal_language_modeling. Each sample is one ``.txt`` of RAW text — a
@@ -159,6 +183,11 @@ _SPECS = (
         transfer=t.seq2seq,
         is_nlp=True,
         file_subdir="texts",
+        # `source\ttarget`. A convention — no structural validator (both fields
+        # are free text), so a mirror must not reject a raw file (enforced=False).
+        record_format=RecordFormat(
+            separator="\t", fields=("source", "target"), min_fields=1, enforced=False
+        ),
     ),
     # embeddings is file-bearing AND self-supervised (no label) — the
     # contrastive NLP modality. Each sample is one ``.txt`` of RAW text: a
@@ -180,6 +209,14 @@ _SPECS = (
         transfer=t.embeddings,
         is_nlp=True,
         file_subdir="texts",
+        # `anchor\tpositive` (2) OR `anchor\tpositive\tnegative` (3) — enforced
+        # by ContrastivePairsValidator (rejects anything but 2 or 3 tab fields).
+        record_format=RecordFormat(
+            separator="\t",
+            fields=("anchor", "positive", "negative"),
+            min_fields=2,
+            enforced=True,
+        ),
     ),
     # Tabular family (structured feature tables; no sidecar files -> no transfer).
     ModalitySpec(

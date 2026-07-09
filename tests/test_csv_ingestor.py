@@ -82,6 +82,37 @@ def test_read_data_preserves_leading_zeros_with_whitespace_header(tmp_path):
     assert records[1]["code"] == "042"
 
 
+def test_read_data_rejects_bom_masked_duplicate_headers(tmp_path):
+    # Issue #338: with the stdlib csv.reader probe on plain utf-8, a BOM'd
+    # first header (a U+FEFF glued to "a") no longer equals a later "a", so a
+    # duplicate that pandas WILL silently disambiguate ("a","a" -> "a","a.1")
+    # slips past the up-front dup-header guard — the exact invisible
+    # schema-misalignment it exists to prevent. The probe now opens with
+    # utf-8-sig, stripping the BOM so the duplicate is caught before pandas
+    # reads. (Verified: on plain utf-8 the probe sees the BOM'd name as
+    # distinct from "a" and detects no dup.)
+    p = tmp_path / "bom_dups.csv"
+    p.write_text("a,a\n1,2\n3,4\n", encoding="utf-8-sig")
+    assert p.read_bytes().startswith(b"\xef\xbb\xbf")  # sanity: file has a BOM
+    ing = make_csv_ingestor(schema={"a": "INT"})
+    with pytest.raises(ValueError, match="Duplicate column"):
+        list(ing.read_data(str(p)))
+
+
+def test_read_data_bom_guard_covers_utf8_aliases(tmp_path):
+    # Issue #338 follow-up: the BOM upgrade must fire for every UTF-8 spelling,
+    # not just "utf-8"/"utf8". "utf_8" (underscore) is a valid Python codec
+    # that does NOT strip a BOM, so a config using it would have slipped the
+    # BOM'd first header past the dup guard again. _bom_safe_encoding now
+    # canonicalises via codecs.lookup, so the duplicate is still caught.
+    p = tmp_path / "bom_dups_alias.csv"
+    p.write_text("a,a\n1,2\n3,4\n", encoding="utf-8-sig")
+    assert p.read_bytes().startswith(b"\xef\xbb\xbf")  # sanity: file has a BOM
+    ing = make_csv_ingestor(schema={"a": "INT"}, csv_options={"encoding": "utf_8"})
+    with pytest.raises(ValueError, match="Duplicate column"):
+        list(ing.read_data(str(p)))
+
+
 def test_read_data_schema_column_missing_raises(make_csv):
     path = make_csv({"a": [1]})
     ing = make_csv_ingestor(schema={"a": "INT", "missing": "INT"})
