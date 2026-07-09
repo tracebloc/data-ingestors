@@ -170,23 +170,35 @@ def _infer_datetime(tokens: List[str]) -> Union[str, None]:
     ``None``.
 
     Guard against over-eager matching on plain words: require each token to
-    contain at least one digit (so ``"apple"`` / month-name columns stay text).
-    Numeric columns never reach here — they are classified earlier.
+    contain at least one ASCII digit (so ``"apple"`` / month-name columns stay
+    text). ASCII specifically — ``str.isdigit()`` is true for Unicode digits
+    (``"١٢٣"``) which some pandas versions then PARSE as a date, mis-typing a
+    non-ASCII-digit column DATE instead of VARCHAR. A real calendar date only
+    ever contains ASCII digits. Numeric columns never reach here — classified
+    earlier.
     """
-    if not all(any(c.isdigit() for c in t) for t in tokens):
+    if not all(any(c in "0123456789" for c in t) for t in tokens):
         return None
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        parsed = pd.to_datetime(pd.Series(tokens), errors="coerce", format="mixed")
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            parsed = pd.to_datetime(pd.Series(tokens), errors="coerce", format="mixed")
+    except (ValueError, TypeError):
+        # pandas is not version-stable here: mixed-timezone tokens (one
+        # "+00:00", one "+05:00") RAISE "Mixed timezones detected" on newer
+        # pandas and return an OBJECT-dtype Series (handled below) on older —
+        # either way it's not a clean single-tz calendar column. Fall back to
+        # text rather than crash the whole schema pass.
+        return None
     if parsed.isna().any():
         return None
     if not pd.api.types.is_datetime64_any_dtype(parsed):
-        # Mixed-timezone tokens (e.g. one "+00:00" and one "+05:00") parse to an
-        # OBJECT-dtype Series of Timestamps, not a DatetimeIndex — it has no
-        # ``.dt`` accessor, so the ``has_time`` line below would raise an
-        # uncaught AttributeError and abort the whole schema pass. Fall back to
-        # text: a tz-mixed column is safer as VARCHAR than a tz-naive MySQL
-        # DATETIME that would silently drop the offset anyway.
+        # Older pandas: mixed-tz tokens parse to an OBJECT-dtype Series of
+        # Timestamps, not a DatetimeIndex — it has no ``.dt`` accessor, so the
+        # ``has_time`` line below would raise an uncaught AttributeError and
+        # abort the whole schema pass. Fall back to text: a tz-mixed column is
+        # safer as VARCHAR than a tz-naive MySQL DATETIME that silently drops
+        # the offset anyway.
         return None
     has_time = bool(
         ((parsed.dt.hour != 0) | (parsed.dt.minute != 0) | (parsed.dt.second != 0)).any()
