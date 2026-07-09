@@ -153,3 +153,35 @@ def test_infer_schema_from_dataframe():
     # inference — a pandas-typed frame would already be lossy.
     df = pd.DataFrame({"code": ["007", "012"], "flag": ["yes", "no"]}, dtype=str)
     assert infer_schema(df) == {"code": "VARCHAR(3)", "flag": "BOOLEAN"}
+
+
+# ---------------------------------------------------------------------------
+# ASCII-only numeric matching + charset — Go-CLI parity guardrails.
+# ---------------------------------------------------------------------------
+
+def test_unicode_digits_are_text_not_int():
+    # `\d`/int() accept Unicode digits, but the Go mirror matches [0-9] only and
+    # MySQL INT can't hold the glyphs — so a non-ASCII-digit column is VARCHAR.
+    assert infer_column_type(["١٢٣", "٤٥٦"]) == "VARCHAR(3)"
+
+
+def test_underscore_grouped_numbers_are_text_not_float():
+    # Python float("1_000")==1000.0, but Go's strconv.ParseFloat rejects
+    # underscores — pre-screening with an ASCII float grammar keeps them text.
+    assert infer_column_type(["1_000", "2_000"]) == "VARCHAR(5)"
+    assert infer_column_type(["1_000", "2.5"]) == "VARCHAR(5)"
+
+
+def test_varchar_length_is_char_count_not_bytes():
+    # VARCHAR(n) counts characters (MySQL semantics); a multibyte value must not
+    # be sized by its UTF-8 byte length (which is what a naive Go len() gives).
+    assert infer_column_type(["café", "naïve"]) == "VARCHAR(5)"  # not 6 (bytes)
+
+
+def test_mixed_timezone_datetimes_do_not_crash():
+    # Mixed UTC offsets parse to an object-dtype Series (no .dt accessor); the
+    # function must fall back to text, never raise AttributeError.
+    got = infer_column_type(
+        ["2024-01-01T00:00:00+00:00", "2024-01-01T00:00:00+05:00"]
+    )
+    assert got.startswith("VARCHAR")

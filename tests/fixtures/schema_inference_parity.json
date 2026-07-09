@@ -1,5 +1,5 @@
 {
-  "description": "Value-level parity contract for tabular schema inference (RFC-0002 §8.1). The data-ingestors `schema_inference.infer_column_type` is the source of truth; the Go CLI `InferSchema` (cli#185) must return the SAME type for each case. Backs the parity harness backend#1009. Each case: raw string column values -> expected SQL type. First-match-wins precedence: leading-zero-code -> bool -> int/bigint -> float -> date/datetime -> varchar.",
+  "description": "Value-level parity contract for tabular schema inference (RFC-0002 §8.1). The data-ingestors `schema_inference.infer_column_type` is the source of truth; the Go CLI `InferSchema` (cli#185) must return the SAME type for each case. Backs the parity harness backend#1009. Each case: raw string column values -> expected SQL type. First-match-wins precedence: leading-zero-code -> bool -> int/bigint -> float -> date/datetime -> varchar. UNITS/CHARSET (must match on the Go side): VARCHAR(n) counts CHARACTERS (Unicode code points, = MySQL VARCHAR semantics) so Go must use utf8.RuneCountInString, NOT len(string) (bytes); integer/float matching is ASCII-only ([0-9]) so Unicode-digit and underscore-grouped tokens are text, not numbers.",
   "sample_cap": 5000,
   "cases": [
     {"name": "int", "values": ["1", "2", "3", "-4"], "expected": "INT"},
@@ -19,6 +19,9 @@
     {"name": "datetime", "values": ["2024-01-02 13:45:00", "2024-01-03 08:00:00"], "expected": "DATETIME"},
     {"name": "numeric_id_is_int_not_date", "values": ["20240101", "20240102"], "expected": "INT"},
     {"name": "varchar_text", "values": ["apple", "banana"], "expected": "VARCHAR(6)"},
+    {"name": "underscore_grouped_is_text", "values": ["1_000", "2_000"], "expected": "VARCHAR(5)"},
+    {"name": "unicode_digits_are_text", "values": ["١٢٣", "٤٥٦"], "expected": "VARCHAR(3)"},
+    {"name": "multibyte_varchar_is_char_count", "values": ["café", "naïve"], "expected": "VARCHAR(5)"},
     {"name": "all_missing_is_varchar1", "values": ["", "NA", "null"], "expected": "VARCHAR(1)"}
   ]
 }

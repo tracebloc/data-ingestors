@@ -2,11 +2,19 @@
 
 RFC-0002 §8.1 (epic backend#1008, design cli#174). When a tabular dataset
 arrives without a declared column→type schema, *something* has to decide each
-column's SQL type. That decision is load-bearing: it drives the CREATE TABLE
-DDL, the per-column cast/validation (``CSVIngestor._validate_csv``), and the
-model's ``num_feature_points``. A wrong type silently corrupts training data —
-the canonical case being a zero-padded code like ``"007"`` inferred as ``INT``
-and stored as ``7``, destroying a ZIP / accession / gene / account id.
+column's SQL type. That decision is load-bearing: it is meant to drive the
+CREATE TABLE DDL, the per-column cast/validation (``CSVIngestor._validate_csv``),
+and the model's ``num_feature_points``. A wrong type silently corrupts training
+data — the canonical case being a zero-padded code like ``"007"`` inferred as
+``INT`` and stored as ``7``, destroying a ZIP / accession / gene / account id.
+
+NOT YET WIRED (#349 scope): this module defines and pins the rules; the ingest
+path is not changed to *call* it in this diff. Today ``CSVIngestor`` still
+receives a caller-supplied schema (``resolved.schema``) and never infers. So the
+``"007"`` corruption is prevented at the layer that OWNS the decision, but only
+once a follow-up routes the no-schema path through ``infer_schema`` (and the Go
+CLI through ``InferSchema``). Until then the protection lives in the tests and
+the parity contract, not in a running ingest.
 
 Under Option A these rules live HERE and the Go CLI (``InferSchema``, re-scoped
 cli#185) mirrors them, verified by the value-level parity harness
@@ -45,17 +53,33 @@ RULES — evaluated per column, FIRST MATCH WINS (this is the precedence):
        column (e.g. ``"20240101"``) is INT, never a date. ``DATETIME`` when any
        value carries a time-of-day component, else ``DATE``.
   6. Otherwise                       -> ``VARCHAR(n)``  (n = longest sampled
-       value length, floor 1).
+       value length in CHARACTERS / code points, floor 1).
+
+``VARCHAR(n)`` — ``n`` counts CHARACTERS (Unicode code points), matching MySQL's
+``VARCHAR(n)`` semantics (n characters, not bytes). The Go CLI mirror MUST size
+by rune count (``utf8.RuneCountInString``), NOT ``len(string)`` (which counts
+UTF-8 bytes) — otherwise the two emit different DDL for any multibyte value
+(``"café"`` -> ``VARCHAR(4)`` here vs ``VARCHAR(5)`` for a byte count). The parity
+fixture is ASCII-only, so it cannot catch that drift; the unit is fixed here.
 
 SAMPLING CAP
 ------------
 Inference reads at most the first :data:`SAMPLE_CAP` (5,000) rows per column —
 matching the CLI. This bounds work on wide/deep files. The trade-off: a value
 longer than the sample's max, or a rare off-type token, that appears only past
-row 5,000 won't influence the inferred type. That is safe because the cast
-layer (``CSVIngestor._validate_csv``) still fails LOUDLY on a value that does
-not fit the inferred type — an escaped off-type token surfaces as a clear
-per-column error, never silent corruption.
+row 5,000 won't influence the inferred type.
+
+The cast layer (``CSVIngestor._validate_csv``) is a PARTIAL backstop here, not a
+full one. A token that is genuinely non-castable to the inferred type (e.g.
+``"abc"`` in an INT column) surfaces as a clear per-column error. But a token
+that is *numerically castable yet semantically wrong* is coerced SILENTLY: a
+zero-padded code like ``"00501"`` first appearing past the cap infers ``INT`` and
+casts to ``501`` (zeros stripped), and a ``"3.5"`` past the cap in an otherwise
+integer column is coerced by ``pd.to_numeric`` without error. So the cap can
+still lose a leading-zero code or truncate a float if the giveaway row sits
+beyond row 5,000 — a real (if narrow) residual risk, not "never silent
+corruption". Raise :data:`SAMPLE_CAP` (in lockstep with the CLI) if a dataset is
+known to hide off-type values deep in a column.
 """
 
 from __future__ import annotations
@@ -88,8 +112,21 @@ _BOOL_TEXT = frozenset({"true", "false", "t", "f", "yes", "no", "y", "n"})
 
 _NA = frozenset(coercion.NA_SENTINELS)
 
-_LEADING_ZERO_CODE = re.compile(r"^[+-]?0\d+$")
-_INT_RE = re.compile(r"^[+-]?\d+$")
+# ASCII-only digit classes ([0-9], NOT \d). Python's ``\d`` also matches Unicode
+# decimal digits (e.g. Arabic-Indic ``"١٢٣"``) and ``int()``/``float()`` happily
+# parse them — but the Go CLI mirror matches ASCII only, and a MySQL INT/FLOAT
+# column can't store the raw glyphs. Restricting to ``[0-9]`` keeps the two
+# implementations in lockstep and routes non-ASCII-digit tokens to VARCHAR.
+_LEADING_ZERO_CODE = re.compile(r"^[+-]?0[0-9]+$")
+_INT_RE = re.compile(r"^[+-]?[0-9]+$")
+
+# Finite-float grammar, ASCII-only. Pre-screens the token BEFORE ``float()`` so
+# Python leniencies that Go's ``strconv.ParseFloat`` rejects can't diverge:
+# underscore grouping (``float("1_000") == 1000.0``), Unicode digits, and the
+# ``inf``/``nan``/``Infinity`` spellings ``float()`` accepts. Scientific notation
+# is allowed (Go parses it too). The ``math.isfinite`` guard below still catches
+# a regex-valid overflow like ``"1e400"`` -> ``inf``.
+_FLOAT_RE = re.compile(r"^[+-]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$")
 
 
 def _clean_tokens(values: Iterable[Any]) -> List[str]:
@@ -116,6 +153,8 @@ def _clean_tokens(values: Iterable[Any]) -> List[str]:
 
 
 def _is_finite_float(token: str) -> bool:
+    if not _FLOAT_RE.match(token):
+        return False
     try:
         return math.isfinite(float(token))
     except (TypeError, ValueError):
@@ -140,6 +179,14 @@ def _infer_datetime(tokens: List[str]) -> Union[str, None]:
         warnings.simplefilter("ignore")
         parsed = pd.to_datetime(pd.Series(tokens), errors="coerce", format="mixed")
     if parsed.isna().any():
+        return None
+    if not pd.api.types.is_datetime64_any_dtype(parsed):
+        # Mixed-timezone tokens (e.g. one "+00:00" and one "+05:00") parse to an
+        # OBJECT-dtype Series of Timestamps, not a DatetimeIndex — it has no
+        # ``.dt`` accessor, so the ``has_time`` line below would raise an
+        # uncaught AttributeError and abort the whole schema pass. Fall back to
+        # text: a tz-mixed column is safer as VARCHAR than a tz-naive MySQL
+        # DATETIME that would silently drop the offset anyway.
         return None
     has_time = bool(
         ((parsed.dt.hour != 0) | (parsed.dt.minute != 0) | (parsed.dt.second != 0)).any()
