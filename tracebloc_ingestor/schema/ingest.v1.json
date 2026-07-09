@@ -204,6 +204,13 @@
               "maxItems": 2,
               "description": "[width, height]. Image categories only. Default [512, 512]. The order matches PIL.Image.size and what ImageResolutionValidator expects."
             },
+            "min_size": {
+              "type": "array",
+              "items": { "type": "integer", "minimum": 1 },
+              "minItems": 2,
+              "maxItems": 2,
+              "description": "[width, height] absolute minimum image size (#348). Images with either side below this are rejected as too small to train on. Image categories only. Defaults to [32, 32] (ImageResolutionValidator.MIN_IMAGE_SIZE) when unset; override per-model to match the model-zoo input requirement."
+            },
             "extension": {
               "type": "string",
               "enum": [".jpg", ".jpeg", ".png", ".txt", ".text", ".xml"],
