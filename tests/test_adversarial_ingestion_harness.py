@@ -54,6 +54,7 @@ from sqlalchemy.schema import CreateTable
 from tracebloc_ingestor import database as db_mod
 from tracebloc_ingestor.database import Database
 from tracebloc_ingestor.ingestors.csv_ingestor import CSVIngestor
+from tracebloc_ingestor.schema_inference import infer_column_type
 from tracebloc_ingestor.utils.constants import TaskCategory
 from tracebloc_ingestor.validators.data_validator import DataValidator
 
@@ -249,13 +250,18 @@ def test_varchar_leading_zero_codes_preserved():
     assert [r["code"] for r in rows] == ["007", "0012"]
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "Same root cause as the VARCHAR case: a code column typed INT loses leading "
-    "zeros (007 -> '7') because pandas infers int at read. A raw dumper who types "
-    "a zip/accession/gene code as INT silently corrupts it."
-))
 def test_int_typed_codes_keep_zeros():
-    rows = _ingest({"code": "INT"}, "code\n007\n0012\n")
+    # FIXED (#349): a zero-padded code column is no longer TYPED INT. The owned
+    # inference rules (schema_inference.infer_column_type) are now the source of
+    # truth for the column type, and they classify a leading-zero numeric token
+    # as VARCHAR — so the code survives verbatim instead of "007" -> 7. This
+    # pins the fix at the layer that owns the decision; the CLI mirrors these
+    # rules under parity (cli#185). (A hand-declared INT still can't hold "007"
+    # — the point is that nothing INFERS INT for such a column anymore, so the
+    # corruption can't originate.)
+    inferred = infer_column_type(["007", "0012"])
+    assert inferred.startswith("VARCHAR"), f"expected VARCHAR, inferred {inferred!r}"
+    rows = _ingest({"code": inferred}, "code\n007\n0012\n")
     assert [r["code"] for r in rows] == ["007", "0012"]
 
 
