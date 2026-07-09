@@ -38,6 +38,12 @@ logger.setLevel(config.LOG_LEVEL)
 # floor, not the recommended resolution.
 MIN_IMAGE_SIZE: Tuple[int, int] = (32, 32)
 
+# Cap on how many offending files are named inline in a too-small error
+# message (the full list is always kept in result metadata). Keeps the
+# logged / API-bound error string bounded when an entire dataset is below
+# the floor — the common case for this gate.
+_MAX_LISTED_FILES = 20
+
 
 class ImageResolutionValidator(BaseValidator):
     """Validator for ensuring image resolution uniformity.
@@ -77,9 +83,22 @@ class ImageResolutionValidator(BaseValidator):
         super().__init__(name)
         self.expected_resolution = expected_resolution
         self.subdir = subdir
-        # Absolute floor (width, height). A falsy override falls back to the
-        # module default so the gate is always active, never silently disabled.
-        self.min_size = tuple(min_size) if min_size else MIN_IMAGE_SIZE
+        # Absolute floor (width, height), normalized once here so every
+        # downstream read can trust it is a 2-tuple. A falsy override falls
+        # back to the module default so the gate is always active, never
+        # silently disabled. A non-iterable or non-2-element override is a
+        # config error, surfaced at construction rather than swallowed
+        # mid-scan as a per-file image-read error.
+        if min_size:
+            try:
+                min_w, min_h = min_size
+            except (TypeError, ValueError):
+                raise ValueError(
+                    f"min_size must be a (width, height) pair; got {min_size!r}"
+                )
+            self.min_size = (min_w, min_h)
+        else:
+            self.min_size = MIN_IMAGE_SIZE
         self.tolerance = 0  # Whether to enforce strict file type checking . we can later make this configurable
         self.supported_formats = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif"}
 
@@ -327,18 +346,28 @@ class ImageResolutionValidator(BaseValidator):
         # actionable failure (the images simply can't be trained on), so it
         # takes precedence over a uniformity / target_size mismatch.
         if too_small:
+            # The trigger for this branch is typically a uniformly-tiny
+            # dataset, i.e. EVERY file is offending, so cap the list echoed
+            # into the (logged, API-bound) error string; the full set stays
+            # in metadata. invalid_files is preserved here too — otherwise a
+            # dataset that is both too-small and partly corrupt would hide the
+            # corrupt files until a second run.
+            sample = too_small[:_MAX_LISTED_FILES]
+            more = len(too_small) - len(sample)
+            listed = f"{sample}{f' (and {more} more)' if more else ''}"
             return self._create_result(
                 is_valid=False,
                 errors=[
-                    f"Images below the minimum size {tuple(self.min_size)} (width, height) "
+                    f"Images below the minimum size {self.min_size} (width, height) "
                     f"were found — they are too small to train on. Provide larger images or, "
                     f"if your model accepts smaller inputs, lower the floor via "
-                    f"file_options.min_size. Offending files: {too_small}"
+                    f"file_options.min_size. Offending files: {listed}"
                 ],
                 metadata={
                     "files_checked": len(image_files),
-                    "min_size": tuple(self.min_size),
+                    "min_size": self.min_size,
                     "too_small": too_small,
+                    "invalid_files": invalid_files,
                     "resolutions_found": sorted(resolutions_found),
                     "expected_resolution": self.expected_resolution,
                 },
@@ -403,7 +432,7 @@ class ImageResolutionValidator(BaseValidator):
                 "files_checked": len(image_files),
                 "uniform_resolution": uniform_resolution,
                 "expected_resolution": self.expected_resolution,
-                "min_size": tuple(self.min_size),
+                "min_size": self.min_size,
                 "tolerance": self.tolerance,
             },
         )
@@ -411,10 +440,10 @@ class ImageResolutionValidator(BaseValidator):
     def _meets_min_size(self, resolution: Tuple[int, int]) -> bool:
         """Return True if ``resolution`` (width, height) is at least the floor
         on BOTH axes. An image exactly at the floor passes; either side below
-        it fails. Normalizes to tuple so a list-typed ``min_size`` (e.g. from a
-        YAML/JSON ``file_options.min_size``) compares by value, mirroring
-        ``_resolution_matches``."""
-        min_w, min_h = tuple(self.min_size)
+        it fails. ``self.min_size`` is already normalized to a 2-tuple in
+        ``__init__``, so a list-typed ``file_options.min_size`` compares by
+        value here without re-casting."""
+        min_w, min_h = self.min_size
         return resolution[0] >= min_w and resolution[1] >= min_h
 
     def _resolution_matches(

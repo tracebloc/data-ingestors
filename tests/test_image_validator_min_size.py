@@ -121,6 +121,14 @@ def test_falsy_override_falls_back_to_default_floor():
     assert ImageResolutionValidator().min_size == MIN_IMAGE_SIZE
 
 
+@pytest.mark.parametrize("bad", [32, (16,), (16, 16, 16)])
+def test_malformed_min_size_raises_at_construction(bad):
+    """A non-iterable or non-2-element override is a config error surfaced at
+    construction — not swallowed mid-scan as a per-file image-read error."""
+    with pytest.raises(ValueError, match="min_size must be a"):
+        ImageResolutionValidator(min_size=bad)
+
+
 # --- floor takes precedence over a uniformity/target mismatch -----------------
 
 
@@ -135,6 +143,20 @@ def test_floor_precedes_uniformity_error(clean_env, images_dir):
     assert not result.is_valid
     assert "below the minimum size" in result.errors[0]
     assert "small.jpg" in result.errors[0]
+
+
+def test_too_small_result_still_reports_corrupt_files(clean_env, images_dir):
+    """When a dataset is both too-small and partly corrupt, the floor error
+    wins but the corrupt files are still surfaced in metadata — otherwise they
+    stay hidden until the user fixes the tiny images and re-runs."""
+    src, add = images_dir
+    add("tiny.jpg", (8, 8))
+    (src / "images" / "broken.jpg").write_bytes(b"not a real jpeg")
+    clean_env.setenv("SRC_PATH", str(src))
+    result = ImageResolutionValidator().validate(None)
+    assert not result.is_valid
+    assert "below the minimum size" in result.errors[0]
+    assert any("broken.jpg" in f for f in result.metadata["invalid_files"])
 
 
 # --- _meets_min_size unit ----------------------------------------------------
