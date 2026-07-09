@@ -83,7 +83,10 @@ def _text_content_validator(
 def image_classification(options: Dict[str, Any]) -> List[BaseValidator]:
     return [
         FileTypeValidator(allowed_extension=options["extension"], path="images"),
-        ImageResolutionValidator(expected_resolution=options["target_size"]),
+        ImageResolutionValidator(
+            expected_resolution=options["target_size"],
+            min_size=options.get("min_size"),
+        ),
         # Fail fast when the configured label column is absent from the CSV
         # (else every record cleans to label=None and the backend rejects each
         # row with HTTP 400 "label: may not be null"). image_classification is
@@ -104,7 +107,10 @@ def object_detection(options: Dict[str, Any]) -> List[BaseValidator]:
             sidecar_path="annotations",
             sidecar_label="annotation",
         ),
-        ImageResolutionValidator(expected_resolution=options["target_size"]),
+        ImageResolutionValidator(
+            expected_resolution=options["target_size"],
+            min_size=options.get("min_size"),
+        ),
     ]
 
 
@@ -122,7 +128,10 @@ def semantic_segmentation(options: Dict[str, Any]) -> List[BaseValidator]:
             # pairing is plain stem (no suffix) — the default.
             sidecar_suffix="_mask",
         ),
-        ImageResolutionValidator(expected_resolution=options["target_size"]),
+        ImageResolutionValidator(
+            expected_resolution=options["target_size"],
+            min_size=options.get("min_size"),
+        ),
         # Masks are pixel-wise label maps: validate they're readable PNGs and
         # share the images' resolution. The default ImageResolution instance only
         # scans <SRC>/images, so without this a corrupt mask, or a mask whose size
@@ -131,6 +140,7 @@ def semantic_segmentation(options: Dict[str, Any]) -> List[BaseValidator]:
             expected_resolution=options["target_size"],
             name="Mask Resolution Validator",
             subdir="masks",
+            min_size=options.get("min_size"),
         ),
     ]
 
@@ -143,7 +153,10 @@ def keypoint_detection(options: Dict[str, Any]) -> List[BaseValidator]:
     # rejects datasets whose annotations drift from the declared K.
     return [
         FileTypeValidator(allowed_extension=options["extension"], path="images"),
-        ImageResolutionValidator(expected_resolution=options["target_size"]),
+        ImageResolutionValidator(
+            expected_resolution=options["target_size"],
+            min_size=options.get("min_size"),
+        ),
         KeypointAnnotationValidator(
             num_keypoints=options.get("number_of_keypoints"),
             # Bound keypoint coords by the declared image size (images are

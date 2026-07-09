@@ -26,6 +26,18 @@ config = Config()
 logger = logging.getLogger(__name__)
 logger.setLevel(config.LOG_LEVEL)
 
+# Absolute lower bound on image dimensions, as (width, height) in pixels
+# (#348, RFC-0002 §12.9 + Principle 6). Images with either side below this are
+# rejected outright — independently of the per-model ``target_size`` uniformity
+# check — because they carry too little spatial structure to train on: standard
+# vision backbones downsample by 2 five times (total /32), so a side below 32px
+# collapses to a sub-pixel feature map, and 32x32 is the canonical small-image
+# benchmark size (CIFAR). A per-model override travels in ``file_options`` as
+# ``min_size`` (schema-plumbed like ``target_size``), so the CLI can discover
+# and preview the same floor (cli#183). Kept conservative on purpose: this is a
+# floor, not the recommended resolution.
+MIN_IMAGE_SIZE: Tuple[int, int] = (32, 32)
+
 
 class ImageResolutionValidator(BaseValidator):
     """Validator for ensuring image resolution uniformity.
@@ -44,6 +56,7 @@ class ImageResolutionValidator(BaseValidator):
         expected_resolution: Optional[Tuple[int, int]] = None,
         name: str = "Image Resolution Validator",
         subdir: str = "images",
+        min_size: Optional[Tuple[int, int]] = None,
     ):
         """Initialize the image resolution validator.
 
@@ -56,10 +69,17 @@ class ImageResolutionValidator(BaseValidator):
                 semantic-segmentation masks — pixel-wise label maps that must be
                 readable and share the images' resolution; the default instance
                 only ever scans ``<SRC_PATH>/images``.
+            min_size: Minimum acceptable image size as (width, height). Images
+                with either side below this are rejected. Defaults to
+                :data:`MIN_IMAGE_SIZE`; a per-model override is plumbed from
+                ``file_options["min_size"]`` (#348).
         """
         super().__init__(name)
         self.expected_resolution = expected_resolution
         self.subdir = subdir
+        # Absolute floor (width, height). A falsy override falls back to the
+        # module default so the gate is always active, never silently disabled.
+        self.min_size = tuple(min_size) if min_size else MIN_IMAGE_SIZE
         self.tolerance = 0  # Whether to enforce strict file type checking . we can later make this configurable
         self.supported_formats = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif"}
 
@@ -258,6 +278,7 @@ class ImageResolutionValidator(BaseValidator):
 
         invalid_files = []
         resolution_errors = []
+        too_small = []
         warnings = []
         resolutions_found = set()
 
@@ -277,6 +298,12 @@ class ImageResolutionValidator(BaseValidator):
                         continue
 
                     resolutions_found.add(resolution)
+                    # Absolute minimum-size floor (#348): reject images with
+                    # either side below ``min_size``, independently of the
+                    # target_size uniformity check below — a uniform dataset of
+                    # tiny (e.g. 8x8) images would otherwise pass.
+                    if not self._meets_min_size(resolution):
+                        too_small.append(f"{image_path}: {resolution}")
                     # Check if resolution matches expected (with tolerance)
                     if not self._resolution_matches(
                         resolution, self.expected_resolution
@@ -295,6 +322,27 @@ class ImageResolutionValidator(BaseValidator):
             # Close progress bar
             if progress_bar:
                 progress_bar.close()
+
+        # Enforce the minimum-size floor first: it's the most fundamental,
+        # actionable failure (the images simply can't be trained on), so it
+        # takes precedence over a uniformity / target_size mismatch.
+        if too_small:
+            return self._create_result(
+                is_valid=False,
+                errors=[
+                    f"Images below the minimum size {tuple(self.min_size)} (width, height) "
+                    f"were found — they are too small to train on. Provide larger images or, "
+                    f"if your model accepts smaller inputs, lower the floor via "
+                    f"file_options.min_size. Offending files: {too_small}"
+                ],
+                metadata={
+                    "files_checked": len(image_files),
+                    "min_size": tuple(self.min_size),
+                    "too_small": too_small,
+                    "resolutions_found": sorted(resolutions_found),
+                    "expected_resolution": self.expected_resolution,
+                },
+            )
 
         # Check for uniformity
         if len(resolutions_found) > 1:
@@ -355,9 +403,19 @@ class ImageResolutionValidator(BaseValidator):
                 "files_checked": len(image_files),
                 "uniform_resolution": uniform_resolution,
                 "expected_resolution": self.expected_resolution,
+                "min_size": tuple(self.min_size),
                 "tolerance": self.tolerance,
             },
         )
+
+    def _meets_min_size(self, resolution: Tuple[int, int]) -> bool:
+        """Return True if ``resolution`` (width, height) is at least the floor
+        on BOTH axes. An image exactly at the floor passes; either side below
+        it fails. Normalizes to tuple so a list-typed ``min_size`` (e.g. from a
+        YAML/JSON ``file_options.min_size``) compares by value, mirroring
+        ``_resolution_matches``."""
+        min_w, min_h = tuple(self.min_size)
+        return resolution[0] >= min_w and resolution[1] >= min_h
 
     def _resolution_matches(
         self, actual: Tuple[int, int], expected: Tuple[int, int]
