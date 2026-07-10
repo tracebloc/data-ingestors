@@ -406,6 +406,18 @@ class BaseIngestor(ABC):
         """Read data from the input source"""
         pass
 
+    def _collect_run_metadata(self) -> Dict[str, Any]:
+        """Data-derived metadata to merge onto the global-metadata channel after
+        a successful ingest, computed from what the run already scanned.
+
+        Called once, just before ``send_ingest_summary`` ships the payload, and
+        merged into ``file_options``. The base emits nothing; subclasses override
+        to contribute (e.g. ``CSVIngestor`` returns per-column ``feature_stats``,
+        #360). Kept as a hook so the base engine stays format-agnostic rather than
+        branching on category the way the ``text_profile`` injection does.
+        """
+        return {}
+
     def _count_records(self, source: Any) -> Optional[int]:
         """
         Try to count total records in the source for progress tracking.
@@ -662,6 +674,12 @@ class BaseIngestor(ABC):
                         text_profile = compute_text_profile(self.database.config)
                         if text_profile:
                             self.file_options["text_profile"] = text_profile
+
+                    # Per-ingestor data-derived metadata computed during the run
+                    # (e.g. the CSV ingestor's numeric feature_stats, #360). Merged
+                    # onto the global-metadata channel here, alongside text_profile,
+                    # just before the payload ships.
+                    self.file_options.update(self._collect_run_metadata())
 
                     self.api_client.send_ingest_summary(
                         table_name=self.table_name,

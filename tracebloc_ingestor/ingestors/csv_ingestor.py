@@ -206,6 +206,25 @@ class CSVIngestor(BaseIngestor):
         )
         self.csv_options = csv_options or {}
 
+        # Per numeric-feature-column sufficient statistics, accumulated in the
+        # cast pass (_validate_csv) and emitted on the global-metadata channel
+        # for federated/global normalization (data-ingestors#360, backend#1037).
+        # Additive aggregates only — no raw values leave the client.
+        self._feature_stats_acc: Dict[str, Dict[str, Any]] = {}
+        # The label/target, row-id, and annotation columns are NOT features: a
+        # data_id would pollute normalization, and — critically — the regression
+        # target is bucketed precisely so raw values never leave the cluster
+        # (label_policy="bucket"), so its min/max must never leak here.
+        self._feature_stats_excluded = {
+            c
+            for c in (
+                self.label_column,
+                self.unique_id_column,
+                self.annotation_column,
+            )
+            if c
+        }
+
     def _validate_csv(self, df: pd.DataFrame) -> None:
         """Validate CSV data against schema using pandas functionality.
 
@@ -292,6 +311,7 @@ class CSVIngestor(BaseIngestor):
                         )
                     _raise_on_overflow(column, df[column], converted, dtype)
                     df[column] = converted.astype("Int64")
+                    self._accumulate_feature_stats(column, df[column])
                 elif any(t in dtype.upper() for t in ("FLOAT", "DOUBLE", "DECIMAL", "NUMERIC")):
                     # float64 — NOT downcast='float' (float32), which corrupted
                     # precision: 3.14 -> '3.140000104904175'. Also covers DOUBLE/
@@ -320,6 +340,7 @@ class CSVIngestor(BaseIngestor):
                     # the object dtype that made this throw on the raw column.
                     _raise_on_overflow(column, df[column], converted, dtype)
                     df[column] = converted
+                    self._accumulate_feature_stats(column, df[column])
                 elif "BOOL" in dtype.upper():
                     # Map the textual/numeric boolean forms DataValidator accepts
                     # (true/false, yes/no, t/f, y/n, 1/0) to a nullable boolean
@@ -383,6 +404,71 @@ class CSVIngestor(BaseIngestor):
                     f"{type(e).__name__} (message suppressed — it can embed "
                     f"cell values, #226){RESET}"
                 ) from None
+
+    def _accumulate_feature_stats(self, column: str, series: pd.Series) -> None:
+        """Fold one chunk's numeric column into the running sufficient stats.
+
+        Called from the INT / FLOAT cast branches of ``_validate_csv`` with the
+        already-cast column — so there is no second read of the data. Accumulates
+        the five additive aggregates the backend folds into global mean/std/min/
+        max (backend#1037): ``count``, ``sum`` (Σx), ``sum_sq`` (Σx²), ``min``,
+        ``max``. Missing cells (``pd.NA`` / ``NaN``) are dropped, so ``count`` is
+        the non-null count and the aggregates ignore nulls.
+
+        Non-feature columns (label/target, row-id, annotation) are skipped — see
+        ``_feature_stats_excluded``. An all-null column contributes nothing and
+        never appears in the emitted stats (min/max would be undefined).
+        """
+        if column in self._feature_stats_excluded:
+            return
+        vals = series.dropna()
+        if vals.empty:
+            return
+        # Square in float64: an ``Int64`` column squared stays Int64 and a large
+        # value would overflow; the aggregates are float sufficient statistics.
+        fvals = vals.astype("float64")
+        chunk_count = int(len(vals))
+        chunk_sum = float(fvals.sum())
+        chunk_sum_sq = float((fvals**2).sum())
+        # ``.item()`` unwraps the numpy scalar to a native Python int/float, so an
+        # INT column reports integer min/max (18, not 18.0) while a float column
+        # stays float — and the emitted JSON matches the column's real type.
+        chunk_min = vals.min().item()
+        chunk_max = vals.max().item()
+
+        acc = self._feature_stats_acc.get(column)
+        if acc is None:
+            self._feature_stats_acc[column] = {
+                "count": chunk_count,
+                "sum": chunk_sum,
+                "sum_sq": chunk_sum_sq,
+                "min": chunk_min,
+                "max": chunk_max,
+            }
+        else:
+            acc["count"] += chunk_count
+            acc["sum"] += chunk_sum
+            acc["sum_sq"] += chunk_sum_sq
+            acc["min"] = min(acc["min"], chunk_min)
+            acc["max"] = max(acc["max"], chunk_max)
+
+    def feature_stats(self) -> Dict[str, Dict[str, Any]]:
+        """The finalized per-numeric-column sufficient statistics for this run.
+
+        Empty when the dataset has no numeric feature columns (e.g. an image
+        manifest, or a table of only string/date columns) — the caller then
+        omits the field entirely.
+        """
+        return {col: dict(stats) for col, stats in self._feature_stats_acc.items()}
+
+    def _collect_run_metadata(self) -> Dict[str, Any]:
+        """Emit ``feature_stats`` on the global-metadata channel (#360).
+
+        See ``BaseIngestor._collect_run_metadata``. Omitted when there are no
+        numeric feature columns so the payload stays clean.
+        """
+        stats = self.feature_stats()
+        return {"feature_stats": stats} if stats else {}
 
     def read_data(self, file_path: str) -> Generator[Dict[str, Any], None, None]:
         """Read and validate CSV file using pandas optimizations.
