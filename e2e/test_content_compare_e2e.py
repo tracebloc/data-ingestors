@@ -91,9 +91,12 @@ SCHEMA_TO_INFORMATION_SCHEMA = {
     "TEXT": "text",
     "INT": "int",
     "INTEGER": "int",
-    "TINYINT": "tinyint",
-    "SMALLINT": "smallint",
-    "MEDIUMINT": "mediumint",
+    # TINYINT/SMALLINT/MEDIUMINT all map to SQLAlchemy Integer in
+    # database._get_sqlalchemy_type, which MySQL renders as `int` — so
+    # information_schema reports `int`, not the narrower declared width.
+    "TINYINT": "int",
+    "SMALLINT": "int",
+    "MEDIUMINT": "int",
     "BIGINT": "bigint",
     "FLOAT": "float",
     "DOUBLE": "double",
