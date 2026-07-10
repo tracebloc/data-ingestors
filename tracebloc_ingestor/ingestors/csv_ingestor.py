@@ -462,13 +462,17 @@ class CSVIngestor(BaseIngestor):
         return {col: dict(stats) for col, stats in self._feature_stats_acc.items()}
 
     def _collect_run_metadata(self) -> Dict[str, Any]:
-        """Emit ``feature_stats`` on the global-metadata channel (#360).
+        """Contribute ``feature_stats`` under the shared ``attributes`` namespace
+        on the global-metadata channel (#360).
 
-        See ``BaseIngestor._collect_run_metadata``. Omitted when there are no
-        numeric feature columns so the payload stays clean.
+        Per backend#1037's final ``dataset_meta`` shape, every per-column extra
+        lives under ``attributes.feature_stats`` — ``schema`` stays a plain
+        ``{column: dtype}`` map. See ``BaseIngestor._collect_run_metadata``.
+        Omitted entirely when there are no numeric feature columns so the payload
+        stays clean.
         """
         stats = self.feature_stats()
-        return {"feature_stats": stats} if stats else {}
+        return {"attributes": {"feature_stats": stats}} if stats else {}
 
     def read_data(self, file_path: str) -> Generator[Dict[str, Any], None, None]:
         """Read and validate CSV file using pandas optimizations.

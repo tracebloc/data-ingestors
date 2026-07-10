@@ -410,13 +410,28 @@ class BaseIngestor(ABC):
         """Data-derived metadata to merge onto the global-metadata channel after
         a successful ingest, computed from what the run already scanned.
 
-        Called once, just before ``send_ingest_summary`` ships the payload, and
-        merged into ``file_options``. The base emits nothing; subclasses override
-        to contribute (e.g. ``CSVIngestor`` returns per-column ``feature_stats``,
-        #360). Kept as a hook so the base engine stays format-agnostic rather than
+        The base emits nothing; subclasses override to contribute (e.g.
+        ``CSVIngestor`` returns ``{"attributes": {"feature_stats": …}}``, #360).
+        Kept as a hook so the base engine stays format-agnostic rather than
         branching on category the way the ``text_profile`` injection does.
+
+        The returned dict is applied by ``_apply_run_metadata``: its
+        ``attributes`` key (a shared per-dataset namespace — feature_stats today,
+        text/image facts in later #360 slices) is merged *into* any existing
+        ``attributes`` rather than replacing it; other keys ``.update`` normally.
         """
         return {}
+
+    def _apply_run_metadata(self) -> None:
+        """Merge ``_collect_run_metadata()`` into ``file_options`` just before the
+        payload ships. Split out from ``_ingest`` so the merge — in particular the
+        shallow-merge of the shared ``attributes`` namespace — is unit-testable
+        without a full ingest run."""
+        run_meta = self._collect_run_metadata()
+        attributes = run_meta.pop("attributes", None)
+        if attributes:
+            self.file_options.setdefault("attributes", {}).update(attributes)
+        self.file_options.update(run_meta)
 
     def _count_records(self, source: Any) -> Optional[int]:
         """
@@ -676,10 +691,11 @@ class BaseIngestor(ABC):
                             self.file_options["text_profile"] = text_profile
 
                     # Per-ingestor data-derived metadata computed during the run
-                    # (e.g. the CSV ingestor's numeric feature_stats, #360). Merged
-                    # onto the global-metadata channel here, alongside text_profile,
-                    # just before the payload ships.
-                    self.file_options.update(self._collect_run_metadata())
+                    # (e.g. the CSV ingestor's numeric feature_stats under
+                    # attributes.feature_stats, #360). Merged onto the global-
+                    # metadata channel here, alongside text_profile, just before
+                    # the payload ships.
+                    self._apply_run_metadata()
 
                     self.api_client.send_ingest_summary(
                         table_name=self.table_name,

@@ -130,11 +130,39 @@ def test_feature_stats_empty_when_no_numeric_columns(make_csv):
     assert ing._collect_run_metadata() == {}
 
 
-def test_feature_stats_surfaced_in_run_metadata(make_csv):
+def test_feature_stats_nested_under_attributes(make_csv):
+    # backend#1037 contract: per-column extras live under
+    # attributes.feature_stats, not at the top level of meta_data.
     path = make_csv({"age": [1, 2, 3]})
     ing = make_csv_ingestor(schema={"age": "INT"})
     list(ing.read_data(str(path)))
 
     meta = ing._collect_run_metadata()
-    assert "feature_stats" in meta
-    assert meta["feature_stats"]["age"]["count"] == 3
+    assert meta["attributes"]["feature_stats"]["age"]["count"] == 3
+    # feature_stats must NOT sit at the top level anymore.
+    assert "feature_stats" not in meta
+
+
+def test_apply_run_metadata_merges_into_attributes(make_csv):
+    # The apply step folds feature_stats into file_options["attributes"] without
+    # clobbering other facts already in that shared namespace (forward-compat
+    # with the per-category attributes slice).
+    path = make_csv({"age": [1, 2, 3]})
+    ing = make_csv_ingestor(schema={"age": "INT"})
+    ing.file_options["attributes"] = {"language": "en"}
+    list(ing.read_data(str(path)))
+
+    ing._apply_run_metadata()
+
+    attrs = ing.file_options["attributes"]
+    assert attrs["language"] == "en"  # pre-existing key preserved
+    assert attrs["feature_stats"]["age"]["count"] == 3
+
+
+def test_apply_run_metadata_noop_without_numeric(make_csv):
+    path = make_csv({"name": ["x", "y"]})
+    ing = make_csv_ingestor(schema={"name": "VARCHAR(10)"})
+    list(ing.read_data(str(path)))
+
+    ing._apply_run_metadata()
+    assert "attributes" not in ing.file_options
