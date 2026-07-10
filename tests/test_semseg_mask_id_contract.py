@@ -23,6 +23,7 @@ that doesn't at preflight. These tests pin:
 from __future__ import annotations
 
 import pandas as pd
+import pytest
 
 from tracebloc_ingestor.ingestors.record_processor import RecordProcessor
 from tracebloc_ingestor.validators.mask_id_validator import MaskIdColumnValidator
@@ -290,6 +291,30 @@ def test_index_col_csv_option_does_not_defeat_the_gate(tmp_path):
     ).validate(str(path))
     assert not result.is_valid  # blank mask_id caught despite index_col
     assert "empty/NULL" in result.errors[0]
+
+
+def test_validation_error_does_not_leak_cell_content(tmp_path):
+    # A manifest whose header reads fine but whose body has an unterminated quote:
+    # the full scan raises a pandas ParserError (which can embed raw cell content).
+    # The validator must surface only the exception TYPE + generic guidance, never
+    # str(e) — customer cell values stay on-prem (bugbot: leaked-cell-values rule).
+    path = tmp_path / "labels_badquote.csv"
+    path.write_text('filename,mask_id\nimg_001,ok\nimg_002,"leaky_secret_value\n')
+    result = MaskIdColumnValidator(
+        column="mask_id", schema={"mask_id": "VARCHAR(255)"}
+    ).validate(str(path))
+    assert not result.is_valid  # a broken manifest is rejected (not fail-open)
+    msg = result.errors[0]
+    assert "leaky_secret_value" not in msg  # no raw cell content leaked
+    assert result.metadata.get("error_type") == "validation_exception"
+
+
+def test_non_string_delimiter_rejected_at_construction():
+    # csv_options is validated at construction, not mid-scan: a non-string
+    # delimiter raises a clear ValueError up front instead of a generic mask-id
+    # failure deep in the read (bugbot: validate-config-at-construction rule).
+    with pytest.raises(ValueError, match="delimiter"):
+        MaskIdColumnValidator(column="mask_id", csv_options={"delimiter": 3})
 
 
 def test_malformed_manifest_defers_gracefully(tmp_path):

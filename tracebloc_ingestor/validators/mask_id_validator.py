@@ -118,6 +118,37 @@ class MaskIdColumnValidator(BaseValidator):
         self._check_declared = schema is not _SCHEMA_UNSET
         self._schema = {} if schema is _SCHEMA_UNSET or schema is None else schema
         self._csv_options = csv_options or {}
+        self._validate_csv_options()
+
+    def _validate_csv_options(self) -> None:
+        """Fail fast at construction on a malformed csv_options value, rather than
+        deep inside the read where it surfaces as a generic mask-id failure
+        (validate config at construction, not mid-scan). Checks only the dialect
+        keys this validator forwards to pandas (see :data:`_READ_DIALECT_KEYS`)."""
+        str_keys = (
+            "sep",
+            "delimiter",
+            "quotechar",
+            "escapechar",
+            "encoding",
+            "encoding_errors",
+            "lineterminator",
+            "comment",
+            "engine",
+        )
+        for key in str_keys:
+            val = self._csv_options.get(key)
+            if val is not None and not isinstance(val, str):
+                raise ValueError(
+                    f"csv_options['{key}'] must be a string, got "
+                    f"{type(val).__name__} — check the ingest config."
+                )
+        quoting = self._csv_options.get("quoting")
+        if quoting is not None and not isinstance(quoting, int):
+            raise ValueError(
+                f"csv_options['quoting'] must be an int (csv.QUOTE_*), got "
+                f"{type(quoting).__name__} — check the ingest config."
+            )
 
     def _read_kwargs(self) -> Dict[str, Any]:
         """The pandas read options needed to parse the manifest exactly as
@@ -218,11 +249,21 @@ class MaskIdColumnValidator(BaseValidator):
                 metadata={"checked": True, "column": self.column},
             )
 
-        except Exception as e:  # noqa: BLE001 — mirror sibling validators
-            logger.error(f"Error during mask-id-column validation: {str(e)}")
+        except Exception as e:  # noqa: BLE001
+            # Never surface str(e): a pandas tokenizing/parse error can embed raw
+            # cell/field content, which must NOT egress via the failure report or
+            # logs — customer data stays on-prem. Report only the exception TYPE +
+            # where to look; enough to act on, with nothing from the file leaked.
+            err_type = type(e).__name__
+            logger.error(f"Error during mask-id-column validation: {err_type}")
             return self._create_result(
                 is_valid=False,
-                errors=[f"Mask-id-column validation error: {str(e)}"],
+                errors=[
+                    f"Could not read the semantic-segmentation manifest to verify "
+                    f"the '{self.column}' column ({err_type}). Check the CSV's "
+                    f"delimiter / quoting / encoding (csv_options) and that the "
+                    f"file is well-formed. See templates/semantic_segmentation/."
+                ],
                 metadata={"error_type": "validation_exception"},
             )
 
