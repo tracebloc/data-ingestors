@@ -1,0 +1,27 @@
+{
+  "description": "Value-level parity contract for tabular schema inference (RFC-0002 §8.1). The data-ingestors `schema_inference.infer_column_type` is the source of truth; the Go CLI `InferSchema` (cli#185) must return the SAME type for each case. Backs the parity harness backend#1009. Each case: raw string column values -> expected SQL type. First-match-wins precedence: leading-zero-code -> bool -> int/bigint -> float -> date/datetime -> varchar. UNITS/CHARSET (must match on the Go side): VARCHAR(n) counts CHARACTERS (Unicode code points, = MySQL VARCHAR semantics) so Go must use utf8.RuneCountInString, NOT len(string) (bytes); integer/float matching is ASCII-only ([0-9]) so Unicode-digit and underscore-grouped tokens are text, not numbers.",
+  "sample_cap": 5000,
+  "cases": [
+    {"name": "int", "values": ["1", "2", "3", "-4"], "expected": "INT"},
+    {"name": "int_with_blank", "values": ["1", "", "3"], "expected": "INT"},
+    {"name": "bigint_over_int32", "values": ["3000000000", "1"], "expected": "BIGINT"},
+    {"name": "int64_overflow_is_text", "values": ["99999999999999999999999999", "1"], "expected": "VARCHAR(26)"},
+    {"name": "float", "values": ["3.14", "2.0", "-0.5"], "expected": "FLOAT"},
+    {"name": "float_scientific", "values": ["1e9", "2.5"], "expected": "FLOAT"},
+    {"name": "float_and_int_mixed", "values": ["1", "2.5", "3"], "expected": "FLOAT"},
+    {"name": "bool_yes_no", "values": ["yes", "no", "yes"], "expected": "BOOLEAN"},
+    {"name": "bool_true_false", "values": ["true", "false", "TRUE"], "expected": "BOOLEAN"},
+    {"name": "zero_one_is_int_not_bool", "values": ["0", "1", "1", "0"], "expected": "INT"},
+    {"name": "zip_leading_zero", "values": ["007", "0012"], "expected": "VARCHAR(4)"},
+    {"name": "zip_mixed_padded_and_unpadded", "values": ["00501", "90210", "12345"], "expected": "VARCHAR(5)"},
+    {"name": "single_zero_is_int", "values": ["0", "1", "0"], "expected": "INT"},
+    {"name": "date", "values": ["2024-01-02", "2024-03-15"], "expected": "DATE"},
+    {"name": "datetime", "values": ["2024-01-02 13:45:00", "2024-01-03 08:00:00"], "expected": "DATETIME"},
+    {"name": "numeric_id_is_int_not_date", "values": ["20240101", "20240102"], "expected": "INT"},
+    {"name": "varchar_text", "values": ["apple", "banana"], "expected": "VARCHAR(6)"},
+    {"name": "underscore_grouped_is_text", "values": ["1_000", "2_000"], "expected": "VARCHAR(5)"},
+    {"name": "unicode_digits_are_text", "values": ["١٢٣", "٤٥٦"], "expected": "VARCHAR(3)"},
+    {"name": "multibyte_varchar_is_char_count", "values": ["café", "naïve"], "expected": "VARCHAR(5)"},
+    {"name": "all_missing_is_varchar1", "values": ["", "NA", "null"], "expected": "VARCHAR(1)"}
+  ]
+}
