@@ -121,12 +121,49 @@ def test_falsy_override_falls_back_to_default_floor():
     assert ImageResolutionValidator().min_size == MIN_IMAGE_SIZE
 
 
-@pytest.mark.parametrize("bad", [32, (16,), (16, 16, 16)])
+# A bare string is iterable: "32" would unpack to ('3', '2') and "1234" would
+# fail the 2-element unpack — both are shape errors, never a (width, height)
+# pair. Reject them (and other non-iterable / wrong-length shapes) up front.
+@pytest.mark.parametrize("bad", [32, (16,), (16, 16, 16), "32", "1234", b"32"])
 def test_malformed_min_size_raises_at_construction(bad):
-    """A non-iterable or non-2-element override is a config error surfaced at
-    construction — not swallowed mid-scan as a per-file image-read error."""
+    """A non-iterable, wrong-length, or string override is a config error
+    surfaced at construction — not swallowed mid-scan as a per-file image-read
+    error, and never char-split into a bogus floor."""
     with pytest.raises(ValueError, match="min_size must be a"):
         ImageResolutionValidator(min_size=bad)
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        (0, 32),  # zero side
+        (32, 0),
+        (-1, 32),  # negative side
+        (32, -5),
+        (32.5, 32),  # non-integral float
+        ("32", 32),  # per-element string is rejected, not coerced
+        (32, "32"),
+        ("abc", 32),  # non-numeric string
+        (None, 32),  # missing side
+        (True, 32),  # bool is an int subclass but not a pixel count
+    ],
+)
+def test_non_positive_integer_min_size_raises_at_construction(bad):
+    """A 2-element override whose sides are not positive integers is still a
+    config error surfaced at construction — otherwise an int-vs-str comparison
+    in _meets_min_size raises mid-scan and is mislabeled as a corrupt image."""
+    with pytest.raises(ValueError, match="positive integer"):
+        ImageResolutionValidator(min_size=bad)
+
+
+@pytest.mark.parametrize("override", [(32.0, 32.0), [16.0, 16], (64.0, 48)])
+def test_min_size_coerces_integer_valued_floats(override):
+    """Integer-valued floats (as a numeric literal can arrive from JSON/YAML
+    file_options) are normalized to positive ints at construction, so
+    _meets_min_size compares plain ints."""
+    v = ImageResolutionValidator(min_size=override)
+    assert all(isinstance(side, int) for side in v.min_size)
+    assert v.min_size == (int(override[0]), int(override[1]))
 
 
 # --- floor takes precedence over a uniformity/target mismatch -----------------
