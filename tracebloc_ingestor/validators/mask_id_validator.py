@@ -42,18 +42,27 @@ logger.setLevel(config.LOG_LEVEL)
 # real ingest path always runs the declaration check.
 _SCHEMA_UNSET = object()
 
-# csv_options keys the read call sites set themselves (or the ingestor's own
-# non-read_csv key ``chunk_size``), dropped from the dialect passthrough so a
-# manifest's csv_options can't collide with our explicit read kwargs.
-_READ_RESERVED_KEYS = frozenset(
+# The ONLY csv_options forwarded to the validator's reads: the keys that control
+# how the manifest is TOKENIZED into columns + cells, so its parse matches
+# CSVIngestor's. A whitelist, not a blacklist — frame-RESTRUCTURING keys
+# (index_col, header, names, usecols, skiprows, nrows, ...) are excluded, because
+# the scan pins its own usecols/dtype/chunksize and forwarding a restructuring
+# key would collide with those (a swallowed error that fail-opens the gate) or
+# change which column mask_id is. New/unknown csv_options are dropped by default.
+_READ_DIALECT_KEYS = frozenset(
     {
-        "chunk_size",
-        "chunksize",
-        "nrows",
-        "usecols",
-        "keep_default_na",
-        "dtype",
-        "na_values",
+        "sep",
+        "delimiter",
+        "quotechar",
+        "doublequote",
+        "escapechar",
+        "quoting",
+        "skipinitialspace",
+        "encoding",
+        "encoding_errors",
+        "lineterminator",
+        "comment",
+        "engine",
     }
 )
 
@@ -121,11 +130,9 @@ class MaskIdColumnValidator(BaseValidator):
         # modalities.validators -> this module, so a top-level import would cycle.
         from ..ingestors.csv_ingestor import _bom_safe_encoding
 
-        # Pass through every dialect key CSVIngestor honors, minus the ones the
-        # call sites set (see _READ_RESERVED_KEYS).
-        opts = {
-            k: v for k, v in self._csv_options.items() if k not in _READ_RESERVED_KEYS
-        }
+        # Forward only the tokenizing dialect keys CSVIngestor honors (see
+        # _READ_DIALECT_KEYS) — never a frame-restructuring key.
+        opts = {k: v for k, v in self._csv_options.items() if k in _READ_DIALECT_KEYS}
         opts["encoding"] = _bom_safe_encoding(opts.get("encoding"))
         if "sep" not in opts and "delimiter" not in opts:
             opts["sep"] = ","
@@ -348,20 +355,23 @@ class MaskIdColumnValidator(BaseValidator):
             _accumulate(_series(data), 0)
             return sample, total
 
+        # No local try/except: a body-read failure (malformed encoding / quoting)
+        # propagates to validate()'s handler, which rejects with the REAL parse
+        # error. Swallowing it here would either fail-open (miss empties past the
+        # failure) or reject with a misleading PARTIAL count that masks the actual
+        # structural fault. The header read already succeeded, so reaching here
+        # means the file is readable — a body error is a genuine data fault worth
+        # surfacing, and the ingestor's own read (same dialect, on_bad_lines=
+        # "error") would trip on it too.
         offset = 0
-        try:
-            reader = pd.read_csv(
-                data,
-                usecols=[resolved_column],
-                keep_default_na=False,
-                dtype=str,
-                chunksize=50_000,
-                **self._read_kwargs(),
-            )
-            for chunk in reader:
-                offset = _accumulate(_series(chunk), offset)
-        except Exception:  # noqa: BLE001 — partial/unreadable read: report the
-            # empties found so far (never DISCARD real ones); if none were found,
-            # defer — the write path re-raises a persistent error on the same file.
-            return sample, total
+        reader = pd.read_csv(
+            data,
+            usecols=[resolved_column],
+            keep_default_na=False,
+            dtype=str,
+            chunksize=50_000,
+            **self._read_kwargs(),
+        )
+        for chunk in reader:
+            offset = _accumulate(_series(chunk), offset)
         return sample, total

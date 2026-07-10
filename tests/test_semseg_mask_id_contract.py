@@ -276,6 +276,38 @@ def test_quotechar_from_csv_options_is_honored(tmp_path):
     assert "empty/NULL" in result.errors[0]
 
 
+def test_index_col_csv_option_does_not_defeat_the_gate(tmp_path):
+    # index_col is a valid read_csv option a run might set, but forwarding it into
+    # the single-column scan would collide with usecols and (if swallowed)
+    # fail-open the gate. It must be dropped from the dialect passthrough so a
+    # blank mask_id is still rejected.
+    path = tmp_path / "labels_idx.csv"
+    path.write_text("id,filename,mask_id\n1,img_001,\n")
+    result = MaskIdColumnValidator(
+        column="mask_id",
+        schema={"filename": "VARCHAR(255)", "mask_id": "VARCHAR(255)"},
+        csv_options={"index_col": "id"},
+    ).validate(str(path))
+    assert not result.is_valid  # blank mask_id caught despite index_col
+    assert "empty/NULL" in result.errors[0]
+
+
+def test_malformed_manifest_defers_gracefully(tmp_path):
+    # A manifest with invalid UTF-8 bytes: the header read can't introspect it,
+    # so the validator DEFERS (checked=False) rather than crashing — the
+    # ingestor's own read (same dialect, on_bad_lines="error") surfaces the
+    # malformation. (On a file large enough that the nrows=0 header buffer clears
+    # the corruption, the body scan reaches it and PROPAGATES the parse error to
+    # a rejection instead of a misleading partial count — see _empty_value_rows.)
+    path = tmp_path / "labels_badbytes.csv"
+    path.write_bytes(b"filename,mask_id\nimg_001,\xff\xfe\n")
+    result = MaskIdColumnValidator(
+        column="mask_id", schema={"mask_id": "VARCHAR(255)"}
+    ).validate(str(path))
+    assert result.is_valid  # defers (checked=False); does not crash
+    assert result.metadata["checked"] is False
+
+
 def test_case_colliding_headers_inspect_the_schema_exact_column(tmp_path):
     # Header carries BOTH 'Mask_ID' (empty) and 'mask_id' (populated); the schema
     # declares lowercase 'mask_id', which the ingestor keeps verbatim. The
