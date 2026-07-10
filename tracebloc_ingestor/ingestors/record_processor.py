@@ -278,14 +278,16 @@ class RecordProcessor:
             cleaned_record["ingestor_id"] = self.ingestor_id
             cleaned_record["filename"] = record.get("filename")
             cleaned_record["extension"] = record.get("extension")
-            # The cleaned record carries ONLY DB columns + framework columns —
-            # no runtime-only sidecar pointers. semantic_segmentation's mask_id
-            # is a per-row pointer to a mask FILE, not a table column (there's no
-            # mask_id column on the standard tracebloc table — #212); it stays on
-            # the RAW source record and is lent to the transfer by
-            # ``map_file_transfer`` for the duration of the copy. So mask_id no
-            # longer rides the DB-bound record through process -> transfer ->
-            # batch (the cross-layer leak this split removes — P5).
+            # The cleaned record carries ONLY schema-declared DB columns +
+            # framework columns. A sidecar's link column is a table column IFF
+            # the schema declares it: semantic_segmentation MUST declare mask_id
+            # (backend#816, enforced at preflight by MaskIdColumnValidator), so a
+            # declared mask_id IS stored — kept by the `k in self.schema` filter
+            # above — and the training client reads it to locate each mask. An
+            # UNdeclared sidecar pointer is not a table column: it is lent to the
+            # transfer by ``map_file_transfer`` for the copy only, without riding
+            # the DB-bound record through process -> transfer -> batch (the
+            # cross-layer leak this split removes — P5).
             return cleaned_record
 
         except Exception as e:

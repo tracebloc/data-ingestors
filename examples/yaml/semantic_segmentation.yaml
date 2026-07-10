@@ -1,6 +1,10 @@
 # Semantic segmentation: image + per-image PNG mask.
 # `masks:` directory is convention-mapped one-mask-per-image; the mask file
 # extension is forced to .png by the default validator set.
+# `mask_id` is REQUIRED: the training client reads this column to locate each
+# mask file, so the manifest CSV must carry a populated `mask_id` column and the
+# schema must declare it. An ingest whose manifest lacks it is rejected at
+# preflight (there is no schema-less semantic segmentation).
 apiVersion: tracebloc.io/v1
 kind: IngestConfig
 table: tumors_train
@@ -10,3 +14,5 @@ csv: /data/shared/tumors/labels.csv
 images: /data/shared/tumors/images/
 masks: /data/shared/tumors/masks/
 label: image_label
+schema:
+  mask_id: VARCHAR(255)

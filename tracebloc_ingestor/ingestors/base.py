@@ -371,6 +371,13 @@ class BaseIngestor(ABC):
                 # sneak an effectively single-class dataset past the gate
                 # (bugbot #252).
                 "full_schema": self.schema,
+                # The run's csv read options (delimiter / encoding / ...), so a
+                # CSV-reading validator parses the manifest BYTE-IDENTICALLY to
+                # CSVIngestor. Without it a non-comma or BOM manifest that ingests
+                # fine is falsely rejected at preflight (delimiter is a supported
+                # option — schema/ingest.v1.json). getattr: only CSVIngestor
+                # carries csv_options; JSON/other ingestors default to {}.
+                "csv_options": getattr(self, "csv_options", {}),
                 # The run's data_id source column (data_id.strategy=column),
                 # for SequenceGroupValidator's T6 guard: mapping data_id
                 # from the sequence column would upsert-collapse every

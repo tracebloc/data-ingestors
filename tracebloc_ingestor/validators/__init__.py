@@ -20,6 +20,7 @@ from .time_ordered_validator import TimeOrderedValidator
 from .time_before_today_validator import TimeBeforeTodayValidator
 from .keypoint_annotation_validator import KeypointAnnotationValidator
 from .keypoint_visibility_validator import KeypointVisibilityValidator
+from .mask_id_validator import MaskIdColumnValidator
 from .sequence_group_validator import SequenceGroupValidator
 from .label_constant_within_group_validator import LabelConstantWithinGroupValidator
 from .per_group_time_ordered_validator import PerGroupTimeOrderedValidator
@@ -39,6 +40,7 @@ __all__ = [
     "TimeBeforeTodayValidator",
     "KeypointAnnotationValidator",
     "KeypointVisibilityValidator",
+    "MaskIdColumnValidator",
     "SequenceGroupValidator",
     "LabelConstantWithinGroupValidator",
     "PerGroupTimeOrderedValidator",

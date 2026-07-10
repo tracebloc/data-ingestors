@@ -22,7 +22,16 @@ csv: /data/shared/tumors/labels.csv
 images: /data/shared/tumors/images/
 masks: /data/shared/tumors/masks/
 label: image_label
+schema:
+  mask_id: VARCHAR(255) # REQUIRED — the client reads this column to find each mask
 ```
+
+> **`mask_id` is required.** The training client locates each mask file from the
+> `mask_id` column (no naming-convention fallback), so your manifest CSV must
+> include a `mask_id` column, populated on every row, and the schema must declare
+> it as above. There is no schema-less semantic segmentation: an ingest whose
+> manifest lacks `mask_id` (or leaves it blank on any row) is rejected at
+> preflight with a clear error, before any table is created.
 
 **3. Install:**
 
@@ -72,7 +81,7 @@ semantic_segmentation/
 ### CSV Labels File
 The CSV file contains the following columns:
 - `filename`: Image filename (with or without extension — the configured extension is appended if missing)
-- `mask_id`: Corresponding mask filename (with or without extension — `.png` is appended if missing)
+- `mask_id` **(required)**: Corresponding mask filename (with or without extension — `.png` is appended if missing). The training client reads this column to locate each mask file, so it must be present and populated on every row, and declared in the schema as `mask_id: VARCHAR(255)` (see `semantic_segmentation.py`). A manifest missing this column, or with a blank value on any row, is rejected at preflight.
 - `image_label`: Class label present in the image (one row per class per image)
 
 Example:
