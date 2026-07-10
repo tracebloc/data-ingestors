@@ -72,6 +72,11 @@ _READ_DIALECT_KEYS = frozenset(
 # accumulating millions of ints — the OOM the chunked read exists to avoid.
 _EMPTY_ROWS_SAMPLE_CAP = 20
 
+# Cap on how many CSV headers a "column not found" message lists, so a very wide
+# manifest can't produce an unbounded error string; the full list stays in
+# metadata["columns"] (mirrors how the other validators cap offender lists).
+_HEADER_SAMPLE_CAP = 20
+
 
 class MaskIdColumnValidator(BaseValidator):
     """Reject a semantic-segmentation manifest that would NOT produce a
@@ -171,20 +176,20 @@ class MaskIdColumnValidator(BaseValidator):
 
     def validate(self, data: Any, **kwargs) -> ValidationResult:
         try:
-            # (1) Declaration: mask_id must be a schema column, else the ingestor
-            # drops it (RecordProcessor keeps a column iff it's in the schema) and
-            # the stored table has no mask_id at all — the exact backend#816 shape
-            # a CSV-only check waves through. Checked first: it's independent of
-            # the manifest contents and is the root cause when it fails.
-            declared_key = (
-                self._match_column(list(self._schema.keys()), self.column)
-                if self._check_declared
-                else None
-            )
-            if self._check_declared and declared_key is None:
+            # (1) Declaration: the schema must declare 'mask_id' EXACTLY (lower-
+            # case). RecordProcessor keeps a column iff its (stripped) header is a
+            # schema key, and the training client reads the mask column by the
+            # LITERAL name 'mask_id' (str(row["mask_id"]), no fallback) — so a
+            # differently-cased or undeclared key stores nothing the client can
+            # read and breaks training after a green preflight (backend#816).
+            # Checked first: it's independent of the manifest contents.
+            if self._check_declared and self.column not in self._schema:
+                # Distinguish "declared under the wrong case/whitespace" (rename)
+                # from "not declared at all" for an actionable message.
+                variant = self._match_column(list(self._schema.keys()), self.column)
                 return self._create_result(
                     is_valid=False,
-                    errors=[self._undeclared_message()],
+                    errors=[self._undeclared_message(variant)],
                     metadata={
                         "column": self.column,
                         "schema_columns": list(map(str, self._schema.keys())),
@@ -202,35 +207,22 @@ class MaskIdColumnValidator(BaseValidator):
                     metadata={"checked": False, "column": self.column},
                 )
 
-            resolved = self._match_column(columns, self.column)
-            if resolved is None:
+            # (2) Header: the manifest column must be named EXACTLY 'mask_id'
+            # (ignoring the surrounding whitespace CSVIngestor strips), so the
+            # STORED column is literally 'mask_id' for the client to read. A
+            # case/whitespace variant is detected only to give a rename hint.
+            stripped = [str(c).strip() for c in columns]
+            if self.column not in stripped:
+                variant = self._match_column(columns, self.column)
                 return self._create_result(
                     is_valid=False,
-                    errors=[self._missing_column_message(columns)],
+                    errors=[self._missing_column_message(columns, variant)],
                     metadata={
                         "column": self.column,
                         "columns": list(map(str, columns)),
                     },
                 )
-
-            # (2) Congruence: the CSV header must be an EXACT schema key. Column
-            # detection above is case/whitespace-insensitive (user-friendly), but
-            # the write path keeps a column ONLY on an exact match — csv_ingestor
-            # ._validate_csv does set(schema) - set(stripped_headers), and
-            # RecordProcessor filters `k in self.schema`. So a 'Mask_ID' header vs
-            # a 'mask_id' schema key (or a trailing space) passes detection yet is
-            # dropped / hard-rejected mid-ingest AFTER the table is created (#260).
-            # Catch that divergence here with an actionable rename hint.
-            if self._check_declared and resolved.strip() not in self._schema:
-                return self._create_result(
-                    is_valid=False,
-                    errors=[self._case_mismatch_message(resolved, declared_key)],
-                    metadata={
-                        "column": self.column,
-                        "csv_header": str(resolved),
-                        "schema_columns": list(map(str, self._schema.keys())),
-                    },
-                )
+            resolved = next(c for c in columns if str(c).strip() == self.column)
 
             empty_rows, empty_count = self._empty_value_rows(data, resolved)
             if empty_count:
@@ -267,7 +259,19 @@ class MaskIdColumnValidator(BaseValidator):
                 metadata={"error_type": "validation_exception"},
             )
 
-    def _undeclared_message(self) -> str:
+    def _undeclared_message(self, variant: Optional[str] = None) -> str:
+        if variant is not None:
+            # Declared, but under the wrong case/whitespace — the stored column
+            # would carry that spelling, which the client can't read.
+            return (
+                f"Semantic segmentation requires the schema to declare "
+                f"'{self.column}' (lowercase), but it declares '{variant}'. The "
+                f"training client reads the mask column by the exact name "
+                f"'{self.column}' (backend#816), so a differently-cased key stores "
+                f"a column it can't read and breaks training after a green "
+                f"preflight. Rename the schema key to '{self.column}'. See "
+                f"templates/semantic_segmentation/."
+            )
         declared = ", ".join(map(str, self._schema.keys())) or "(none)"
         return (
             f"Semantic segmentation requires '{self.column}' to be a DECLARED "
@@ -279,26 +283,32 @@ class MaskIdColumnValidator(BaseValidator):
             f"schema, matching templates/semantic_segmentation/."
         )
 
-    def _case_mismatch_message(self, csv_header: str, schema_key: Optional[str]) -> str:
-        return (
-            f"The manifest's '{csv_header}' column does not exactly match its "
-            f"schema declaration '{schema_key}' — the ingestor keeps a column "
-            f"only on an exact-name match and the training client reads it by "
-            f"name, so a case/whitespace difference makes the ingest fail mid-run "
-            f"with 'Schema columns not present in CSV'. Rename the schema key and "
-            f"the CSV header to the identical spelling (the template uses "
-            f"lowercase '{self.column}'). See templates/semantic_segmentation/."
+    def _missing_column_message(
+        self, columns: List[Any], variant: Optional[str] = None
+    ) -> str:
+        if variant is not None:
+            # Present, but under the wrong case/whitespace — the stored column
+            # would carry that spelling, which the client can't read.
+            return (
+                f"The manifest's '{variant}' column must be named exactly "
+                f"'{self.column}' (lowercase) — the training client reads the mask "
+                f"column by that literal name (backend#816), so a differently-cased "
+                f"header stores a column it can't read. Rename the CSV header to "
+                f"'{self.column}'. See templates/semantic_segmentation/."
+            )
+        shown = ", ".join(map(str, columns[:_HEADER_SAMPLE_CAP]))
+        more = (
+            f" (+{len(columns) - _HEADER_SAMPLE_CAP} more)"
+            if len(columns) > _HEADER_SAMPLE_CAP
+            else ""
         )
-
-    def _missing_column_message(self, columns: List[Any]) -> str:
         return (
             f"Required column '{self.column}' not found in semantic-segmentation "
-            f"manifest CSV header (columns: {', '.join(map(str, columns))}). The "
-            f"training client reads '{self.column}' to locate each mask file "
-            f"(backend#816) — without it, every mask lookup raises "
-            f"FileNotFoundError at train time. Add a '{self.column}' column "
-            f"mapping each row to its mask filename. See "
-            f"templates/semantic_segmentation/ for the expected manifest layout."
+            f"manifest CSV header (columns: {shown}{more}). The training client "
+            f"reads '{self.column}' to locate each mask file (backend#816) — "
+            f"without it, every mask lookup raises FileNotFoundError at train "
+            f"time. Add a '{self.column}' column mapping each row to its mask "
+            f"filename. See templates/semantic_segmentation/ for the layout."
         )
 
     def _empty_value_message(self, empty_rows: List[int], empty_count: int) -> str:

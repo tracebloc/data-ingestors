@@ -128,14 +128,27 @@ def test_valid_semseg_manifest_passes(make_csv):
     assert result.metadata["checked"] is True
 
 
-def test_mask_id_match_is_case_insensitive(make_csv):
-    # CSVIngestor resolves headers case-insensitively; mirror that here so a
-    # header like "Mask_Id" is accepted, not falsely rejected as missing.
+def test_non_lowercase_header_is_rejected(make_csv):
+    # The stored column IS the CSV header and the training client reads the mask
+    # column by the LITERAL lowercase name 'mask_id' — so a 'Mask_Id' header is
+    # rejected with a rename hint, not silently accepted (it would break training
+    # after a green preflight).
     path = make_csv(
         pd.DataFrame({"filename": ["image_001"], "Mask_Id": ["image_001_mask"]})
     )
     result = MaskIdColumnValidator(column="mask_id").validate(str(path))
-    assert result.is_valid
+    assert not result.is_valid
+    assert "must be named exactly 'mask_id'" in result.errors[0]
+
+
+def test_missing_column_message_caps_header_list(make_csv):
+    # A wide manifest without mask_id: the error names only a capped sample of
+    # headers (bounded message); the full list stays in metadata.
+    path = make_csv(pd.DataFrame({f"c{i}": ["x"] for i in range(50)}))
+    result = MaskIdColumnValidator(column="mask_id").validate(str(path))
+    assert not result.is_valid
+    assert "more)" in result.errors[0]  # truncation marker
+    assert len(result.metadata["columns"]) == 50  # full detail retained
 
 
 def test_non_csv_input_defers(make_csv):
@@ -214,11 +227,10 @@ def test_declared_schema_with_mask_id_passes(make_csv):
     assert result.metadata["checked"] is True
 
 
-def test_schema_key_vs_header_case_mismatch_is_rejected(make_csv):
-    # Schema key "Mask_Id" but CSV header "mask_id": detection resolves both to
-    # mask_id, but the write path keeps a column only on an EXACT match, so the
-    # ingest would fail mid-run ("Schema columns not present"). Reject early with
-    # a rename hint rather than green-lighting a manifest that dies at ingest.
+def test_non_lowercase_schema_key_is_rejected(make_csv):
+    # Schema declares "Mask_Id" (header is lowercase "mask_id"): the schema key
+    # must be exactly lowercase "mask_id" — the client reads the stored column by
+    # that literal name — so it's rejected with a rename hint.
     path = make_csv(
         pd.DataFrame({"filename": ["image_001"], "mask_id": ["image_001_mask"]})
     )
@@ -226,12 +238,13 @@ def test_schema_key_vs_header_case_mismatch_is_rejected(make_csv):
         column="mask_id", schema={"Mask_Id": "VARCHAR(255)"}
     ).validate(str(path))
     assert not result.is_valid
-    assert "does not exactly match" in result.errors[0]
+    assert "Rename the schema key to 'mask_id'" in result.errors[0]
 
 
-def test_header_vs_schema_case_mismatch_is_rejected(make_csv):
-    # Symmetric: schema declares lowercase 'mask_id' (the template spelling) but
-    # the CSV header is 'Mask_ID'. Same write-path divergence, rejected early.
+def test_non_lowercase_header_with_lowercase_schema_is_rejected(make_csv):
+    # Schema declares lowercase 'mask_id' but the CSV header is 'Mask_ID': the
+    # header must be exactly lowercase 'mask_id' (the stored + client-read name),
+    # rejected with a rename hint.
     path = make_csv(
         pd.DataFrame({"filename": ["image_001"], "Mask_ID": ["image_001_mask"]})
     )
@@ -239,7 +252,7 @@ def test_header_vs_schema_case_mismatch_is_rejected(make_csv):
         column="mask_id", schema={"mask_id": "VARCHAR(255)"}
     ).validate(str(path))
     assert not result.is_valid
-    assert "does not exactly match" in result.errors[0]
+    assert "must be named exactly 'mask_id'" in result.errors[0]
 
 
 def test_delimiter_from_csv_options_is_honored(tmp_path):
