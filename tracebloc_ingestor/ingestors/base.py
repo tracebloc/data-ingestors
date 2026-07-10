@@ -735,9 +735,15 @@ class BaseIngestor(ABC):
                         "skipping ingest summary."
                     )
                 elif not label_counts:
+                    counts_helper = (
+                        "get_label_sequence_counts"
+                        if grouping is not None
+                        and grouping.count_unit == "sequences"
+                        else "get_label_counts"
+                    )
                     raise RuntimeError(
                         f"Inserted {stats['inserted_records']} row(s) but "
-                        f"get_label_counts returned nothing for "
+                        f"{counts_helper} returned nothing for "
                         f"ingestor_id={self.ingestor_id!r}. "
                         "The dataset was not registered with the backend; "
                         "this run's rows will be removed by the "

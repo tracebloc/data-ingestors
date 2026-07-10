@@ -198,3 +198,22 @@ def test_time_to_event_validator_redacts(tmp_path):
     assert SECRET not in joined
     assert "rows [1]" in joined
     assert "non_numeric_sample" not in result.metadata
+
+
+# ---------------------------------------------------------------------------
+# column_preview (review: #359 — capped column lists in validator errors)
+# ---------------------------------------------------------------------------
+
+
+def test_column_preview_short_list_unchanged():
+    assert redaction.column_preview(["a", "b", "c"]) == "['a', 'b', 'c']"
+
+
+def test_column_preview_caps_wide_panels():
+    cols = [f"gene_{i}" for i in range(3000)]
+    preview = redaction.column_preview(cols)
+    assert "(+2990 more of 3000)" in preview
+    assert "gene_9" in preview
+    assert "gene_10" not in preview  # capped at 10
+    # a single error line stays bounded no matter how wide the panel is
+    assert len(preview) < 300

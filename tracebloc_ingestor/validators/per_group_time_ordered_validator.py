@@ -105,8 +105,10 @@ class PerGroupTimeOrderedValidator(BaseValidator):
                     is_valid=False,
                     errors=[
                         f"Required sequence column '{self.sequence_column}' "
-                        f"not found. Available: {list(df.columns)}"
+                        f"not found. Available: "
+                        f"{redaction.column_preview(df.columns)}"
                     ],
+                    metadata={"available_columns": list(df.columns)},
                 )
             time_col = resolve_column(df.columns, self.time_column)
             if time_col is None:
@@ -114,8 +116,9 @@ class PerGroupTimeOrderedValidator(BaseValidator):
                     is_valid=False,
                     errors=[
                         f"Required column '{self.time_column}' not found. "
-                        f"Available: {list(df.columns)}"
+                        f"Available: {redaction.column_preview(df.columns)}"
                     ],
+                    metadata={"available_columns": list(df.columns)},
                 )
 
             errors = []

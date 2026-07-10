@@ -683,3 +683,13 @@ def test_sequence_columns_rule_has_customer_readable_description(
     assert "sequence_id" in description
     assert "timestamp" in description
     assert "rename" in description.lower()
+
+
+def test_empty_grouped_counts_error_names_sequence_helper(make_csv):
+    # Bugbot (review: #359): the empty-counts RuntimeError must name the
+    # helper the grouped path actually used, not get_label_counts.
+    csv_path = make_csv(_toy_frame(), name="toy_empty_counts.csv")
+    ing = _make_ingestor(csv_path)
+    ing.database.get_label_sequence_counts.return_value = {}
+    with pytest.raises(RuntimeError, match="get_label_sequence_counts"):
+        _run_full_ingest(ing, csv_path)

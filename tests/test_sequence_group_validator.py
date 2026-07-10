@@ -186,3 +186,16 @@ def test_internal_exception_becomes_error(monkeypatch):
     # never reach the customer-facing error — type name only.
     assert "boom" not in result.errors[0]
     assert "RuntimeError" in result.errors[0]
+
+
+def test_missing_sequence_column_error_is_bounded_on_wide_panels():
+    # Bugbot (review: #359): a wide genomics/proteomics panel must not dump
+    # thousands of column names into one error string. The message shows a
+    # capped preview; the FULL list stays in metadata.
+    df = pd.DataFrame({f"gene_{i}": [1.0] for i in range(500)})
+    result = SequenceGroupValidator().validate(df)
+    assert not result.is_valid
+    [error] = result.errors
+    assert len(error) < 600
+    assert "(+490 more of 500)" in error
+    assert result.metadata["available_columns"] == list(df.columns)

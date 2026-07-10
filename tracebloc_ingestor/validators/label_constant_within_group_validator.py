@@ -14,6 +14,7 @@ import logging
 from pathlib import Path
 from typing import Any, Optional
 
+from ..utils import redaction
 from ..utils.columns import resolve_column
 
 try:
@@ -102,7 +103,7 @@ class LabelConstantWithinGroupValidator(BaseValidator):
                     errors=[
                         f"Required sequence column '{self.sequence_column}' "
                         f"not found in dataset. Available columns: "
-                        f"{list(df.columns)}."
+                        f"{redaction.column_preview(df.columns)}."
                     ],
                     metadata={"available_columns": list(df.columns)},
                 )
@@ -113,7 +114,7 @@ class LabelConstantWithinGroupValidator(BaseValidator):
                     errors=[
                         f"Required label column '{self.label_column}' not "
                         f"found in dataset. Available columns: "
-                        f"{list(df.columns)}."
+                        f"{redaction.column_preview(df.columns)}."
                     ],
                     metadata={"available_columns": list(df.columns)},
                 )

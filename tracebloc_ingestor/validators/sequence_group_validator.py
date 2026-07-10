@@ -141,7 +141,8 @@ class SequenceGroupValidator(BaseValidator):
                     errors=[
                         f"Required sequence column '{self.sequence_column}' "
                         f"not found in dataset. Available columns: "
-                        f"{list(df.columns)}. Time-series classification "
+                        f"{redaction.column_preview(df.columns)}. "
+                        f"Time-series classification "
                         f"data must carry a '{self.sequence_column}' column "
                         f"grouping the timestep rows of each sequence "
                         f"(e.g. a patient / device / session id)."
