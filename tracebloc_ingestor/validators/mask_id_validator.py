@@ -22,7 +22,7 @@ modalities can reuse it.
 
 import logging
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
@@ -33,10 +33,6 @@ from ..utils.coercion import NA_SENTINELS
 config = Config()
 logger = logging.getLogger(__name__)
 logger.setLevel(config.LOG_LEVEL)
-
-# How many offending rows to name in the error before truncating, so the
-# message stays actionable on a large manifest without dumping thousands of ids.
-_MAX_REPORTED_ROWS = 10
 
 # Sentinel distinguishing "no schema argument was supplied" (bare construction /
 # unit test — skip the declaration check, validate only the CSV) from an
@@ -70,12 +66,17 @@ class MaskIdColumnValidator(BaseValidator):
             DECLARED (hence stored) column. Omit it (bare construction) to skip
             the declaration check and validate only the CSV; the semseg factory
             always passes it, so the real ingest path always enforces it.
+        csv_options: the run's pandas read options (delimiter / encoding / ...),
+            so the manifest is parsed exactly as :class:`CSVIngestor` parses it.
+            Without it a non-comma or BOM manifest that ingests fine is falsely
+            rejected here. The semseg factory passes ``options["csv_options"]``.
     """
 
     def __init__(
         self,
         column: str = "mask_id",
         schema: Any = _SCHEMA_UNSET,
+        csv_options: Optional[Dict[str, Any]] = None,
         name: str = "Mask Id Column",
     ):
         super().__init__(name)
@@ -86,6 +87,21 @@ class MaskIdColumnValidator(BaseValidator):
         # can't store mask_id at all.
         self._check_declared = schema is not _SCHEMA_UNSET
         self._schema = {} if schema is _SCHEMA_UNSET or schema is None else schema
+        self._csv_options = csv_options or {}
+
+    def _read_kwargs(self) -> Dict[str, Any]:
+        """The ``sep`` / ``encoding`` pandas needs to parse the manifest exactly
+        as CSVIngestor does (csv_ingestor.py:509/515) — so preflight and the
+        write path resolve the same columns from the same bytes."""
+        # Lazy import: csv_ingestor -> base -> validators_mapping ->
+        # modalities.validators -> this module, so a top-level import would cycle.
+        from ..ingestors.csv_ingestor import _bom_safe_encoding
+
+        opts = self._csv_options
+        return {
+            "sep": opts.get("sep", opts.get("delimiter", ",")),
+            "encoding": _bom_safe_encoding(opts.get("encoding")),
+        }
 
     def validate(self, data: Any, **kwargs) -> ValidationResult:
         try:
@@ -94,9 +110,12 @@ class MaskIdColumnValidator(BaseValidator):
             # the stored table has no mask_id at all — the exact backend#816 shape
             # a CSV-only check waves through. Checked first: it's independent of
             # the manifest contents and is the root cause when it fails.
-            if self._check_declared and (
-                self._match_column(list(self._schema.keys()), self.column) is None
-            ):
+            declared_key = (
+                self._match_column(list(self._schema.keys()), self.column)
+                if self._check_declared
+                else None
+            )
+            if self._check_declared and declared_key is None:
                 return self._create_result(
                     is_valid=False,
                     errors=[self._undeclared_message()],
@@ -108,10 +127,10 @@ class MaskIdColumnValidator(BaseValidator):
 
             columns = self._read_columns(data)
             if columns is None:
-                # Not a CSV manifest / DataFrame we can introspect (e.g. a JSON
-                # input or an unreadable file) — not this validator's error to
-                # raise; the read path / sibling validators surface those. Pass,
-                # exactly like LabelColumnValidator.
+                # Not a CSV manifest / DataFrame we can introspect (e.g. an
+                # unreadable file) — not this validator's error to raise; the read
+                # path / sibling validators surface those. Pass, like
+                # LabelColumnValidator.
                 return self._create_result(
                     is_valid=True,
                     metadata={"checked": False, "column": self.column},
@@ -125,6 +144,25 @@ class MaskIdColumnValidator(BaseValidator):
                     metadata={
                         "column": self.column,
                         "columns": list(map(str, columns)),
+                    },
+                )
+
+            # (2) Congruence: the CSV header must be an EXACT schema key. Column
+            # detection above is case/whitespace-insensitive (user-friendly), but
+            # the write path keeps a column ONLY on an exact match — csv_ingestor
+            # ._validate_csv does set(schema) - set(stripped_headers), and
+            # RecordProcessor filters `k in self.schema`. So a 'Mask_ID' header vs
+            # a 'mask_id' schema key (or a trailing space) passes detection yet is
+            # dropped / hard-rejected mid-ingest AFTER the table is created (#260).
+            # Catch that divergence here with an actionable rename hint.
+            if self._check_declared and resolved.strip() not in self._schema:
+                return self._create_result(
+                    is_valid=False,
+                    errors=[self._case_mismatch_message(resolved, declared_key)],
+                    metadata={
+                        "column": self.column,
+                        "csv_header": str(resolved),
+                        "schema_columns": list(map(str, self._schema.keys())),
                     },
                 )
 
@@ -161,6 +199,17 @@ class MaskIdColumnValidator(BaseValidator):
             f"schema, matching templates/semantic_segmentation/."
         )
 
+    def _case_mismatch_message(self, csv_header: str, schema_key: Optional[str]) -> str:
+        return (
+            f"The manifest's '{csv_header}' column does not exactly match its "
+            f"schema declaration '{schema_key}' — the ingestor keeps a column "
+            f"only on an exact-name match and the training client reads it by "
+            f"name, so a case/whitespace difference makes the ingest fail mid-run "
+            f"with 'Schema columns not present in CSV'. Rename the schema key and "
+            f"the CSV header to the identical spelling (the template uses "
+            f"lowercase '{self.column}'). See templates/semantic_segmentation/."
+        )
+
     def _missing_column_message(self, columns: List[Any]) -> str:
         return (
             f"Required column '{self.column}' not found in semantic-segmentation "
@@ -173,15 +222,12 @@ class MaskIdColumnValidator(BaseValidator):
         )
 
     def _empty_value_message(self, empty_rows: List[int]) -> str:
-        shown = ", ".join(str(r) for r in empty_rows[:_MAX_REPORTED_ROWS])
-        more = (
-            f" (and {len(empty_rows) - _MAX_REPORTED_ROWS} more)"
-            if len(empty_rows) > _MAX_REPORTED_ROWS
-            else ""
-        )
+        from ..utils import redaction
+
+        refs = redaction.row_refs(empty_rows, len(empty_rows))
         return (
-            f"Required column '{self.column}' is empty/NULL on row(s) {shown}{more} "
-            f"of the semantic-segmentation manifest. The training client reads "
+            f"Required column '{self.column}' is empty/NULL at {refs} of the "
+            f"semantic-segmentation manifest. The training client reads "
             f"'{self.column}' to locate each mask file (backend#816) — a blank "
             f"value makes it derive a garbage filename and raise FileNotFoundError "
             f"at train time. Populate '{self.column}' on every row with its mask "
@@ -190,30 +236,30 @@ class MaskIdColumnValidator(BaseValidator):
         )
 
     def _read_columns(self, data: Any) -> Optional[list]:
-        """Return the column names of the manifest, or ``None`` when the input
-        isn't an introspectable CSV / DataFrame.
+        """Return the manifest column names, or ``None`` when the input isn't an
+        introspectable CSV / DataFrame.
 
-        Reads only the header row for a CSV path (``nrows=0``) so a wide or
-        multi-GB manifest costs almost nothing. A read error (missing file,
-        unparseable) returns ``None`` — a benign skip, since the read/transfer
-        path raises its own clear error for those. Mirrors
-        :meth:`LabelColumnValidator._read_columns`.
+        Reads only the header row for a path (``nrows=0``) so a wide or multi-GB
+        manifest costs almost nothing, using the run's delimiter/encoding
+        (:meth:`_read_kwargs`) so the parse matches CSVIngestor's. Any manifest
+        extension is accepted — the ingestor reads the configured path regardless
+        of suffix, so gating on ``.csv`` would silently skip this check for a
+        ``.txt`` manifest. A read error (missing / unparseable file) returns
+        ``None`` — a benign skip, since the read/transfer path raises its own
+        clear error for those.
         """
         if isinstance(data, pd.DataFrame):
             return list(data.columns)
         if isinstance(data, (str, Path)):
-            path = Path(data)
-            if path.suffix.lower() != ".csv":
-                return None
             try:
-                header = pd.read_csv(path, nrows=0, encoding="utf-8")
+                header = pd.read_csv(Path(data), nrows=0, **self._read_kwargs())
             except Exception:  # noqa: BLE001 — missing/unparseable -> benign skip
                 return None
             return list(header.columns)
         return None
 
     def _empty_value_rows(self, data: Any, resolved_column: str) -> List[int]:
-        """Return the 1-based data-row numbers whose ``resolved_column`` value the
+        """Return the 0-based data-row indices whose ``resolved_column`` value the
         ingestor would store as an unresolvable ``mask_id``. Empty list means
         every row is populated.
 
@@ -231,28 +277,46 @@ class MaskIdColumnValidator(BaseValidator):
         raw read (``keep_default_na=False``, ``dtype=str``) + explicit
         ``NA_SENTINELS`` membership. The whitespace-only case is flagged too
         because the client strips before use (``str(row["mask_id"]).strip()``).
-        Row numbers are 1-based over data rows (header excluded), matching how a
-        user counts records in the manifest.
+
+        Reads ONLY the mask_id column, in chunks (``usecols`` + ``chunksize``) —
+        like ``ingestable_records_validator`` / ``CSVIngestor._count_records`` —
+        so a multi-GB manifest can't OOM the pod (a whole-file read did, #137).
+        Row indices are 0-based over data rows, matching ``redaction.row_refs``
+        and every other validator's reporting.
         """
-        if isinstance(data, pd.DataFrame):
-            df = data
-        else:
-            try:
-                # Raw read (no NA coercion, dtype=str) so sentinel tokens survive
-                # to be matched against NA_SENTINELS — identical to the ingestor.
-                df = pd.read_csv(
-                    data, encoding="utf-8", keep_default_na=False, dtype=str
-                )
-            except Exception:  # noqa: BLE001 — unreadable -> defer to read path
-                return []
-
-        if resolved_column not in df.columns:
-            return []
-
         na_tokens = set(NA_SENTINELS)
-        series = df[resolved_column]
+
+        def _is_empty(value: Any) -> bool:
+            return pd.isna(value) or str(value) in na_tokens or str(value).strip() == ""
+
+        if isinstance(data, pd.DataFrame):
+            if resolved_column not in data.columns:
+                return []
+            return [i for i, v in enumerate(data[resolved_column]) if _is_empty(v)]
+
+        # usecols callable matches the mask_id column case/whitespace-insensitively
+        # (as _match_column resolved it), so it works regardless of the header's
+        # raw spelling; take the single selected column by position.
+        target = self.column.strip().lower()
         offending: List[int] = []
-        for i, value in enumerate(series, start=1):
-            if pd.isna(value) or str(value) in na_tokens or str(value).strip() == "":
-                offending.append(i)
+        offset = 0
+        try:
+            reader = pd.read_csv(
+                data,
+                usecols=lambda c: str(c).strip().lower() == target,
+                keep_default_na=False,
+                dtype=str,
+                chunksize=50_000,
+                **self._read_kwargs(),
+            )
+            for chunk in reader:
+                if chunk.shape[1] == 0:
+                    return []
+                series = chunk.iloc[:, 0]
+                offending.extend(
+                    offset + i for i, v in enumerate(series) if _is_empty(v)
+                )
+                offset += len(series)
+        except Exception:  # noqa: BLE001 — unreadable -> defer to read path
+            return []
         return offending

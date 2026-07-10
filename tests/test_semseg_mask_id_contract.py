@@ -65,10 +65,11 @@ def test_empty_mask_id_on_a_row_is_rejected(make_csv):
     result = MaskIdColumnValidator(column="mask_id").validate(str(path))
     assert not result.is_valid
     msg = result.errors[0]
-    assert "'mask_id' is empty/NULL on row(s) 2" in msg
+    # 0-based data-row index (row_refs), matching every other validator.
+    assert "'mask_id' is empty/NULL at rows [1]" in msg
     assert "FileNotFoundError" in msg
     assert "templates/semantic_segmentation/" in msg
-    assert result.metadata["empty_rows"] == [2]
+    assert result.metadata["empty_rows"] == [1]
 
 
 def test_null_mask_id_on_a_row_is_rejected(make_csv):
@@ -84,7 +85,7 @@ def test_null_mask_id_on_a_row_is_rejected(make_csv):
     )
     result = MaskIdColumnValidator(column="mask_id").validate(str(path))
     assert not result.is_valid
-    assert result.metadata["empty_rows"] == [2]
+    assert result.metadata["empty_rows"] == [1]
 
 
 def test_na_sentinel_literal_mask_id_is_rejected(make_csv):
@@ -107,7 +108,7 @@ def test_na_sentinel_literal_mask_id_is_rejected(make_csv):
     )
     result = MaskIdColumnValidator(column="mask_id").validate(str(path))
     assert not result.is_valid, "literal 'none' is nulled by the ingestor"
-    assert result.metadata["empty_rows"] == [2]
+    assert result.metadata["empty_rows"] == [1]
 
 
 def test_valid_semseg_manifest_passes(make_csv):
@@ -212,16 +213,62 @@ def test_declared_schema_with_mask_id_passes(make_csv):
     assert result.metadata["checked"] is True
 
 
-def test_declared_schema_match_is_case_insensitive(make_csv):
-    # A schema key "Mask_Id" satisfies the declaration check for column "mask_id"
-    # (same case/whitespace-insensitive resolution the ingestor uses).
+def test_schema_key_vs_header_case_mismatch_is_rejected(make_csv):
+    # Schema key "Mask_Id" but CSV header "mask_id": detection resolves both to
+    # mask_id, but the write path keeps a column only on an EXACT match, so the
+    # ingest would fail mid-run ("Schema columns not present"). Reject early with
+    # a rename hint rather than green-lighting a manifest that dies at ingest.
     path = make_csv(
         pd.DataFrame({"filename": ["image_001"], "mask_id": ["image_001_mask"]})
     )
     result = MaskIdColumnValidator(
         column="mask_id", schema={"Mask_Id": "VARCHAR(255)"}
     ).validate(str(path))
-    assert result.is_valid
+    assert not result.is_valid
+    assert "does not exactly match" in result.errors[0]
+
+
+def test_header_vs_schema_case_mismatch_is_rejected(make_csv):
+    # Symmetric: schema declares lowercase 'mask_id' (the template spelling) but
+    # the CSV header is 'Mask_ID'. Same write-path divergence, rejected early.
+    path = make_csv(
+        pd.DataFrame({"filename": ["image_001"], "Mask_ID": ["image_001_mask"]})
+    )
+    result = MaskIdColumnValidator(
+        column="mask_id", schema={"mask_id": "VARCHAR(255)"}
+    ).validate(str(path))
+    assert not result.is_valid
+    assert "does not exactly match" in result.errors[0]
+
+
+def test_delimiter_from_csv_options_is_honored(tmp_path):
+    # A semicolon-delimited manifest (a supported csv_options.delimiter) must be
+    # parsed with that delimiter. Without it the whole header collapses into one
+    # column and mask_id is falsely reported missing — a false reject of a
+    # dataset the ingestor would parse and ingest fine.
+    path = tmp_path / "labels_semi.csv"
+    path.write_text("filename;mask_id;image_label\nimg_001;img_001_mask;road\n")
+    # Default (comma) parse: single collapsed column -> false "missing".
+    assert not MaskIdColumnValidator(column="mask_id").validate(str(path)).is_valid
+    # With the run's delimiter -> parses correctly and passes.
+    honored = MaskIdColumnValidator(
+        column="mask_id",
+        schema={"mask_id": "VARCHAR(255)"},
+        csv_options={"delimiter": ";"},
+    ).validate(str(path))
+    assert honored.is_valid, honored.errors
+
+
+def test_utf8_bom_manifest_is_parsed(tmp_path):
+    # Excel "CSV UTF-8" prepends a BOM; the validator must strip it (utf-8-sig)
+    # like CSVIngestor, else the first header reads as "﻿mask_id" and is
+    # falsely reported missing.
+    path = tmp_path / "labels_bom.csv"
+    path.write_bytes("mask_id,image_label\nimg_001_mask,road\n".encode("utf-8-sig"))
+    result = MaskIdColumnValidator(
+        column="mask_id", schema={"mask_id": "VARCHAR(255)"}
+    ).validate(str(path))
+    assert result.is_valid, result.errors
 
 
 # ---------------------------------------------------------------------------

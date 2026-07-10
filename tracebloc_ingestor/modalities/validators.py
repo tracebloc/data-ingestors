@@ -142,6 +142,9 @@ def semantic_segmentation(options: Dict[str, Any]) -> List[BaseValidator]:
         MaskIdColumnValidator(
             column="mask_id",
             schema=options.get("full_schema") or options.get("schema"),
+            # Parse the manifest with the run's delimiter/encoding so a non-comma
+            # or BOM manifest that ingests fine isn't falsely rejected at preflight.
+            csv_options=options.get("csv_options"),
         ),
         ImageResolutionValidator(
             expected_resolution=options["target_size"],
