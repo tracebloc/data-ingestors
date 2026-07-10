@@ -67,7 +67,7 @@ The chart **doesn't transport data into the cluster** — it points at data alre
 
 **3. Write your `ingest.yaml`.**
 
-The example below is for `image_classification`. **Other categories require different fields** — e.g. `tabular_classification` has no `images:` and instead needs a typed `schema:` block. Don't copy this one blindly; grab the matching file from [`examples/yaml/`](examples/yaml/) (one per category) and edit from there. Per-category sample data and READMEs live under [`templates/`](https://github.com/tracebloc/data-ingestors/tree/master/templates).
+The example below is for `image_classification`. **Other categories require different fields** — e.g. `tabular_classification` has no `images:` and instead needs a typed `schema:` block. `time_series_classification` additionally requires its `schema:` to declare the fixed `sequence_id` + `timestamp` columns (one label per sequence). Don't copy this one blindly; grab the matching file from [`examples/yaml/`](examples/yaml/) (one per category) and edit from there. Per-category sample data and READMEs live under [`templates/`](https://github.com/tracebloc/data-ingestors/tree/master/templates).
 
 ```yaml
 apiVersion: tracebloc.io/v1

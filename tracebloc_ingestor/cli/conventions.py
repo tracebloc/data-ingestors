@@ -69,6 +69,12 @@ TABULAR_CATEGORIES: FrozenSet[str] = frozenset(
     }
 )
 
+# NOTE: time_series_classification is deliberately NOT in this set — the set
+# feeds REGRESSION_CLASS_CATEGORIES below, and TSC is a classification-class
+# task (string-shorthand label, passthrough policy; backend#1054). Its
+# grouped-sequence behavior is declared on its ModalitySpec (the ``grouping``
+# trait), not via a conventions grouping; fixed column names (Decision-2)
+# mean it needs no name plumbing here either.
 TIME_SERIES_CATEGORIES: FrozenSet[str] = frozenset(
     {
         TaskCategory.TIME_SERIES_FORECASTING,

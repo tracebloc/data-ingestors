@@ -164,6 +164,34 @@ CASES = [
         ),
         id="time_series_forecasting",
     ),
+    # time_series_classification: sequence-grouped (one label per
+    # sequence_id; fixed sequence_id/timestamp names — backend#1054). The
+    # bundled sample is 6 ICU stays × 3–7 hourly timesteps; the label counts
+    # the summary sends are per SEQUENCE (COUNT(DISTINCT sequence_id)), and
+    # a composite (sequence_id, timestamp) index is created —
+    # test_tsc_sequence_semantics below pins both against the real MySQL.
+    pytest.param(
+        _cfg(
+            table="e2e_tsc",
+            category="time_series_classification",
+            csv=str(
+                T
+                / "time_series_classification/time_series_classification_sample_in_csv_format.csv"
+            ),
+            schema={
+                "sequence_id": "VARCHAR(64)",
+                "timestamp": "TIMESTAMP",
+                "heart_rate": "FLOAT",
+                "resp_rate": "FLOAT",
+                "temperature": "FLOAT",
+                "spo2": "FLOAT",
+                "lactate": "FLOAT",
+                "label": "INT",
+            },
+            label="label",
+        ),
+        id="time_series_classification",
+    ),
     pytest.param(
         _cfg(
             table="e2e_kp",
@@ -298,3 +326,67 @@ def test_modality_ingests_its_template(cfg, tmp_path, monkeypatch):
     rc = run.main()
     assert rc == 0, f"ingest exited {rc} for {cfg['category']}"
     assert _rows(table) > 0, f"no rows ingested for {cfg['category']}"
+
+
+def test_tsc_sequence_semantics(tmp_path, monkeypatch):
+    """backend#1054 WS1 done-contract, against the real MySQL: a 3-patient
+    toy CSV (T=5/3/7, 2 classes) ingests to 15 ROWS while the label counts
+    the summary is built from are per SEQUENCE ({"0": 2, "1": 1}), and the
+    composite (sequence_id, timestamp) index exists on the table."""
+    table = "e2e_tsc_toy"
+    _drop(table)
+
+    rows = ["sequence_id,timestamp,heart_rate,label"]
+    for pid, T, label in (("p1", 5, "1"), ("p2", 3, "0"), ("p3", 7, "0")):
+        rows += [
+            f"{pid},2024-01-01 {8 + t:02d}:00:00,{70 + t}.0,{label}"
+            for t in range(T)
+        ]
+    csv_path = tmp_path / "toy.csv"
+    csv_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+    cfg = _cfg(
+        table=table,
+        category="time_series_classification",
+        csv=str(csv_path),
+        schema={
+            "sequence_id": "VARCHAR(64)",
+            "timestamp": "TIMESTAMP",
+            "heart_rate": "FLOAT",
+            "label": "INT",
+        },
+        label="label",
+    )
+    config_path = tmp_path / "ingest.yaml"
+    config_path.write_text(yaml.safe_dump(cfg))
+    monkeypatch.setenv("INGEST_CONFIG", str(config_path))
+
+    rc = run.main()
+    assert rc == 0, f"ingest exited {rc}"
+
+    # 15 rows stored (row unit) …
+    assert _rows(table) == 15
+
+    conn = _connect()
+    cur = conn.cursor()
+    # … but label counts are SEQUENCE-unit (Decision-3/T2): the same query
+    # get_label_sequence_counts runs for the summary payload.
+    cur.execute(
+        f"SELECT label, COUNT(DISTINCT sequence_id) FROM `{table}` GROUP BY label"
+    )
+    counts = {str(label): int(cnt) for label, cnt in cur.fetchall()}
+    assert counts == {"0": 2, "1": 1}
+    # Composite (sequence_id, timestamp) secondary index exists.
+    cur.execute(f"SHOW INDEX FROM `{table}`")
+    by_index = {}
+    for row in cur.fetchall():
+        # row: (Table, Non_unique, Key_name, Seq_in_index, Column_name, ...)
+        by_index.setdefault(row[2], []).append((row[3], row[4]))
+    composite = [
+        sorted(cols) for name, cols in by_index.items() if name.startswith("ix_")
+    ]
+    assert [(1, "sequence_id"), (2, "timestamp")] in composite, (
+        f"composite (sequence_id, timestamp) index missing; indexes: {by_index}"
+    )
+    cur.close()
+    conn.close()
