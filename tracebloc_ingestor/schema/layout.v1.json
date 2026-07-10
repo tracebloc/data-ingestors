@@ -2,6 +2,7 @@
   "tasks": {
     "causal_language_modeling": {
       "family": "text",
+      "grouping": null,
       "manifest": {
         "has_label_column": false,
         "kind": "labels_csv",
@@ -21,6 +22,7 @@
     },
     "embeddings": {
       "family": "text",
+      "grouping": null,
       "manifest": {
         "has_label_column": false,
         "kind": "labels_csv",
@@ -41,6 +43,7 @@
     },
     "image_classification": {
       "family": "image",
+      "grouping": null,
       "manifest": {
         "has_label_column": true,
         "kind": "labels_csv",
@@ -52,6 +55,7 @@
     },
     "keypoint_detection": {
       "family": "image",
+      "grouping": null,
       "manifest": {
         "has_label_column": true,
         "kind": "labels_csv",
@@ -63,6 +67,7 @@
     },
     "masked_language_modeling": {
       "family": "text",
+      "grouping": null,
       "manifest": {
         "has_label_column": false,
         "kind": "labels_csv",
@@ -74,6 +79,7 @@
     },
     "object_detection": {
       "family": "image",
+      "grouping": null,
       "manifest": {
         "has_label_column": true,
         "kind": "labels_csv",
@@ -92,6 +98,7 @@
     },
     "semantic_segmentation": {
       "family": "image",
+      "grouping": null,
       "manifest": {
         "has_label_column": true,
         "kind": "labels_csv",
@@ -110,6 +117,7 @@
     },
     "sentence_pair_classification": {
       "family": "text",
+      "grouping": null,
       "manifest": {
         "has_label_column": true,
         "kind": "labels_csv",
@@ -129,6 +137,7 @@
     },
     "seq2seq": {
       "family": "text",
+      "grouping": null,
       "manifest": {
         "has_label_column": false,
         "kind": "labels_csv",
@@ -148,6 +157,7 @@
     },
     "tabular_classification": {
       "family": "tabular",
+      "grouping": null,
       "manifest": {
         "has_label_column": true,
         "kind": "data_csv",
@@ -159,6 +169,7 @@
     },
     "tabular_regression": {
       "family": "tabular",
+      "grouping": null,
       "manifest": {
         "has_label_column": true,
         "kind": "data_csv",
@@ -170,6 +181,7 @@
     },
     "text_classification": {
       "family": "text",
+      "grouping": null,
       "manifest": {
         "has_label_column": true,
         "kind": "labels_csv",
@@ -179,8 +191,25 @@
       "record_format": null,
       "sidecars": []
     },
+    "time_series_classification": {
+      "family": "tabular",
+      "grouping": {
+        "count_unit": "sequences",
+        "group_column": "sequence_id",
+        "time_column": "timestamp"
+      },
+      "manifest": {
+        "has_label_column": true,
+        "kind": "data_csv",
+        "requires_filename_column": false
+      },
+      "primary_subdir": null,
+      "record_format": null,
+      "sidecars": []
+    },
     "time_series_forecasting": {
       "family": "tabular",
+      "grouping": null,
       "manifest": {
         "has_label_column": true,
         "kind": "data_csv",
@@ -192,6 +221,7 @@
     },
     "time_to_event_prediction": {
       "family": "tabular",
+      "grouping": null,
       "manifest": {
         "has_label_column": true,
         "kind": "data_csv",
@@ -203,6 +233,7 @@
     },
     "token_classification": {
       "family": "text",
+      "grouping": null,
       "manifest": {
         "has_label_column": true,
         "kind": "labels_csv",
@@ -213,5 +244,5 @@
       "sidecars": []
     }
   },
-  "version": "1"
+  "version": "2"
 }
