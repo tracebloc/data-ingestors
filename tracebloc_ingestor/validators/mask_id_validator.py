@@ -42,6 +42,27 @@ logger.setLevel(config.LOG_LEVEL)
 # real ingest path always runs the declaration check.
 _SCHEMA_UNSET = object()
 
+# csv_options keys the read call sites set themselves (or the ingestor's own
+# non-read_csv key ``chunk_size``), dropped from the dialect passthrough so a
+# manifest's csv_options can't collide with our explicit read kwargs.
+_READ_RESERVED_KEYS = frozenset(
+    {
+        "chunk_size",
+        "chunksize",
+        "nrows",
+        "usecols",
+        "keep_default_na",
+        "dtype",
+        "na_values",
+    }
+)
+
+# Cap on how many offending row indices the empty-value scan keeps: only a few
+# are shown in the message (redaction.row_refs slices to 5) and the rest are a
+# scalar count, so bounding the sample keeps an all-empty giant manifest from
+# accumulating millions of ints — the OOM the chunked read exists to avoid.
+_EMPTY_ROWS_SAMPLE_CAP = 20
+
 
 class MaskIdColumnValidator(BaseValidator):
     """Reject a semantic-segmentation manifest that would NOT produce a
@@ -90,18 +111,25 @@ class MaskIdColumnValidator(BaseValidator):
         self._csv_options = csv_options or {}
 
     def _read_kwargs(self) -> Dict[str, Any]:
-        """The ``sep`` / ``encoding`` pandas needs to parse the manifest exactly
-        as CSVIngestor does (csv_ingestor.py:509/515) — so preflight and the
-        write path resolve the same columns from the same bytes."""
+        """The pandas read options needed to parse the manifest exactly as
+        CSVIngestor does (csv_ingestor.py:499/533) — delimiter, encoding AND the
+        quoting dialect (quotechar / escapechar / quoting / ...), so preflight and
+        the write path resolve the same columns + values from the same bytes. A
+        sep or quotechar mismatch would split fields differently and desync them.
+        """
         # Lazy import: csv_ingestor -> base -> validators_mapping ->
         # modalities.validators -> this module, so a top-level import would cycle.
         from ..ingestors.csv_ingestor import _bom_safe_encoding
 
-        opts = self._csv_options
-        return {
-            "sep": opts.get("sep", opts.get("delimiter", ",")),
-            "encoding": _bom_safe_encoding(opts.get("encoding")),
+        # Pass through every dialect key CSVIngestor honors, minus the ones the
+        # call sites set (see _READ_RESERVED_KEYS).
+        opts = {
+            k: v for k, v in self._csv_options.items() if k not in _READ_RESERVED_KEYS
         }
+        opts["encoding"] = _bom_safe_encoding(opts.get("encoding"))
+        if "sep" not in opts and "delimiter" not in opts:
+            opts["sep"] = ","
+        return opts
 
     def validate(self, data: Any, **kwargs) -> ValidationResult:
         try:
@@ -166,12 +194,16 @@ class MaskIdColumnValidator(BaseValidator):
                     },
                 )
 
-            empty_rows = self._empty_value_rows(data, resolved)
-            if empty_rows:
+            empty_rows, empty_count = self._empty_value_rows(data, resolved)
+            if empty_count:
                 return self._create_result(
                     is_valid=False,
-                    errors=[self._empty_value_message(empty_rows)],
-                    metadata={"column": self.column, "empty_rows": empty_rows},
+                    errors=[self._empty_value_message(empty_rows, empty_count)],
+                    metadata={
+                        "column": self.column,
+                        "empty_rows": empty_rows,
+                        "empty_count": empty_count,
+                    },
                 )
 
             return self._create_result(
@@ -221,10 +253,10 @@ class MaskIdColumnValidator(BaseValidator):
             f"templates/semantic_segmentation/ for the expected manifest layout."
         )
 
-    def _empty_value_message(self, empty_rows: List[int]) -> str:
+    def _empty_value_message(self, empty_rows: List[int], empty_count: int) -> str:
         from ..utils import redaction
 
-        refs = redaction.row_refs(empty_rows, len(empty_rows))
+        refs = redaction.row_refs(empty_rows, empty_count)
         return (
             f"Required column '{self.column}' is empty/NULL at {refs} of the "
             f"semantic-segmentation manifest. The training client reads "
@@ -258,10 +290,13 @@ class MaskIdColumnValidator(BaseValidator):
             return list(header.columns)
         return None
 
-    def _empty_value_rows(self, data: Any, resolved_column: str) -> List[int]:
-        """Return the 0-based data-row indices whose ``resolved_column`` value the
-        ingestor would store as an unresolvable ``mask_id``. Empty list means
-        every row is populated.
+    def _empty_value_rows(self, data: Any, resolved_column: str):
+        """Return ``(sample_indices, total_count)`` for the rows whose
+        ``resolved_column`` value the ingestor would store as an unresolvable
+        ``mask_id``. ``total_count == 0`` means every row is populated;
+        ``sample_indices`` is a bounded (``_EMPTY_ROWS_SAMPLE_CAP``) 0-based
+        prefix — enough for the error message — so an all-empty giant manifest
+        can't accumulate millions of ints (the OOM the chunked read avoids, #137).
 
         A value is "empty" when it is a missing cell (NaN), an ``NA_SENTINELS``
         token, or stringifies to only whitespace. This mirrors the ingestor
@@ -270,53 +305,63 @@ class MaskIdColumnValidator(BaseValidator):
         under ``keep_default_na=False`` and stores every sentinel as SQL NULL —
         after which the client derives a garbage filename and raises
         ``FileNotFoundError``. Reading with pandas' DEFAULT NA set instead would
-        DIVERGE from that curated set (it misses lowercase ``"none"`` and adds
-        tokens like ``"#NA"``/``"-nan"`` the ingestor keeps verbatim), so a
-        ``mask_id`` of ``"none"`` would pass here and then be nulled at ingest —
-        the exact preflight/write mismatch this gate exists to prevent. Hence the
-        raw read (``keep_default_na=False``, ``dtype=str``) + explicit
-        ``NA_SENTINELS`` membership. The whitespace-only case is flagged too
-        because the client strips before use (``str(row["mask_id"]).strip()``).
+        DIVERGE (it misses lowercase ``"none"`` and adds ``"#NA"``/``"-nan"`` the
+        ingestor keeps), so a ``"none"`` mask_id would pass here then be nulled at
+        ingest. The whitespace-only case is flagged too because the client strips
+        (``str(row["mask_id"]).strip()``).
 
-        Reads ONLY the mask_id column, in chunks (``usecols`` + ``chunksize``) —
+        Reads ONLY the resolved column, in chunks (``usecols`` + ``chunksize``) —
         like ``ingestable_records_validator`` / ``CSVIngestor._count_records`` —
-        so a multi-GB manifest can't OOM the pod (a whole-file read did, #137).
-        Row indices are 0-based over data rows, matching ``redaction.row_refs``
-        and every other validator's reporting.
+        with the run's dialect (:meth:`_read_kwargs`). Selects the SCHEMA-exact
+        ``resolved_column`` (not a case-insensitive match) so that when two
+        headers collide under case/whitespace normalization it inspects the same
+        column the ingestor stores, not the wrong one. Indices are 0-based,
+        matching ``redaction.row_refs``.
         """
         na_tokens = set(NA_SENTINELS)
 
         def _is_empty(value: Any) -> bool:
             return pd.isna(value) or str(value) in na_tokens or str(value).strip() == ""
 
+        def _series(frame):
+            # A frame carrying duplicate columns of this name yields a DataFrame;
+            # take the first (the ingestor rejects exact-duplicate headers, so
+            # this only guards the reusable DataFrame path).
+            col = frame[resolved_column]
+            return col.iloc[:, 0] if isinstance(col, pd.DataFrame) else col
+
+        sample: List[int] = []
+        total = 0
+
+        def _accumulate(series, offset: int) -> int:
+            nonlocal total
+            for i, value in enumerate(series):
+                if _is_empty(value):
+                    if len(sample) < _EMPTY_ROWS_SAMPLE_CAP:
+                        sample.append(offset + i)
+                    total += 1
+            return offset + len(series)
+
         if isinstance(data, pd.DataFrame):
             if resolved_column not in data.columns:
-                return []
-            return [i for i, v in enumerate(data[resolved_column]) if _is_empty(v)]
+                return sample, total
+            _accumulate(_series(data), 0)
+            return sample, total
 
-        # usecols callable matches the mask_id column case/whitespace-insensitively
-        # (as _match_column resolved it), so it works regardless of the header's
-        # raw spelling; take the single selected column by position.
-        target = self.column.strip().lower()
-        offending: List[int] = []
         offset = 0
         try:
             reader = pd.read_csv(
                 data,
-                usecols=lambda c: str(c).strip().lower() == target,
+                usecols=[resolved_column],
                 keep_default_na=False,
                 dtype=str,
                 chunksize=50_000,
                 **self._read_kwargs(),
             )
             for chunk in reader:
-                if chunk.shape[1] == 0:
-                    return []
-                series = chunk.iloc[:, 0]
-                offending.extend(
-                    offset + i for i, v in enumerate(series) if _is_empty(v)
-                )
-                offset += len(series)
-        except Exception:  # noqa: BLE001 — unreadable -> defer to read path
-            return []
-        return offending
+                offset = _accumulate(_series(chunk), offset)
+        except Exception:  # noqa: BLE001 — partial/unreadable read: report the
+            # empties found so far (never DISCARD real ones); if none were found,
+            # defer — the write path re-raises a persistent error on the same file.
+            return sample, total
+        return sample, total

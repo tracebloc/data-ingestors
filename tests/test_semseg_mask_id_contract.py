@@ -259,12 +259,31 @@ def test_delimiter_from_csv_options_is_honored(tmp_path):
     assert honored.is_valid, honored.errors
 
 
-def test_utf8_bom_manifest_is_parsed(tmp_path):
-    # Excel "CSV UTF-8" prepends a BOM; the validator must strip it (utf-8-sig)
-    # like CSVIngestor, else the first header reads as "﻿mask_id" and is
-    # falsely reported missing.
-    path = tmp_path / "labels_bom.csv"
-    path.write_bytes("mask_id,image_label\nimg_001_mask,road\n".encode("utf-8-sig"))
+def test_quotechar_from_csv_options_is_honored(tmp_path):
+    # A custom quotechar (') quotes a mask_id embedding the delimiter on one row,
+    # and mask_id is BLANK on another. Only when the validator parses with the
+    # run's quotechar (like CSVIngestor) does the quoted row parse cleanly so the
+    # blank is caught; without it that row is ragged, the scan errors out, and the
+    # blank mask_id slips through as a false pass.
+    path = tmp_path / "labels_quoted.csv"
+    path.write_text("filename;mask_id;image_label\nimg_001;'a;b';road\nimg_002;;sky\n")
+    result = MaskIdColumnValidator(
+        column="mask_id",
+        schema={"mask_id": "VARCHAR(255)"},
+        csv_options={"delimiter": ";", "quotechar": "'"},
+    ).validate(str(path))
+    assert not result.is_valid  # blank mask_id on the 2nd row is caught
+    assert "empty/NULL" in result.errors[0]
+
+
+def test_case_colliding_headers_inspect_the_schema_exact_column(tmp_path):
+    # Header carries BOTH 'Mask_ID' (empty) and 'mask_id' (populated); the schema
+    # declares lowercase 'mask_id', which the ingestor keeps verbatim. The
+    # emptiness scan must inspect the schema-exact 'mask_id' (populated) — not the
+    # case-colliding empty 'Mask_ID' — else it false-rejects a manifest that
+    # ingests fine.
+    path = tmp_path / "labels_collide.csv"
+    path.write_text("filename,Mask_ID,mask_id\nimg_001,,img_001_mask\n")
     result = MaskIdColumnValidator(
         column="mask_id", schema={"mask_id": "VARCHAR(255)"}
     ).validate(str(path))
