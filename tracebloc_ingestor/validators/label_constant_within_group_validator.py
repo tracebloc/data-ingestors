@@ -161,11 +161,27 @@ class LabelConstantWithinGroupValidator(BaseValidator):
             )
 
         except Exception as e:
-            logger.error(f"Error during label constancy validation: {str(e)}")
+            # #226: never interpolate exception text into errors/logs —
+            # parser/dtype messages can embed cell contents. Type + location
+            # only; the details stay on-prem.
+            logger.error(
+                f"Error during label constancy validation: "
+                f"{type(e).__name__} (message suppressed: it can embed "
+                f"cell values, #226)"
+            )
             return self._create_result(
                 is_valid=False,
-                errors=[f"Label constancy validation error: {str(e)}"],
-                metadata={"error_type": "validation_exception"},
+                errors=[
+                    f"Label constancy validation error: unexpected "
+                    f"{type(e).__name__} while checking column "
+                    f"'{self.label_column}' grouped by "
+                    f"'{self.sequence_column}' (exception text suppressed: "
+                    f"it can embed cell values, #226)."
+                ],
+                metadata={
+                    "error_type": "validation_exception",
+                    "exception_type": type(e).__name__,
+                },
             )
 
     def _load_data(self, data: Any) -> Optional["pd.DataFrame"]:
@@ -184,5 +200,9 @@ class LabelConstantWithinGroupValidator(BaseValidator):
                 return None
 
         except Exception as e:
-            logger.error(f"Error loading data: {str(e)}")
+            # #226: parse errors can quote file content — type only.
+            logger.error(
+                f"Error loading data: {type(e).__name__} (message "
+                f"suppressed: it can embed cell values, #226)"
+            )
             return None

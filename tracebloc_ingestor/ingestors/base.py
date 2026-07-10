@@ -669,16 +669,23 @@ class BaseIngestor(ABC):
                 # rows stay in failed_records — the run still exits non-zero.
                 grouping = self._grouping
                 if grouping is not None and failed_records:
-                    partial_ids = sorted(
-                        {
-                            str(seq_id)
-                            for seq_id in (
-                                failure.get("record", {}).get(grouping.group_column)
-                                for failure in failed_records
-                            )
-                            if seq_id is not None and str(seq_id).strip()
-                        }
-                    )
+                    # Failed-row dicts carry the RAW CSV header spellings, so
+                    # the fixed trait name must be resolved against each
+                    # record's actual keys with the shared #340 rule
+                    # (case-/whitespace-insensitive, resolve_column) — a
+                    # header drifting only in case or whitespace would
+                    # otherwise read None here, leave partial_ids empty, and
+                    # keep a truncated sequence's surviving rows in MySQL.
+                    partial_id_set = set()
+                    for failure in failed_records:
+                        record = failure.get("record")
+                        if not isinstance(record, dict):
+                            continue
+                        key = resolve_column(record.keys(), grouping.group_column)
+                        seq_id = record.get(key) if key is not None else None
+                        if seq_id is not None and str(seq_id).strip():
+                            partial_id_set.add(str(seq_id))
+                    partial_ids = sorted(partial_id_set)
                     if partial_ids and stats["inserted_records"]:
                         removed = self.database.delete_sequences(
                             self.table_name,
@@ -699,10 +706,12 @@ class BaseIngestor(ABC):
 
                 # Query accurate label counts from the DB (excludes any rows
                 # that failed insertion) and collect a small preview sample.
-                # Grouped categories count SEQUENCES per label — one dataset
-                # item per sequence (backend#1054 Decision-3/T2); everything
-                # else counts rows.
-                if grouping is not None:
+                # The trait's ``count_unit`` selects the unit (review: #359 —
+                # this is its behavioral consumer): "sequences" counts one
+                # dataset item per sequence (backend#1054 Decision-3/T2); a
+                # future grouped category counting rows falls through to the
+                # standard row counts like every non-grouped category.
+                if grouping is not None and grouping.count_unit == "sequences":
                     label_counts = self.database.get_label_sequence_counts(
                         self.table_name,
                         self.ingestor_id,

@@ -8,8 +8,8 @@ perfectly-ordered patients fails the global check. This validator applies the
 same monotonic (non-decreasing) rule per ``sequence_id`` instead.
 
 The ``timestamp`` column may be either a SQL TIMESTAMP or a plain numeric
-step index (Decision-2). The TIMESTAMP branch reuses the parse +
-locale-ambiguity guard from ``TimeFormatValidator`` ("03.04.2026" is Apr 3
+step index (Decision-2). The TIMESTAMP branch calls the shared
+``parse_month_first_with_ambiguity_mask`` helper from ``time_format_validator`` ("03.04.2026" is Apr 3
 day-first but Mar 4 month-first — reject rather than silently corrupt); the
 numeric branch is a plain ``pd.to_numeric`` cast.
 """
@@ -24,6 +24,7 @@ from ..utils import redaction
 from ..utils.columns import resolve_column
 
 from .base import BaseValidator, ValidationResult
+from .time_format_validator import parse_month_first_with_ambiguity_mask
 from ..config import Config
 
 config = Config()
@@ -59,8 +60,9 @@ class PerGroupTimeOrderedValidator(BaseValidator):
             "sequence_id")
         time_column: Name of the time column (default: "timestamp")
         schema: Optional schema dictionary — its declared type for the time
-            column selects the TIMESTAMP vs numeric branch; without a schema
-            the branch is inferred from the data
+            column selects the TIMESTAMP vs numeric branch; without a
+            declared type the TIMESTAMP branch is used (the ingest schema
+            contract always declares it)
     """
 
     def __init__(
@@ -131,14 +133,13 @@ class PerGroupTimeOrderedValidator(BaseValidator):
                 values = self._parse_timestamps(df, time_col, errors, metadata)
                 metadata["time_kind"] = "timestamp"
             else:
-                # No schema: prefer the numeric reading when every non-null
-                # value casts; otherwise fall back to timestamp parsing.
-                values = pd.to_numeric(df[time_col], errors="coerce")
-                if (values.isna() & df[time_col].notna()).any():
-                    values = self._parse_timestamps(df, time_col, errors, metadata)
-                    metadata["time_kind"] = "timestamp"
-                else:
-                    metadata["time_kind"] = "numeric"
+                # The ingest schema contract REQUIRES a declared type for the
+                # time column (ingest.v1.json sequence-columns rule), so this
+                # path is unreachable through the pipeline; for direct/test
+                # callers default to the TIMESTAMP branch (review: #359 —
+                # the former data-sniffing fallback was dead code).
+                values = self._parse_timestamps(df, time_col, errors, metadata)
+                metadata["time_kind"] = "timestamp"
 
             # Null / unparseable order keys are errors: a timestep without a
             # valid position cannot be ordered within its sequence.
@@ -197,29 +198,37 @@ class PerGroupTimeOrderedValidator(BaseValidator):
             )
 
         except Exception as e:
-            logger.error(f"Per-group time ordered validation error: {e}")
+            # #226: never interpolate exception text into errors/logs —
+            # parser/dtype messages can embed cell contents. Type + location
+            # only; the details stay on-prem.
+            logger.error(
+                f"Per-group time ordered validation error: "
+                f"{type(e).__name__} (message suppressed: it can embed "
+                f"cell values, #226)"
+            )
             return self._create_result(
-                is_valid=False, errors=[f"Validation error: {str(e)}"]
+                is_valid=False,
+                errors=[
+                    f"Validation error: unexpected {type(e).__name__} while "
+                    f"checking '{self.time_column}' ordering within each "
+                    f"'{self.sequence_column}' (exception text suppressed: "
+                    f"it can embed cell values, #226)."
+                ],
+                metadata={
+                    "error_type": "validation_exception",
+                    "exception_type": type(e).__name__,
+                },
             )
 
     def _parse_timestamps(self, df, time_col, errors, metadata) -> "pd.Series":
         """Parse TIMESTAMP values with the locale-ambiguity guard.
 
-        Mirrors ``TimeFormatValidator``'s parse: month-first by default,
-        rejecting values that ALSO parse day-first to a different date
-        (silent-corruption guard), with ISO-8601 exempted.
+        Delegates to the shared helper in ``time_format_validator`` (one
+        guard, two call sites — review: #359); assembles this validator's
+        own error message from the mask.
         """
-        timestamps = pd.to_datetime(df[time_col], format="mixed", errors="coerce")
-        day_first = pd.to_datetime(
-            df[time_col], format="mixed", dayfirst=True, errors="coerce"
-        )
-        ts_str = df[time_col].astype(str)
-        iso_like = ts_str.str.match(r"^\d{4}-")
-        ambiguous_mask = (
-            timestamps.notna()
-            & day_first.notna()
-            & (timestamps != day_first)
-            & ~iso_like
+        timestamps, ambiguous_mask = parse_month_first_with_ambiguity_mask(
+            df[time_col]
         )
         if ambiguous_mask.any():
             ambiguous_count = int(ambiguous_mask.sum())
@@ -254,5 +263,9 @@ class PerGroupTimeOrderedValidator(BaseValidator):
 
             return None
         except Exception as e:
-            logger.error(f"Error loading data: {e}")
+            # #226: parse errors can quote file content — type only.
+            logger.error(
+                f"Error loading data: {type(e).__name__} (message "
+                f"suppressed: it can embed cell values, #226)"
+            )
             return None

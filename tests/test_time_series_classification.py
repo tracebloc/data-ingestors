@@ -348,6 +348,48 @@ def test_partial_sequence_is_deleted_after_row_drop(make_csv):
     assert labels == {"0": 1, "1": 1}
 
 
+def test_partial_sequence_deleted_despite_header_spelling_drift(make_csv):
+    # The customer's CSV header and schema drift from the fixed trait name
+    # in case AND whitespace ("Sequence_ID " vs "sequence_id") — legal per
+    # the #340 case-/whitespace-insensitive rule every validator applies.
+    # Failed-row dicts carry the actual header spelling (whitespace-stripped
+    # on read), so the integrity pass must resolve the group column against
+    # the record's keys via the same rule — a plain
+    # record.get("sequence_id") would read None, leave partial_ids empty,
+    # and persist the truncated sequence.
+    df = _toy_frame().rename(columns={"sequence_id": "Sequence_ID "})
+    csv_path = make_csv(df, name="toy_drift.csv")
+    drift_schema = dict(SCHEMA)
+    drift_schema["Sequence_ID"] = drift_schema.pop("sequence_id")
+    ing = _make_ingestor(csv_path, schema=drift_schema)
+
+    # One p3 row fails DB insertion mid-sequence; the other 14 insert fine.
+    def _insert(table, batch):
+        ok, failed = [], []
+        for i, record in enumerate(batch):
+            if (
+                record.get("Sequence_ID") == "p3"
+                and record.get("heart_rate") == "72.0"
+            ):
+                failed.append({"record": record, "error": "dup key"})
+            else:
+                ok.append(i)
+        return ok, failed
+
+    ing.database.insert_batch.side_effect = _insert
+    ing.database.delete_sequences.return_value = 6  # p3's surviving rows
+    ing.database.get_label_sequence_counts.return_value = {"0": 1, "1": 1}
+
+    failed = _run_full_ingest(ing, csv_path)
+
+    # The dropped row is still reported …
+    assert [f["error"] for f in failed] == ["dup key"]
+    # … and the WHOLE sequence was removed — not partially persisted.
+    ing.database.delete_sequences.assert_called_once_with(
+        "tsc_toy", ing.ingestor_id, ["p3"], group_column="sequence_id"
+    )
+
+
 def test_clean_run_skips_integrity_delete(make_csv):
     csv_path = make_csv(_toy_frame(), name="toy.csv")
     ing = _make_ingestor(csv_path)

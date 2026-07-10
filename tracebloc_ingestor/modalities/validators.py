@@ -375,19 +375,32 @@ def time_series_classification(options: Dict[str, Any]) -> List[BaseValidator]:
     # map_validators composes LabelDiversityValidator around this factory
     # (is_classification=True) plus the universal frame.
     schema = options.get("schema", {})
+    # The group/time column names come from the ModalitySpec's ``grouping``
+    # trait, threaded into options by ``map_validators`` — the single source
+    # of truth ``ingestors/base.py`` reads too (review: #359). The fallbacks
+    # only serve direct/test construction without the registry.
+    grouping = options.get("grouping")
+    group_column = grouping.group_column if grouping else "sequence_id"
+    time_column = grouping.time_column if grouping else "timestamp"
     validators: List[BaseValidator] = [
         SequenceGroupValidator(
+            sequence_column=group_column,
             schema=schema,
             # T6: the run's data_id source column when strategy=column
             # (threaded through options by BaseIngestor.validate_data).
             unique_id_column=options.get("unique_id_column"),
         ),
         LabelConstantWithinGroupValidator(
+            sequence_column=group_column,
             label_column=options.get("label_column") or "label",
         ),
-        PerGroupTimeOrderedValidator(schema=schema),
+        PerGroupTimeOrderedValidator(
+            sequence_column=group_column,
+            time_column=time_column,
+            schema=schema,
+        ),
         NumericColumnsValidator(
-            schema=schema, excluded_columns={"sequence_id", "timestamp"}
+            schema=schema, excluded_columns={group_column, time_column}
         ),
     ]
     if options.get("schema"):
@@ -396,7 +409,9 @@ def time_series_classification(options: Dict[str, Any]) -> List[BaseValidator]:
         # validator above). sequence_id stays — VARCHAR is a type
         # DataValidator handles.
         schema_without_timestamp = {
-            k: v for k, v in options["schema"].items() if k.lower() != "timestamp"
+            k: v
+            for k, v in options["schema"].items()
+            if k.lower() != time_column.lower()
         }
         if schema_without_timestamp:
             validators.append(DataValidator(schema=schema_without_timestamp))

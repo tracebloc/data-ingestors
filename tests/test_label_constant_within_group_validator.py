@@ -141,3 +141,7 @@ def test_internal_exception_becomes_error(monkeypatch):
     result = v.validate(_toy_df())
     assert not result.is_valid
     assert "Label constancy validation error" in result.errors[0]
+    # #226: the raw exception text (which can embed cell contents) must
+    # never reach the customer-facing error — type name only.
+    assert "boom" not in result.errors[0]
+    assert "RuntimeError" in result.errors[0]

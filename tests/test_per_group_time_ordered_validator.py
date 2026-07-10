@@ -170,16 +170,24 @@ def test_numeric_non_numeric_value_fails():
 # ---------------------------------------------------------------------------
 
 
-def test_no_schema_infers_numeric():
-    result = PerGroupTimeOrderedValidator().validate(_step_df())
-    assert result.is_valid
-    assert result.metadata["time_kind"] == "numeric"
-
-
-def test_no_schema_falls_back_to_timestamp_parsing():
+def test_no_schema_defaults_to_timestamp_branch():
+    # The ingest schema contract requires a declared type for the time
+    # column, so the validator no longer sniffs the data when constructed
+    # without a schema (review: #359) — it defaults to the TIMESTAMP branch.
     result = PerGroupTimeOrderedValidator().validate(_ts_df())
     assert result.is_valid
     assert result.metadata["time_kind"] == "timestamp"
+
+
+def test_numeric_branch_requires_declared_schema_type():
+    # A numeric step index is selected by the schema declaration, never by
+    # data sniffing (the former no-schema inference branch was unreachable
+    # through the pipeline and was removed — review: #359).
+    result = PerGroupTimeOrderedValidator(
+        schema={"sequence_id": "VARCHAR(64)", "timestamp": "INT"}
+    ).validate(_step_df())
+    assert result.is_valid
+    assert result.metadata["time_kind"] == "numeric"
 
 
 # ---------------------------------------------------------------------------
@@ -228,3 +236,7 @@ def test_internal_exception_becomes_error(monkeypatch):
     result = v.validate(_ts_df())
     assert not result.is_valid
     assert "Validation error" in result.errors[0]
+    # #226: the raw exception text (which can embed cell contents) must
+    # never reach the customer-facing error — type name only.
+    assert "boom" not in result.errors[0]
+    assert "RuntimeError" in result.errors[0]

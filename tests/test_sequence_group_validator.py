@@ -32,17 +32,20 @@ def test_valid_sequences_pass_with_metadata():
     result = SequenceGroupValidator().validate(_toy_df())
     assert result.is_valid
     assert result.metadata["rows_checked"] == 15
-    assert result.metadata["number_of_sequences"] == 3
-    assert result.metadata["min_sequence_length"] == 3
-    assert result.metadata["max_sequence_length"] == 7
-    assert result.metadata["median_sequence_length"] == 5.0
+    # Per-sequence stats were removed as unused duplication (review: #359):
+    # the shipping number_of_sequences comes from ingestors/base.py's
+    # post-insert DB counts, not validator metadata.
+    assert "number_of_sequences" not in result.metadata
+    assert "min_sequence_length" not in result.metadata
+    assert "max_sequence_length" not in result.metadata
+    assert "median_sequence_length" not in result.metadata
 
 
 def test_valid_csv_path_accepted(make_csv):
     path = make_csv(_toy_df())
     result = SequenceGroupValidator().validate(str(path))
     assert result.is_valid
-    assert result.metadata["number_of_sequences"] == 3
+    assert "number_of_sequences" not in result.metadata
 
 
 def test_column_resolved_case_insensitively():
@@ -179,3 +182,7 @@ def test_internal_exception_becomes_error(monkeypatch):
     result = v.validate(_toy_df())
     assert not result.is_valid
     assert "Sequence group validation error" in result.errors[0]
+    # #226: the raw exception text (which can embed cell contents) must
+    # never reach the customer-facing error — type name only.
+    assert "boom" not in result.errors[0]
+    assert "RuntimeError" in result.errors[0]
