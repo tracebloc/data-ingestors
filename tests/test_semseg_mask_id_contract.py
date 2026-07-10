@@ -151,6 +151,18 @@ def test_missing_column_message_caps_header_list(make_csv):
     assert len(result.metadata["columns"]) == 50  # full detail retained
 
 
+def test_undeclared_message_caps_schema_key_list(make_csv):
+    # Symmetric to the header cap: a wide schema that OMITS mask_id names only a
+    # capped sample of declared keys in the message; the full list stays in
+    # metadata (bugbot: unbounded undeclared-schema error string).
+    path = make_csv(pd.DataFrame({"filename": ["x"], "mask_id": ["m"]}))
+    schema = {f"c{i}": "VARCHAR(255)" for i in range(50)}  # 50 keys, no mask_id
+    result = MaskIdColumnValidator(column="mask_id", schema=schema).validate(str(path))
+    assert not result.is_valid
+    assert "more)" in result.errors[0]  # truncation marker
+    assert len(result.metadata["schema_columns"]) == 50  # full detail retained
+
+
 def test_non_csv_input_defers(make_csv):
     # JSON / non-path inputs are handled by their own read path — defer (pass),
     # exactly like LabelColumnValidator.

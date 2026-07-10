@@ -72,10 +72,22 @@ _READ_DIALECT_KEYS = frozenset(
 # accumulating millions of ints — the OOM the chunked read exists to avoid.
 _EMPTY_ROWS_SAMPLE_CAP = 20
 
-# Cap on how many CSV headers a "column not found" message lists, so a very wide
-# manifest can't produce an unbounded error string; the full list stays in
-# metadata["columns"] (mirrors how the other validators cap offender lists).
+# Cap on how many column names a message lists (headers OR schema keys), so a
+# very wide manifest/schema can't produce an unbounded error string; the full
+# list stays in metadata (mirrors how the other validators cap offender lists).
 _HEADER_SAMPLE_CAP = 20
+
+
+def _capped_join(names: Any) -> str:
+    """Comma-join ``names`` for an error message, capped at
+    :data:`_HEADER_SAMPLE_CAP` with a ``(+N more)`` suffix so a very wide
+    schema/header can't build an unbounded string. Callers keep the full list in
+    metadata. Returns ``"(none)"`` for an empty iterable."""
+    names = list(names)
+    shown = ", ".join(map(str, names[:_HEADER_SAMPLE_CAP]))
+    if len(names) > _HEADER_SAMPLE_CAP:
+        shown += f" (+{len(names) - _HEADER_SAMPLE_CAP} more)"
+    return shown or "(none)"
 
 
 class MaskIdColumnValidator(BaseValidator):
@@ -272,7 +284,7 @@ class MaskIdColumnValidator(BaseValidator):
                 f"preflight. Rename the schema key to '{self.column}'. See "
                 f"templates/semantic_segmentation/."
             )
-        declared = ", ".join(map(str, self._schema.keys())) or "(none)"
+        declared = _capped_join(self._schema.keys())
         return (
             f"Semantic segmentation requires '{self.column}' to be a DECLARED "
             f"schema column (e.g. schema={{'{self.column}': 'VARCHAR(255)'}}), but "
@@ -296,15 +308,10 @@ class MaskIdColumnValidator(BaseValidator):
                 f"header stores a column it can't read. Rename the CSV header to "
                 f"'{self.column}'. See templates/semantic_segmentation/."
             )
-        shown = ", ".join(map(str, columns[:_HEADER_SAMPLE_CAP]))
-        more = (
-            f" (+{len(columns) - _HEADER_SAMPLE_CAP} more)"
-            if len(columns) > _HEADER_SAMPLE_CAP
-            else ""
-        )
         return (
             f"Required column '{self.column}' not found in semantic-segmentation "
-            f"manifest CSV header (columns: {shown}{more}). The training client "
+            f"manifest CSV header (columns: {_capped_join(columns)}). The training "
+            f"client "
             f"reads '{self.column}' to locate each mask file (backend#816) — "
             f"without it, every mask lookup raises FileNotFoundError at train "
             f"time. Add a '{self.column}' column mapping each row to its mask "
