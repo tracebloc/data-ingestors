@@ -163,6 +163,30 @@ def test_undeclared_message_caps_schema_key_list(make_csv):
     assert len(result.metadata["schema_columns"]) == 50  # full detail retained
 
 
+def test_semseg_factory_checks_stored_schema_not_full_schema(make_csv):
+    # If mask_id is (mis)configured as the label/unique_id/annotation column,
+    # BaseIngestor strips it from the STORED table schema and RecordProcessor
+    # drops it — so the semseg factory must wire the validator with the stripped
+    # options["schema"], not full_schema, or preflight green-lights a manifest
+    # whose stored table has no mask_id column (backend#816).
+    from tracebloc_ingestor.modalities import validators as modality_validators
+
+    path = make_csv(pd.DataFrame({"filename": ["a"], "mask_id": ["a_mask"]}))
+    options = {
+        "extension": ".jpg",
+        "target_size": [128, 128],
+        "full_schema": {"mask_id": "VARCHAR(255)"},  # mask_id IS in the full schema
+        "schema": {"other": "INT"},  # ...but stripped out of the stored schema
+    }
+    mask_validator = next(
+        v
+        for v in modality_validators.semantic_segmentation(options)
+        if isinstance(v, MaskIdColumnValidator)
+    )
+    result = mask_validator.validate(str(path))
+    assert not result.is_valid  # stored schema lacks mask_id -> rejected
+
+
 def test_non_csv_input_defers(make_csv):
     # JSON / non-path inputs are handled by their own read path — defer (pass),
     # exactly like LabelColumnValidator.

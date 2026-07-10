@@ -143,12 +143,16 @@ def semantic_segmentation(options: Dict[str, Any]) -> List[BaseValidator]:
         # each mask file with no naming-convention fallback. Required + enforced
         # here rather than silently auto-added to the schema, so the per-category
         # "which link column" knowledge stays on the modality spec/registry.
-        # full_schema is the unstripped user schema (mask_id is never a
-        # label/annotation/id column, so it survives stripping); fall back to the
-        # stripped schema for direct callers, mirroring label_diversity_validator.
+        # Use the STRIPPED schema (options["schema"] = file_options["schema"]) —
+        # the columns that ACTUALLY become the stored table — NOT full_schema. If
+        # mask_id is (mis)configured as the label / unique_id / annotation column,
+        # BaseIngestor strips it from the table schema and RecordProcessor drops
+        # it, so it must not count as "declared": full_schema would pass preflight
+        # while CREATE TABLE + inserts carry no mask_id column — the exact #816
+        # shape. Direct callers / tests pass the schema explicitly.
         MaskIdColumnValidator(
             column="mask_id",
-            schema=options.get("full_schema") or options.get("schema"),
+            schema=options.get("schema"),
             # Parse the manifest with the run's delimiter/encoding so a non-comma
             # or BOM manifest that ingests fine isn't falsely rejected at preflight.
             csv_options=options.get("csv_options"),
