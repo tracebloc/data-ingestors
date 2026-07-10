@@ -165,18 +165,11 @@ def test_process_record_reads_label_by_configured_key():
     a mismatched key it reads None — this is why the ingestor must resolve the
     label column to the real header before processing (see the
     _resolve_label_column + end-to-end tests below)."""
-    ing = make_ingestor(
-        label_column="label", schema={"a": "INT", "label": "VARCHAR(10)"}, category=None
-    )
+    ing = make_ingestor(label_column="label", schema={"a": "INT", "label": "VARCHAR(10)"}, category=None)
     # exact key -> label present
-    assert (
-        ing.process_record({"a": "1", "label": "cat", "filename": "f"})["label"]
-        == "cat"
-    )
+    assert ing.process_record({"a": "1", "label": "cat", "filename": "f"})["label"] == "cat"
     # mismatched-case key with the SAME configured name -> None (the bug)
-    assert (
-        ing.process_record({"a": "1", "Label": "cat", "filename": "f"})["label"] is None
-    )
+    assert ing.process_record({"a": "1", "Label": "cat", "filename": "f"})["label"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -187,16 +180,14 @@ def test_process_record_reads_label_by_configured_key():
 @pytest.mark.parametrize(
     "columns,expected",
     [
-        (["a", "Label"], "Label"),  # case mismatch -> real header
+        (["a", "Label"], "Label"),      # case mismatch -> real header
         (["a", " label "], " label "),  # whitespace mismatch -> raw header
-        (["a", "label"], "label"),  # exact -> unchanged
-        (["a", "b"], "label"),  # absent -> configured name untouched
+        (["a", "label"], "label"),       # exact -> unchanged
+        (["a", "b"], "label"),           # absent -> configured name untouched
     ],
 )
 def test_resolve_label_column(columns, expected):
-    ing = make_ingestor(
-        label_column="label", schema={"a": "INT", "label": "VARCHAR(10)"}
-    )
+    ing = make_ingestor(label_column="label", schema={"a": "INT", "label": "VARCHAR(10)"})
     ing._resolve_label_column(columns)
     assert ing.label_column == expected
 
@@ -229,10 +220,9 @@ def test_ingest_label_case_mismatch_survives_to_db():
         ing.ingest("src", batch_size=10)
     ing.database.insert_batch.assert_called()
     _table, batch = ing.database.insert_batch.call_args.args
-    assert [r.get("label") for r in batch] == [
-        "cat",
-        "dog",
-    ], f"labels nulled by case mismatch: {[r.get('label') for r in batch]}"
+    assert [r.get("label") for r in batch] == ["cat", "dog"], (
+        f"labels nulled by case mismatch: {[r.get('label') for r in batch]}"
+    )
 
 
 def test_ingest_label_resolves_on_later_record_for_sparse_json():
@@ -241,8 +231,8 @@ def test_ingest_label_resolves_on_later_record_for_sparse_json():
     or a mis-cased label on every subsequent row would still null. The first
     (label-less) record legitimately gets None; the second resolves 'Label'."""
     records = [
-        {"a": "1", "filename": "f1"},  # no label key at all
-        {"a": "2", "Label": "dog", "filename": "f2"},  # mis-cased label
+        {"a": "1", "filename": "f1"},                   # no label key at all
+        {"a": "2", "Label": "dog", "filename": "f2"},   # mis-cased label
     ]
     ing = make_ingestor(
         records=records,
@@ -256,10 +246,9 @@ def test_ingest_label_resolves_on_later_record_for_sparse_json():
         Sess.return_value.__enter__.return_value = MagicMock()
         ing.ingest("src", batch_size=10)
     _table, batch = ing.database.insert_batch.call_args.args
-    assert [r.get("label") for r in batch] == [
-        None,
-        "dog",
-    ], f"expected [None, 'dog']; got {[r.get('label') for r in batch]}"
+    assert [r.get("label") for r in batch] == [None, "dog"], (
+        f"expected [None, 'dog']; got {[r.get('label') for r in batch]}"
+    )
 
 
 def test_process_record_strips_whitespace_from_string_label():
@@ -385,34 +374,28 @@ def test_process_record_treats_empty_string_as_null():
     assert rec["b"] is None
 
 
-def test_process_record_auto_adds_mask_id_for_semseg_when_undeclared():
-    """backend#816: even when a semseg dataset's schema doesn't declare
-    ``mask_id``, the ingestor auto-adds it (the masks sidecar's required
-    link_column) so it becomes a stored column the training client reads to
-    locate masks. So process_record now KEEPS mask_id on the cleaned record.
-
-    This supersedes the earlier "drop mask_id when undeclared" behavior (di#280):
-    that produced a mask_id-less table and crashed semseg training (the client
-    does ``str(row["mask_id"])`` with no fallback). The DECLARED case is
-    test_process_record_stores_mask_id_when_declared_in_schema; the general
-    "a non-link column absent from the schema is dropped" rule still holds for
-    non-semseg categories (see tests/test_semseg_mask_id_contract.py).
+def test_process_record_does_not_carry_mask_id_when_not_in_schema():
+    """When ``mask_id`` is NOT a declared schema column it is not a DB column,
+    so process_record keeps it off the cleaned record (the schema filter drops
+    it; the old semseg re-add is gone). ``map_file_transfer`` then lends it from
+    the RAW source record for the copy (see
+    test_map_file_transfer_lends_then_strips_mask_id). The complementary case —
+    ``mask_id`` DECLARED in the schema (the semseg template) → kept + stored —
+    is test_process_record_stores_mask_id_when_declared_in_schema.
     """
     from tracebloc_ingestor.utils.constants import TaskCategory
 
     ing = make_ingestor(
         schema={}, category=TaskCategory.SEMANTIC_SEGMENTATION, label_column=None
     )
-    # __init__ auto-adds the masks sidecar's link_column to the schema.
-    assert ing.schema.get("mask_id") == "VARCHAR(255)"
     rec = ing.process_record(
         {"filename": "image_001", "mask_id": "image_001_mask", "image_label": "road"}
     )
     assert rec is not None
     assert rec["filename"] == "image_001"
     assert (
-        rec.get("mask_id") == "image_001_mask"
-    ), f"semseg mask_id must be stored (auto-added), not dropped; got {rec}"
+        "mask_id" not in rec
+    ), f"mask_id (not in schema) must not be a column; got {rec}"
 
 
 def test_process_record_stores_mask_id_when_declared_in_schema():
@@ -464,7 +447,9 @@ def test_process_record_omits_mask_id_for_non_semseg_categories():
 def test_process_batch_success():
     ing = make_ingestor()
     session = MagicMock()
-    ids, db_failures = ing._batch_writer._process([{"data_id": "a"}], session)
+    ids, db_failures = ing._batch_writer._process(
+        [{"data_id": "a"}], session
+    )
     assert ids == [1, 2]
     assert db_failures == []
 
@@ -473,7 +458,9 @@ def test_process_batch_no_ids_skips_api():
     ing = make_ingestor()
     ing.database.insert_batch.return_value = ([], [{"err": "x"}])
     session = MagicMock()
-    ids, db_failures = ing._batch_writer._process([{"data_id": "a"}], session)
+    ids, db_failures = ing._batch_writer._process(
+        [{"data_id": "a"}], session
+    )
     assert ids == []
     assert db_failures == [{"err": "x"}]
 

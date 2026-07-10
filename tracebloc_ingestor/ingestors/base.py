@@ -35,9 +35,7 @@ from .table_lock import TableLock
 from ..modalities.registry import (
     FILE_BEARING_CATEGORIES as _FILE_BEARING_CATEGORIES,
     NLP_CATEGORIES as _NLP_CATEGORIES,
-    REGISTRY as _REGISTRY,
     TABULAR_FAMILY_CATEGORIES as _TABULAR_FAMILY_CATEGORIES,
-    spec_for,
 )
 
 # Logger for this module. Level is set by `setup_logging()` on the root
@@ -198,31 +196,6 @@ class BaseIngestor(ABC):
         self.file_options = file_options or {}
         self.label_policy = label_policy
 
-        # backend#816: a sidecar's link_column (semantic_segmentation's
-        # masks/, linked by ``mask_id``) is resolved by the training client
-        # from a MySQL column of that name — so it MUST be stored, even when
-        # the dataset schema doesn't declare it. A schema-less semseg run
-        # otherwise produces a table with no ``mask_id`` column, and the
-        # client crashes (FileNotFoundError, not a silent skip). The ingestor
-        # owns this contract: for the category's modality, ensure every
-        # sidecar link_column is a stored column. create_table and
-        # RecordProcessor both read ``self.schema`` — so adding the key makes
-        # the column exist AND keeps its per-row value (the manifest CSV
-        # supplies it; it's required for the masks to link at all). Copy-on-
-        # write so the caller's schema dict is never mutated; a column the
-        # user already declared is left exactly as given.
-        if self.schema is not None and self.category in _REGISTRY:
-            missing_links = [
-                sc.link_column
-                for sc in spec_for(self.category).sidecars
-                if sc.link_column and sc.link_column not in self.schema
-            ]
-            if missing_links:
-                self.schema = {
-                    **self.schema,
-                    **{lc: "VARCHAR(255)" for lc in missing_links},
-                }
-
         # Default behavior is UUID-generated data_id (no source column leaves
         # the cluster). Opting into source-column mapping is allowed but loud:
         # warn at startup naming the column whose values will be sent to the
@@ -237,12 +210,8 @@ class BaseIngestor(ABC):
             )
 
         # Remove label_column, annotation_column, and unique_id_column from schema
-        # These are handled separately and should not be ingested as regular columns.
-        # Source from self.schema (POST auto-add) — not the local ``schema`` param —
-        # so a sidecar link_column added above (backend#816) becomes a real table
-        # column, not just a value on the processed record. Otherwise create_table
-        # omits it and the row insert fails with "Unconsumed column names: mask_id".
-        table_schema = self.schema.copy()
+        # These are handled separately and should not be ingested as regular columns
+        table_schema = schema.copy()
         if self.label_column and self.label_column in table_schema:
             del table_schema[self.label_column]
         if self.annotation_column and self.annotation_column in table_schema:
@@ -254,7 +223,7 @@ class BaseIngestor(ABC):
         # Always overwrite so a schema passed in by the template (which may still
         # contain the label/annotation/unique_id columns) is sanitized before
         # being sent to the backend as part of meta_data.
-        if self.schema:
+        if schema:
             self.file_options["schema"] = table_schema
             # number_of_columns is only meaningful for tabular-family
             # categories — that's where the validator + backend metadata
@@ -515,7 +484,9 @@ class BaseIngestor(ABC):
             and not self.unique_id_column
             and self._table_salt is None
         ):
-            self._table_salt = self.database.get_or_create_table_salt(self.table_name)
+            self._table_salt = self.database.get_or_create_table_salt(
+                self.table_name
+            )
 
         if self.table is None:
             self.table = self.database.create_table(self.table_name, self._table_schema)

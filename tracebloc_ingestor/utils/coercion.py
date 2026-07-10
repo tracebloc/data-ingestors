@@ -51,7 +51,10 @@ INT64_MAX = 9223372036854775807
 # set, which has shifted across versions) so the validator and the ingestor
 # apply byte-identical rules. Applied only to schema columns by
 # ``build_csv_na_values`` — never to the framework's own ``filename`` /
-# ``mask_id`` columns — so a file legitimately named ``NA.jpg`` survives.
+# unique-id columns — so a file legitimately named ``NA.jpg`` survives. (A
+# category that DECLARES a link column in its schema — e.g. semseg's required
+# ``mask_id``, backend#816 — makes it a schema column, so it DOES get this
+# coercion; the mask_id preflight validator applies the same set to match.)
 NA_SENTINELS: List[str] = [
     "",
     "NA",
@@ -115,10 +118,13 @@ def build_csv_na_values(schema: Dict[str, str]) -> Dict[str, List[str]]:
 
     Use with ``keep_default_na=False`` so pandas' global default NA set never
     reaches a non-schema column. Columns absent from the schema — the
-    framework's own ``filename`` / ``mask_id`` / unique-id columns — are
-    intentionally omitted: they get no NA coercion at read time, so a file
-    named ``"NA.jpg"`` keeps its name (an empty cell there is normalised to
-    ``None`` later by ``BaseIngestor.process_record``).
+    framework's own ``filename`` / unique-id columns, plus any sidecar link
+    column a category does NOT declare — are intentionally omitted: they get no
+    NA coercion at read time, so a file named ``"NA.jpg"`` keeps its name (an
+    empty cell there is normalised to ``None`` later by
+    ``BaseIngestor.process_record``). A DECLARED sidecar link column such as
+    semseg's required ``mask_id`` (backend#816) IS a schema column and so does
+    get the coercion above.
     """
     return {col: list(NA_SENTINELS) for col in schema}
 

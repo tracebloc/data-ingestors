@@ -33,6 +33,7 @@ from ..validators.keypoint_annotation_validator import KeypointAnnotationValidat
 from ..validators.keypoint_visibility_validator import KeypointVisibilityValidator
 from ..validators.label_column_validator import LabelColumnValidator
 from ..validators.label_diversity_validator import LabelDiversityValidator
+from ..validators.mask_id_validator import MaskIdColumnValidator
 from ..validators.numeric_columns_validator import NumericColumnsValidator
 from ..validators.sentence_pair_validator import SentencePairValidator
 from ..validators.text_content_validator import TextContentValidator
@@ -127,6 +128,20 @@ def semantic_segmentation(options: Dict[str, Any]) -> List[BaseValidator]:
             # so image_001.jpg pairs with image_001_mask.png. object_detection's
             # pairing is plain stem (no suffix) — the default.
             sidecar_suffix="_mask",
+        ),
+        # Enforce the semseg mask_id contract at preflight (backend#816): the
+        # manifest MUST declare mask_id in the schema (so it becomes a stored DB
+        # column — an undeclared one is dropped, the original bug) AND populate it
+        # on every row, because the training client reads that column to locate
+        # each mask file with no naming-convention fallback. Required + enforced
+        # here rather than silently auto-added to the schema, so the per-category
+        # "which link column" knowledge stays on the modality spec/registry.
+        # full_schema is the unstripped user schema (mask_id is never a
+        # label/annotation/id column, so it survives stripping); fall back to the
+        # stripped schema for direct callers, mirroring label_diversity_validator.
+        MaskIdColumnValidator(
+            column="mask_id",
+            schema=options.get("full_schema") or options.get("schema"),
         ),
         ImageResolutionValidator(
             expected_resolution=options["target_size"],
