@@ -98,3 +98,67 @@ def test_no_data_for_non_csv():
     result = NumericColumnsValidator(schema=SCHEMA).validate("/missing.csv")
     assert not result.is_valid
     assert "No data found" in result.errors[0]
+
+
+# ---------------------------------------------------------------------------
+# excluded_columns parameter (backend#1054 WS1): time_series_classification
+# excludes {sequence_id, timestamp} — its group key is legitimately VARCHAR.
+# ---------------------------------------------------------------------------
+
+TSC_SCHEMA = {
+    "sequence_id": "VARCHAR(64)",
+    "timestamp": "TIMESTAMP",
+    "value": "FLOAT",
+}
+
+
+def test_default_excluded_is_timestamp_only(make_csv):
+    # Without the parameter, a VARCHAR sequence_id column is (correctly for
+    # forecasting) flagged non-numeric — the pre-#1054 behavior is unchanged.
+    path = make_csv({
+        "sequence_id": ["p1", "p2"],
+        "timestamp": ["2024-01-01", "2024-01-02"],
+        "value": [1.0, 2.0],
+    })
+    result = NumericColumnsValidator(schema=TSC_SCHEMA).validate(str(path))
+    assert not result.is_valid
+    assert "sequence_id" in result.errors[0]
+
+
+def test_excluded_columns_skips_sequence_id(make_csv):
+    path = make_csv({
+        "sequence_id": ["p1", "p2"],
+        "timestamp": ["2024-01-01", "2024-01-02"],
+        "value": [1.0, 2.0],
+    })
+    result = NumericColumnsValidator(
+        schema=TSC_SCHEMA, excluded_columns={"sequence_id", "timestamp"}
+    ).validate(str(path))
+    assert result.is_valid
+    assert result.metadata["columns_to_validate"] == 1
+
+
+def test_excluded_columns_match_case_insensitively(make_csv):
+    path = make_csv({
+        "Sequence_ID": ["p1", "p2"],
+        "value": [1.0, 2.0],
+    })
+    result = NumericColumnsValidator(
+        schema={"Sequence_ID": "VARCHAR(64)", "value": "FLOAT"},
+        excluded_columns={"sequence_id"},
+    ).validate(str(path))
+    assert result.is_valid
+
+
+def test_excluded_columns_still_flags_other_non_numeric(make_csv):
+    # The exclusion is narrow: a genuinely non-numeric FEATURE still fails.
+    path = make_csv({
+        "sequence_id": ["p1", "p2"],
+        "timestamp": ["2024-01-01", "2024-01-02"],
+        "value": ["high", "low"],
+    })
+    result = NumericColumnsValidator(
+        schema=TSC_SCHEMA, excluded_columns={"sequence_id", "timestamp"}
+    ).validate(str(path))
+    assert not result.is_valid
+    assert "value" in result.errors[0]

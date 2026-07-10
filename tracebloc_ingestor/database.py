@@ -16,6 +16,8 @@ from sqlalchemy import (
     Boolean,
     Double,
     Numeric,
+    Index,
+    bindparam,
     inspect,
 
 )
@@ -211,13 +213,25 @@ class Database:
             f"{sorted(type_mapping.keys())}"
         )
 
-    def create_table(self, table_name: str, schema: Dict[str, str]):
+    def create_table(
+        self,
+        table_name: str,
+        schema: Dict[str, str],
+        index_columns: Optional[List[str]] = None,
+    ):
         """
         Creates a table if it doesn't exist, or returns existing table
 
         Args:
             table_name: Name of the table
             schema: Dictionary defining the table schema
+            index_columns: Optional list of schema columns to compose into a
+                secondary (non-unique) index. Used by the sequence-grouped
+                categories to create the composite ``(sequence_id,
+                timestamp)`` index (backend#1054 WS1) so the engine's grouped
+                "fetch all rows of the sampled sequences, ordered" reads
+                don't full-scan. Ignored when the table already exists
+                (reflected as-is). Columns must be part of ``schema``.
 
         Returns:
             SQLAlchemy Table object
@@ -225,7 +239,9 @@ class Database:
         Raises:
             ValueError: if a schema column collides with a reserved/internal
                 column (e.g. a user CSV with its own ``id``), which would
-                otherwise surface as a cryptic SQLAlchemy DuplicateColumnError.
+                otherwise surface as a cryptic SQLAlchemy DuplicateColumnError;
+                or if ``index_columns`` references a column absent from
+                ``schema``.
         """
         if table_name == self.SALT_TABLE:
             raise ValueError(
@@ -367,8 +383,27 @@ class Database:
             for column_name, mysql_type in schema.items()
         ]
 
+        # Optional composite secondary index over schema columns (#1054 WS1:
+        # (sequence_id, timestamp) for the grouped time-series reads). Fail
+        # fast on a column that isn't in the schema — MySQL would raise a raw
+        # 1072 at CREATE TABLE otherwise.
+        table_args = []
+        if index_columns:
+            missing = sorted(set(index_columns) - set(schema))
+            if missing:
+                raise ValueError(
+                    f"index_columns {missing} are not in the table schema; a "
+                    f"secondary index can only cover schema columns."
+                )
+            # MySQL caps identifier length at 64; index names are per-table,
+            # so truncation cannot collide across tables.
+            index_name = f"ix_{table_name}_{'_'.join(index_columns)}"[:64]
+            table_args.append(Index(index_name, *index_columns))
+
         # Combine standard and custom columns
-        table = Table(table_name, self.metadata, *(standard_columns + custom_columns))
+        table = Table(
+            table_name, self.metadata, *(standard_columns + custom_columns + table_args)
+        )
         self.tables[table_name] = table
 
         # Create table if it doesn't exist
@@ -627,6 +662,104 @@ class Database:
             key = label if label is not None else ""
             counts[key] = counts.get(key, 0) + cnt
         return counts
+
+    def get_label_sequence_counts(
+        self, table_name: str, ingestor_id: str, group_column: str = "sequence_id"
+    ) -> Dict[str, int]:
+        """
+        Return ``{label: sequence_count}`` for every label inserted by
+        *ingestor_id*, counting DISTINCT sequences rather than rows
+        (backend#1054 WS1, Decision-3/T2).
+
+        The sequence-grouped categories' sample unit is one SEQUENCE (many
+        timestep rows sharing a ``sequence_id``), so the summary payload —
+        which feeds ``data_per_class``, the sub-dataset arithmetic and the
+        leaderboard normalizers downstream — must count sequences. Using the
+        row-unit :meth:`get_label_counts` here would inflate every count by
+        ~mean(T)×. The label is constant within a sequence (validated
+        pre-ingest), so grouping by label cannot split a sequence across two
+        labels.
+
+        Args:
+            table_name: Name of the table to query
+            ingestor_id: UUID of the current ingest run
+            group_column: The sequence group column (default ``sequence_id``,
+                from the category's ``ModalitySpec.grouping`` trait)
+
+        Returns:
+            Dict mapping label string to number of distinct sequences
+        """
+        safe_group = group_column.replace("`", "``")
+        with self.engine.connect() as conn:
+            rows = conn.execute(
+                text(
+                    f"SELECT label, COUNT(DISTINCT `{safe_group}`) AS cnt "
+                    f"FROM `{table_name.replace('`', '``')}` "
+                    f"WHERE ingestor_id = :ingestor_id "
+                    f"GROUP BY label"
+                ),
+                {"ingestor_id": ingestor_id},
+            ).fetchall()
+        counts: Dict[str, int] = {}
+        for label, cnt in rows:
+            key = label if label is not None else ""
+            counts[key] = counts.get(key, 0) + cnt
+        return counts
+
+    def delete_sequences(
+        self,
+        table_name: str,
+        ingestor_id: str,
+        sequence_ids: List[str],
+        group_column: str = "sequence_id",
+    ) -> int:
+        """
+        Group-integrity compensating delete (backend#1054 WS1, T5): remove
+        every row of the given sequences inserted by this ingest run.
+
+        The ingest loop drops individual failed rows and continues — correct
+        for per-row categories, but for sequence-grouped data it silently
+        persists sequences with MISSING TIMESTEPS: the training side would
+        read a truncated vital-signs series as if it were complete. The
+        post-insert group-integrity pass in ``ingestors/base.py`` collects
+        the sequence ids touched by any dropped/failed row and removes those
+        sequences' surviving rows here, so a sequence is stored either whole
+        or not at all. Scoped to ``ingestor_id`` like the #227 compensating
+        delete, so other runs' rows are never touched.
+
+        Args:
+            table_name: Name of the table to clean
+            ingestor_id: UUID of the current ingest run
+            sequence_ids: The sequence ids whose rows must be removed
+            group_column: The sequence group column (default ``sequence_id``)
+
+        Returns:
+            Number of rows removed
+        """
+        if not sequence_ids:
+            return 0
+        safe_group = group_column.replace("`", "``")
+        stmt = text(
+            f"DELETE FROM `{table_name.replace('`', '``')}` "
+            f"WHERE ingestor_id = :ingestor_id "
+            f"AND `{safe_group}` IN :sequence_ids"
+        ).bindparams(
+            # expanding=True turns the IN into per-value binds — required for
+            # a list parameter with SQLAlchemy text().
+            bindparam("sequence_ids", value=list(sequence_ids), expanding=True),
+            ingestor_id=ingestor_id,
+        )
+        with self.engine.connect() as connection:
+            result = _execute_with_retry(connection, stmt)
+            connection.commit()
+        deleted = result.rowcount if result is not None else 0
+        logger.warning(
+            f"Group-integrity pass removed {deleted} row(s) across "
+            f"{len(sequence_ids)} partial sequence(s) for "
+            f"ingestor_id={ingestor_id!r} from `{table_name}` (T5: a "
+            f"sequence is stored whole or not at all)."
+        )
+        return deleted
 
     def delete_by_ingestor_id(self, table_name: str, ingestor_id: str) -> int:
         """

@@ -18,6 +18,33 @@ logger = logging.getLogger(__name__)
 logger.setLevel(config.LOG_LEVEL)
 
 
+def parse_month_first_with_ambiguity_mask(values):
+    """Month-first ``format='mixed'`` parse + the locale-ambiguity mask.
+
+    "03.04.2026" is Apr 3 read day-first (EU) but Mar 4 read month-first
+    (US); ``format='mixed'`` silently picks one and corrupts the whole
+    series with no error. A value that parses BOTH ways to different dates
+    is ambiguous and must be rejected. ISO-8601 values (YYYY-…) are exempt:
+    pandas with ``dayfirst=True`` still swaps their components, which would
+    falsely flag every ISO date.
+
+    Shared by ``TimeFormatValidator`` (global TSF check) and
+    ``PerGroupTimeOrderedValidator`` (per-sequence TSC check) so the guard
+    cannot drift between them (review: #359).
+
+    Returns:
+        (timestamps, ambiguous_mask) — the month-first parse (NaT where
+        unparseable) and the boolean mask of ambiguous positions.
+    """
+    timestamps = pd.to_datetime(values, format="mixed", errors="coerce")
+    day_first = pd.to_datetime(values, format="mixed", dayfirst=True, errors="coerce")
+    iso_like = values.astype(str).str.match(r"^\d{4}-")
+    ambiguous_mask = (
+        timestamps.notna() & day_first.notna() & (timestamps != day_first) & ~iso_like
+    )
+    return timestamps, ambiguous_mask
+
+
 class TimeFormatValidator(BaseValidator):
     """Validator for timestamp format.
 
@@ -71,29 +98,12 @@ class TimeFormatValidator(BaseValidator):
                     errors=[f"Required column 'timestamp' not found. Available: {list(df.columns)}"],
                 )
 
-            # Parse timestamps (month-first by default).
-            timestamps = pd.to_datetime(df["timestamp"], format='mixed', errors="coerce")
+            # Parse timestamps + locale-ambiguity mask (shared helper — the
+            # per-group TSC validator applies the identical guard).
+            timestamps, ambiguous_mask = parse_month_first_with_ambiguity_mask(
+                df["timestamp"]
+            )
             metadata = {"rows_checked": len(df)}
-
-            # Locale-ambiguity guard. "03.04.2026" is Apr 3 read day-first (EU)
-            # but Mar 4 read month-first (US); format='mixed' silently picks one
-            # and corrupts the whole series with no error. If a value parses
-            # successfully BOTH ways but to different dates, it is ambiguous —
-            # reject it and steer the user to unambiguous ISO 8601.
-            #
-            # Exempt ISO-8601 values (YYYY-…): pandas with dayfirst=True still
-            # swaps their components, which would falsely flag every ISO date.
-            day_first = pd.to_datetime(
-                df["timestamp"], format='mixed', dayfirst=True, errors="coerce"
-            )
-            ts_str = df["timestamp"].astype(str)
-            iso_like = ts_str.str.match(r"^\d{4}-")
-            ambiguous_mask = (
-                timestamps.notna()
-                & day_first.notna()
-                & (timestamps != day_first)
-                & ~iso_like
-            )
             if ambiguous_mask.any():
                 ambiguous_count = int(ambiguous_mask.sum())
                 offender_rows = df.index[ambiguous_mask][:5].tolist()

@@ -15,7 +15,7 @@ from typing import Dict
 from ..utils.constants import DataFormat, TaskCategory
 from . import transfer as t
 from . import validators as v
-from .layout import RecordFormat, Sidecar
+from .layout import Grouping, RecordFormat, Sidecar
 from .spec import ModalitySpec
 
 # One entry per supported category — the single source of truth. P3a: the three
@@ -243,6 +243,30 @@ _SPECS = (
         is_self_supervised=False,
         data_format=DataFormat.TABULAR,
         build_validators=v.time_series_forecasting,
+    ),
+    # time_series_classification is the sequence-GROUPED time-series category
+    # (backend#1054): one multivariate sequence per ``sequence_id`` → one
+    # label (Charité sepsis shape). Tabular family like TSF/TTE, but
+    # is_classification=True (real class labels → the central
+    # LabelDiversityValidator gates single-class datasets) and — uniquely —
+    # a ``grouping`` trait (Decision-4): the SAMPLE UNIT is a sequence, not a
+    # row. ingestors/base.py consumes the trait to count labels per sequence
+    # (COUNT(DISTINCT sequence_id) — Decision-3/T2), add the composite
+    # (sequence_id, timestamp) index, and run the post-insert group-integrity
+    # pass (T5). Column names are FIXED (Decision-2).
+    ModalitySpec(
+        TaskCategory.TIME_SERIES_CLASSIFICATION,
+        is_file_bearing=False,
+        is_tabular_family=True,
+        is_self_supervised=False,
+        data_format=DataFormat.TABULAR,
+        build_validators=v.time_series_classification,
+        is_classification=True,
+        grouping=Grouping(
+            group_column="sequence_id",
+            time_column="timestamp",
+            count_unit="sequences",
+        ),
     ),
     ModalitySpec(
         TaskCategory.TIME_TO_EVENT_PREDICTION,

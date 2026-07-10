@@ -3,7 +3,8 @@
 This module provides validation functionality for data before ingestion.
 It includes validators for file types, extensions, image resolution uniformity,
 data type compliance, table naming, duplicate checking, Pascal VOC XML format,
-time series forecasting, and time to event prediction.
+time series forecasting, time series classification (sequence-grouped), and
+time to event prediction.
 """
 
 from .base import BaseValidator, ValidationResult
@@ -19,6 +20,9 @@ from .time_ordered_validator import TimeOrderedValidator
 from .time_before_today_validator import TimeBeforeTodayValidator
 from .keypoint_annotation_validator import KeypointAnnotationValidator
 from .keypoint_visibility_validator import KeypointVisibilityValidator
+from .sequence_group_validator import SequenceGroupValidator
+from .label_constant_within_group_validator import LabelConstantWithinGroupValidator
+from .per_group_time_ordered_validator import PerGroupTimeOrderedValidator
 
 __all__ = [
     "BaseValidator",
@@ -35,4 +39,7 @@ __all__ = [
     "TimeBeforeTodayValidator",
     "KeypointAnnotationValidator",
     "KeypointVisibilityValidator",
+    "SequenceGroupValidator",
+    "LabelConstantWithinGroupValidator",
+    "PerGroupTimeOrderedValidator",
 ]

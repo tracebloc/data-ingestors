@@ -32,8 +32,15 @@ from ..validators.image_validator import ImageResolutionValidator
 from ..validators.keypoint_annotation_validator import KeypointAnnotationValidator
 from ..validators.keypoint_visibility_validator import KeypointVisibilityValidator
 from ..validators.label_column_validator import LabelColumnValidator
+from ..validators.label_constant_within_group_validator import (
+    LabelConstantWithinGroupValidator,
+)
 from ..validators.label_diversity_validator import LabelDiversityValidator
 from ..validators.numeric_columns_validator import NumericColumnsValidator
+from ..validators.per_group_time_ordered_validator import (
+    PerGroupTimeOrderedValidator,
+)
+from ..validators.sequence_group_validator import SequenceGroupValidator
 from ..validators.sentence_pair_validator import SentencePairValidator
 from ..validators.text_content_validator import TextContentValidator
 from ..validators.time_before_today_validator import TimeBeforeTodayValidator
@@ -342,6 +349,69 @@ def time_series_forecasting(options: Dict[str, Any]) -> List[BaseValidator]:
     if options.get("schema"):
         schema_without_timestamp = {
             k: v for k, v in options["schema"].items() if k.lower() != "timestamp"
+        }
+        if schema_without_timestamp:
+            validators.append(DataValidator(schema=schema_without_timestamp))
+    return validators
+
+
+def time_series_classification(options: Dict[str, Any]) -> List[BaseValidator]:
+    # Sequence-grouped time series (backend#1054 WS1): one label per
+    # ``sequence_id``, timestep rows ordered by ``timestamp`` WITHIN each
+    # sequence (fixed column names — Decision-2). The validator set is the
+    # grouped analogue of time_series_forecasting's:
+    #   - SequenceGroupValidator: sequence_id present, no null ids, and the
+    #     T6 guard (data_id.strategy=column must not point at sequence_id —
+    #     the UNIQUE upsert would collapse each sequence to one row).
+    #   - LabelConstantWithinGroupValidator: one outcome per sequence — a
+    #     mid-sequence label flip is rejected with a readable error.
+    #   - PerGroupTimeOrderedValidator: per-group monotonic timestamps
+    #     (TIMESTAMP or numeric step index). The global TimeOrderedValidator
+    #     is deliberately NOT reused — it rejects any interleaved multi-
+    #     sequence file (T4).
+    #   - NumericColumnsValidator excluding {sequence_id, timestamp}: the
+    #     group key is legitimately VARCHAR; features must be numeric
+    #     (nulls legal, #195).
+    # map_validators composes LabelDiversityValidator around this factory
+    # (is_classification=True) plus the universal frame.
+    schema = options.get("schema", {})
+    # The group/time column names come from the ModalitySpec's ``grouping``
+    # trait, threaded into options by ``map_validators`` — the single source
+    # of truth ``ingestors/base.py`` reads too (review: #359). The fallbacks
+    # only serve direct/test construction without the registry.
+    grouping = options.get("grouping")
+    group_column = grouping.group_column if grouping else "sequence_id"
+    time_column = grouping.time_column if grouping else "timestamp"
+    validators: List[BaseValidator] = [
+        SequenceGroupValidator(
+            sequence_column=group_column,
+            schema=schema,
+            # T6: the run's data_id source column when strategy=column
+            # (threaded through options by BaseIngestor.validate_data).
+            unique_id_column=options.get("unique_id_column"),
+        ),
+        LabelConstantWithinGroupValidator(
+            sequence_column=group_column,
+            label_column=options.get("label_column") or "label",
+        ),
+        PerGroupTimeOrderedValidator(
+            sequence_column=group_column,
+            time_column=time_column,
+            schema=schema,
+        ),
+        NumericColumnsValidator(
+            schema=schema, excluded_columns={group_column, time_column}
+        ),
+    ]
+    if options.get("schema"):
+        # Mirror time_series_forecasting: DataValidator gets the schema minus
+        # the time column (its TIMESTAMP values are checked by the per-group
+        # validator above). sequence_id stays — VARCHAR is a type
+        # DataValidator handles.
+        schema_without_timestamp = {
+            k: v
+            for k, v in options["schema"].items()
+            if k.lower() != time_column.lower()
         }
         if schema_without_timestamp:
             validators.append(DataValidator(schema=schema_without_timestamp))

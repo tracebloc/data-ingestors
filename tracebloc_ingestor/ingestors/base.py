@@ -35,6 +35,7 @@ from .table_lock import TableLock
 from ..modalities.registry import (
     FILE_BEARING_CATEGORIES as _FILE_BEARING_CATEGORIES,
     NLP_CATEGORIES as _NLP_CATEGORIES,
+    REGISTRY as _MODALITY_REGISTRY,
     TABULAR_FAMILY_CATEGORIES as _TABULAR_FAMILY_CATEGORIES,
 )
 
@@ -307,6 +308,18 @@ class BaseIngestor(ABC):
         return True
 
     @property
+    def _grouping(self):
+        """The category's sequence-grouping trait (``ModalitySpec.grouping``,
+        backend#1054 Decision-4), or ``None`` for per-row categories /
+        unknown categories. Read trait-style from the registry — never via a
+        category string comparison — so a future grouped category is a
+        registry entry, not a base.py edit. Gates the sequence-unit label
+        counts, the composite ``(group, time)`` index, and the post-insert
+        group-integrity pass."""
+        spec = _MODALITY_REGISTRY.get(self.category)
+        return spec.grouping if spec is not None else None
+
+    @property
     def _table_lock(self) -> TableLock:
         """The run's table lock (P5b). ``TableLock`` owns the file-lock
         lifecycle — compute path, atomic acquire with stale-reclaim, release —
@@ -358,6 +371,13 @@ class BaseIngestor(ABC):
                 # sneak an effectively single-class dataset past the gate
                 # (bugbot #252).
                 "full_schema": self.schema,
+                # The run's data_id source column (data_id.strategy=column),
+                # for SequenceGroupValidator's T6 guard: mapping data_id
+                # from the sequence column would upsert-collapse every
+                # sequence to one row (backend#1054 WS1). None for the
+                # default UUID / content_hash strategies; non-grouped
+                # factories ignore the key.
+                "unique_id_column": self.unique_id_column,
             },
             # Inject the run's resolved Config so path-reading validators
             # (SRC_PATH / DEST_PATH / TABLE_NAME) use it instead of a
@@ -489,7 +509,18 @@ class BaseIngestor(ABC):
             )
 
         if self.table is None:
-            self.table = self.database.create_table(self.table_name, self._table_schema)
+            # Grouped categories get a composite (group, time) secondary
+            # index (backend#1054 WS1) so the engine's "fetch all rows of
+            # the sampled sequences, ordered" reads don't full-scan.
+            grouping = self._grouping
+            index_columns = (
+                [grouping.group_column, grouping.time_column]
+                if grouping is not None
+                else None
+            )
+            self.table = self.database.create_table(
+                self.table_name, self._table_schema, index_columns=index_columns
+            )
 
         batch = []
         failed_records = []
@@ -628,11 +659,75 @@ class BaseIngestor(ABC):
                 session.commit()
                 pbar.close()
 
-                # Query accurate label counts from the DB (excludes any rows that
-                # failed insertion) and collect a small preview sample.
-                label_counts = self.database.get_label_counts(
-                    self.table_name, self.ingestor_id
-                )
+                # Post-insert group-integrity pass (backend#1054 WS1, T5).
+                # Row-drop-and-continue is correct per-row, but for grouped
+                # categories a dropped row means its SEQUENCE is now missing
+                # a timestep — training would read a truncated series as if
+                # complete. Collect the sequence ids touched by any dropped/
+                # failed record and remove those sequences' surviving rows,
+                # so a sequence is stored whole or not at all. The dropped
+                # rows stay in failed_records — the run still exits non-zero.
+                grouping = self._grouping
+                if grouping is not None and failed_records:
+                    # Failed-row dicts carry the RAW CSV header spellings, so
+                    # the fixed trait name must be resolved against each
+                    # record's actual keys with the shared #340 rule
+                    # (case-/whitespace-insensitive, resolve_column) — a
+                    # header drifting only in case or whitespace would
+                    # otherwise read None here, leave partial_ids empty, and
+                    # keep a truncated sequence's surviving rows in MySQL.
+                    partial_id_set = set()
+                    for failure in failed_records:
+                        record = failure.get("record")
+                        if not isinstance(record, dict):
+                            continue
+                        key = resolve_column(record.keys(), grouping.group_column)
+                        seq_id = record.get(key) if key is not None else None
+                        if seq_id is not None and str(seq_id).strip():
+                            partial_id_set.add(str(seq_id))
+                    partial_ids = sorted(partial_id_set)
+                    if partial_ids and stats["inserted_records"]:
+                        removed = self.database.delete_sequences(
+                            self.table_name,
+                            self.ingestor_id,
+                            partial_ids,
+                            group_column=grouping.group_column,
+                        )
+                        stats["inserted_records"] = max(
+                            stats["inserted_records"] - removed, 0
+                        )
+                        logger.warning(
+                            f"{YELLOW}Group-integrity pass (T5): dropped "
+                            f"row(s) left {len(partial_ids)} partial "
+                            f"sequence(s); removed their {removed} "
+                            f"already-inserted row(s) so no truncated "
+                            f"sequence is ever trained on.{RESET}"
+                        )
+
+                # Query accurate label counts from the DB (excludes any rows
+                # that failed insertion) and collect a small preview sample.
+                # The trait's ``count_unit`` selects the unit (review: #359 —
+                # this is its behavioral consumer): "sequences" counts one
+                # dataset item per sequence (backend#1054 Decision-3/T2); a
+                # future grouped category counting rows falls through to the
+                # standard row counts like every non-grouped category.
+                if grouping is not None and grouping.count_unit == "sequences":
+                    label_counts = self.database.get_label_sequence_counts(
+                        self.table_name,
+                        self.ingestor_id,
+                        group_column=grouping.group_column,
+                    )
+                    # number_of_sequences rides the meta_data channel (the
+                    # serializer is unchanged — counts only, no id-lists).
+                    # Labels are constant per sequence, so the per-label
+                    # sequence counts sum to the sequence total.
+                    self.file_options["number_of_sequences"] = sum(
+                        label_counts.values()
+                    )
+                else:
+                    label_counts = self.database.get_label_counts(
+                        self.table_name, self.ingestor_id
+                    )
 
                 if not stats["inserted_records"]:
                     logger.warning(
@@ -640,9 +735,15 @@ class BaseIngestor(ABC):
                         "skipping ingest summary."
                     )
                 elif not label_counts:
+                    counts_helper = (
+                        "get_label_sequence_counts"
+                        if grouping is not None
+                        and grouping.count_unit == "sequences"
+                        else "get_label_counts"
+                    )
                     raise RuntimeError(
                         f"Inserted {stats['inserted_records']} row(s) but "
-                        f"get_label_counts returned nothing for "
+                        f"{counts_helper} returned nothing for "
                         f"ingestor_id={self.ingestor_id!r}. "
                         "The dataset was not registered with the backend; "
                         "this run's rows will be removed by the "

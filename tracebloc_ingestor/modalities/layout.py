@@ -32,7 +32,9 @@ from typing import Any, Dict, List, Optional, Tuple
 
 # Bump when the contract's SHAPE changes (fields added/removed/reinterpreted),
 # not when a task's values change — those are caught by the drift test.
-LAYOUT_CONTRACT_VERSION = "1"
+# "2": added the per-task ``grouping`` block (sequence-grouped categories,
+#      backend#1054 Decision-4 — time_series_classification).
+LAYOUT_CONTRACT_VERSION = "2"
 
 
 @dataclass(frozen=True)
@@ -51,6 +53,29 @@ class Sidecar:
     glob: str
     required: bool
     link_column: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class Grouping:
+    """Sequence grouping for categories whose sample unit is a GROUP of rows
+    rather than a single row (backend#1054 Decision-4 —
+    time_series_classification: many timestep rows per ``sequence_id``, one
+    label per sequence).
+
+    Declared as a ModalitySpec trait so ``ingestors/base.py`` and the
+    validators stay trait-driven (no category if/elses), and a later
+    ``time_series_regression`` is a one-entry registry job.
+
+    ``group_column``/``time_column`` are the FIXED physical column names
+    (Decision-2); ``count_unit`` names the unit the ingest summary's label
+    counts are expressed in (``"sequences"`` = ``COUNT(DISTINCT
+    group_column)`` per label — Decision-3/T2; every non-grouped category
+    implicitly counts ``"rows"``).
+    """
+
+    group_column: str
+    time_column: str
+    count_unit: str = "sequences"
 
 
 @dataclass(frozen=True)
@@ -90,6 +115,14 @@ def _record_format_dict(rf: RecordFormat) -> Dict[str, Any]:
     }
 
 
+def _grouping_dict(g: Grouping) -> Dict[str, Any]:
+    return {
+        "group_column": g.group_column,
+        "time_column": g.time_column,
+        "count_unit": g.count_unit,
+    }
+
+
 def _task_layout(spec: Any) -> Dict[str, Any]:
     """Compose one task's layout: the two declared pieces (sidecars,
     record_format) plus the facts DERIVED from the spec's existing flags."""
@@ -110,6 +143,11 @@ def _task_layout(spec: Any) -> Dict[str, Any]:
         "record_format": (
             _record_format_dict(spec.record_format) if spec.record_format else None
         ),
+        # Sequence grouping (backend#1054 Decision-4): non-null only for
+        # grouped categories (time_series_classification), where one dataset
+        # item spans MANY manifest rows keyed by ``group_column`` and the
+        # ingest summary counts sequences, not rows.
+        "grouping": _grouping_dict(spec.grouping) if spec.grouping else None,
     }
 
 

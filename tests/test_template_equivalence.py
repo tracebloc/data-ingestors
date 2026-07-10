@@ -477,6 +477,39 @@ CASES = [
         id="time_series_forecasting",
     ),
     # -----------------------------------------------------------------------
+    # time_series_classification — classification-class (string label
+    # shorthand, passthrough policy — unlike TSF/TTE's bucket). Sequence-
+    # grouped: schema must declare the fixed `sequence_id` + `timestamp`
+    # columns (backend#1054 Decision-2); no name plumbing, so file_options
+    # stays empty like the other tabular categories.
+    # -----------------------------------------------------------------------
+    pytest.param(
+        _yaml(
+            category=TaskCategory.TIME_SERIES_CLASSIFICATION,
+            table="time_series_classification_train",
+            intent="train",
+            csv="/data/data.csv",
+            schema={
+                "sequence_id": "VARCHAR(64)",
+                "timestamp": "TIMESTAMP",
+                "heart_rate": "FLOAT",
+                "label": "INT",
+            },
+            label="label",
+        ),
+        {
+            "category": TaskCategory.TIME_SERIES_CLASSIFICATION,
+            "data_format": DataFormat.TABULAR,
+            "intent": Intent.TRAIN,
+            "label_column": "label",
+            "label_policy": PASSTHROUGH,
+            "unique_id_column": None,
+            "annotation_column": None,
+            "file_options": {},
+        },
+        id="time_series_classification",
+    ),
+    # -----------------------------------------------------------------------
     # time_to_event_prediction — regression-class, label_policy=bucket,
     # plus time_column="time" (template's value).
     # -----------------------------------------------------------------------
