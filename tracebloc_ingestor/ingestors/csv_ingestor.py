@@ -16,6 +16,7 @@ from pathlib import Path
 from .base import BaseIngestor
 from ..database import Database
 from ..api.client import APIClient
+from ..cli.conventions import REGRESSION_CLASS_CATEGORIES
 from ..utils.constants import RESET, RED, YELLOW
 from ..utils import label_policy as label_policy_module
 from ..utils import coercion
@@ -211,19 +212,22 @@ class CSVIngestor(BaseIngestor):
         # for federated/global normalization (data-ingestors#360, backend#1037).
         # Additive aggregates only — no raw values leave the client.
         self._feature_stats_acc: Dict[str, Dict[str, Any]] = {}
-        # The label/target, row-id, and annotation columns are NOT features: a
-        # data_id would pollute normalization, and — critically — the regression
-        # target is bucketed precisely so raw values never leave the cluster
-        # (label_policy="bucket"), so its min/max must never leak here.
-        self._feature_stats_excluded = {
-            c
-            for c in (
-                self.label_column,
-                self.unique_id_column,
-                self.annotation_column,
-            )
-            if c
-        }
+        # Row-id and annotation columns are never features — a data_id would
+        # pollute normalization. The label column is excluded for CLASSIFICATION
+        # tasks (its value is a class, not a numeric feature), but INCLUDED for
+        # REGRESSION-CLASS tasks — forecasting / time-to-event / tabular
+        # regression — where the target is a numeric column the backend must
+        # normalize globally (data-ingestors#360, backend#1037). Only the
+        # additive aggregates (count/sum/sum_sq/min/max) ship, under the target's
+        # column name; raw per-row target values remain governed by
+        # label_policy="bucket". min/max do disclose the two extremes — an
+        # accepted trade for enabling federated target normalization, and the
+        # only scalers derivable from these stats are Standard/MinMax/MaxAbs
+        # (Robust/Quantile/Power need quantiles/λ — a separate follow-up).
+        excluded = {c for c in (self.unique_id_column, self.annotation_column) if c}
+        if self.label_column and self.category not in REGRESSION_CLASS_CATEGORIES:
+            excluded.add(self.label_column)
+        self._feature_stats_excluded = excluded
 
     def _validate_csv(self, df: pd.DataFrame) -> None:
         """Validate CSV data against schema using pandas functionality.

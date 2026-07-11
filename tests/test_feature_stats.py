@@ -74,10 +74,48 @@ def test_feature_stats_accumulate_across_chunks(make_csv):
     assert x["max"] == 10
 
 
-def test_feature_stats_excludes_label_id_and_annotation(make_csv):
-    # Numeric target, id, and annotation columns must never appear: the
-    # regression target is bucketed precisely so raw values don't leave the
-    # cluster, and a data_id is not a feature.
+def test_feature_stats_excludes_id_and_annotation_always(make_csv):
+    # A data_id (row identifier) and annotation column are never features,
+    # regardless of category.
+    path = make_csv({"feat": [1, 2, 3], "rowid": [7, 8, 9], "ann": [1, 1, 2]})
+    ing = make_csv_ingestor(
+        schema={"feat": "FLOAT", "rowid": "INT", "ann": "INT"},
+        unique_id_column="rowid",
+        annotation_column="ann",
+    )
+    list(ing.read_data(str(path)))
+
+    stats = ing.feature_stats()
+    assert set(stats) == {"feat"}
+
+
+def test_feature_stats_excludes_label_for_classification(make_csv):
+    # For classification the label is a class, not a numeric feature — excluded.
+    path = make_csv({"feat": [1.0, 2.0, 3.0], "label": [0, 1, 0]})
+    ing = make_csv_ingestor(
+        schema={"feat": "FLOAT", "label": "INT"},
+        label_column="label",
+        category=TaskCategory.TABULAR_CLASSIFICATION,
+    )
+    list(ing.read_data(str(path)))
+
+    stats = ing.feature_stats()
+    assert set(stats) == {"feat"}
+    assert "label" not in stats
+
+
+@pytest.mark.parametrize(
+    "category",
+    [
+        TaskCategory.TABULAR_REGRESSION,
+        TaskCategory.TIME_SERIES_FORECASTING,
+        TaskCategory.TIME_TO_EVENT_PREDICTION,
+    ],
+)
+def test_feature_stats_includes_target_for_regression_class(make_csv, category):
+    # Regression-class tasks: the numeric target IS a column the backend must
+    # normalize globally (backend#1037), so its aggregate stats are emitted
+    # under its column name. The row-id is still excluded.
     path = make_csv(
         {"feat": [1, 2, 3], "target": [10, 20, 30], "rowid": [7, 8, 9]}
     )
@@ -85,13 +123,19 @@ def test_feature_stats_excludes_label_id_and_annotation(make_csv):
         schema={"feat": "FLOAT", "target": "FLOAT", "rowid": "INT"},
         label_column="target",
         unique_id_column="rowid",
-        category=TaskCategory.TABULAR_REGRESSION,
+        category=category,
     )
     list(ing.read_data(str(path)))
 
     stats = ing.feature_stats()
-    assert set(stats) == {"feat"}
-    assert "target" not in stats
+    assert set(stats) == {"feat", "target"}
+    assert stats["target"] == {
+        "count": 3,
+        "sum": 60.0,
+        "sum_sq": 10.0**2 + 20.0**2 + 30.0**2,
+        "min": pytest.approx(10.0),
+        "max": pytest.approx(30.0),
+    }
     assert "rowid" not in stats
 
 
