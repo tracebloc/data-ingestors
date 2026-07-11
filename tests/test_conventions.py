@@ -356,3 +356,35 @@ def test_json_source_dispatches_correctly():
     r = resolve(config)
     assert r.source_type == "json"
     assert r.source_path == "/data/events.json"
+
+
+# ---------------------------------------------------------------------------
+# Vision alignment facts: color_mode (RGB/grayscale) + bit_depth bridged into
+# file_options for combine-time alignment (di#360).
+# ---------------------------------------------------------------------------
+def test_color_mode_bridged_and_canonicalized():
+    config = _load("image_classification.yaml")
+    config["color_mode"] = "rgb"
+    r = resolve(config)
+    assert r.file_options["color_mode"] == "RGB"
+
+
+def test_bit_depth_bridged():
+    config = _load("image_classification.yaml")
+    config["bit_depth"] = 16
+    r = resolve(config)
+    assert r.file_options["bit_depth"] == 16
+
+
+def test_invalid_color_mode_raises():
+    config = _load("image_classification.yaml")
+    config["color_mode"] = "RGBA"
+    with pytest.raises(ValueError, match="color_mode"):
+        resolve(config)
+
+
+def test_invalid_bit_depth_raises():
+    config = _load("image_classification.yaml")
+    config["bit_depth"] = 12
+    with pytest.raises(ValueError, match="bit_depth"):
+        resolve(config)

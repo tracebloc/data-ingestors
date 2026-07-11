@@ -16,6 +16,8 @@ from ..utils.constants import (
     YELLOW,
     CYAN,
     DataFormat,
+    COLOR_MODE_CHANNELS,
+    canonical_color_mode,
 )
 from ..utils import label_policy as label_policy_module
 from ..utils.columns import resolve_column
@@ -432,14 +434,14 @@ class BaseIngestor(ABC):
 
         - **Image:** ``resolution`` from the run's uniform ``target_size`` (the
           resolution validator enforces every image to it, so no image read is
-          needed here). Emitted as ``[height, width]`` — ``target_size`` is
-          ``[width, height]``.
+          needed here), emitted as ``[height, width]`` (``target_size`` is
+          ``[width, height]``); ``color_mode`` + derived ``channels`` and
+          ``bit_depth`` from ``file_options`` when the user supplies them for the
+          vision run (RGB/grayscale only — the values the contract accepts). Not
+          auto-detected: PIL modes like RGBA/CMYK aren't in the contract enum.
         - **Text/NLP:** ``encoding`` is ``"utf-8"`` — text is staged and
           validated as UTF-8 (non-UTF-8 is rejected at validation), so that is
           the canonical, true value.
-
-        ``channels``/``color_mode``/``bit_depth`` (need a per-image PIL scan) and
-        ``sampling_frequency`` are separate slices.
         """
         attributes: Dict[str, Any] = {}
 
@@ -448,6 +450,17 @@ class BaseIngestor(ABC):
             if isinstance(target, (list, tuple)) and len(target) == 2:
                 width, height = int(target[0]), int(target[1])
                 attributes["resolution"] = [height, width]
+
+            # color_mode is user-provided in file_options for vision use cases;
+            # emit only the canonical RGB/grayscale values and derive channels.
+            color_mode = canonical_color_mode(self.file_options.get("color_mode"))
+            if color_mode:
+                attributes["color_mode"] = color_mode
+                attributes["channels"] = COLOR_MODE_CHANNELS[color_mode]
+
+            bit_depth = self.file_options.get("bit_depth")
+            if isinstance(bit_depth, int) and not isinstance(bit_depth, bool):
+                attributes["bit_depth"] = bit_depth
 
         if self.category in _NLP_CATEGORIES:
             attributes["encoding"] = "utf-8"

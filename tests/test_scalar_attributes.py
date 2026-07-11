@@ -41,6 +41,56 @@ def test_image_resolution_from_target_size_height_width():
     assert attrs["resolution"] == [480, 640]  # emitted [height, width]
 
 
+def test_color_mode_and_derived_channels_from_file_options():
+    ing = make_ingestor(
+        schema={"filename": "VARCHAR(64)"},
+        category=TaskCategory.IMAGE_CLASSIFICATION,
+        data_format=DataFormat.IMAGE,
+        file_options={"color_mode": "rgb"},  # user-provided, case-insensitive
+    )
+    attrs = ing._collect_run_metadata()["attributes"]
+    assert attrs["color_mode"] == "RGB"
+    assert attrs["channels"] == 3
+
+
+def test_grayscale_color_mode_channels():
+    ing = make_ingestor(
+        schema={"filename": "VARCHAR(64)"},
+        category=TaskCategory.SEMANTIC_SEGMENTATION,
+        data_format=DataFormat.IMAGE,
+        file_options={"color_mode": "grayscale", "bit_depth": 16},
+    )
+    attrs = ing._collect_run_metadata()["attributes"]
+    assert attrs["color_mode"] == "grayscale"
+    assert attrs["channels"] == 1
+    assert attrs["bit_depth"] == 16
+
+
+def test_invalid_color_mode_in_file_options_is_skipped():
+    # Directly-set (unvalidated) file_options with a non-canonical mode: the base
+    # hook emits nothing rather than shipping a value the contract would reject.
+    ing = make_ingestor(
+        schema={"filename": "VARCHAR(64)"},
+        category=TaskCategory.IMAGE_CLASSIFICATION,
+        data_format=DataFormat.IMAGE,
+        file_options={"color_mode": "RGBA"},
+    )
+    attrs = ing._collect_run_metadata().get("attributes", {})
+    assert "color_mode" not in attrs
+    assert "channels" not in attrs
+
+
+def test_no_color_mode_when_absent():
+    ing = make_ingestor(
+        schema={"filename": "VARCHAR(64)"},
+        category=TaskCategory.IMAGE_CLASSIFICATION,
+        data_format=DataFormat.IMAGE,
+        file_options={"target_size": [64, 64]},
+    )
+    attrs = ing._collect_run_metadata()["attributes"]
+    assert "color_mode" not in attrs and "channels" not in attrs
+
+
 def test_no_resolution_for_non_image():
     ing = make_ingestor(
         schema={"a": "INT"},
