@@ -17,12 +17,25 @@ from .base import BaseIngestor
 from ..database import Database
 from ..api.client import APIClient
 from ..cli.conventions import REGRESSION_CLASS_CATEGORIES
-from ..utils.constants import RESET, RED, YELLOW
+from ..utils.constants import RESET, RED, YELLOW, TaskCategory
 from ..utils import label_policy as label_policy_module
 from ..utils import coercion
 from ..config import Config
 
 config = Config()
+
+# Above this many distinct values a VARCHAR column is treated as free text / an
+# id-like field rather than a categorical feature, and no union vocabulary is
+# emitted for it (di#360). A near-unique column's value-set is useless for
+# stable cross-client encoding and would bloat the payload / leak more values.
+_MAX_CATEGORICAL_CARDINALITY = 1000
+
+# The time-series forecasting timestamp column is the literal name "timestamp"
+# (TimeFormatValidator). A bounded, in-order sample is enough for
+# ``pd.infer_freq`` to derive the sampling cadence; retaining all rows would be
+# wasteful on large series.
+_TIMESTAMP_COLUMN = "timestamp"
+_MAX_TIMESTAMP_SAMPLE = 500
 
 
 def _bom_safe_encoding(encoding: Optional[str]) -> str:
@@ -229,6 +242,36 @@ class CSVIngestor(BaseIngestor):
             excluded.add(self.label_column)
         self._feature_stats_excluded = excluded
 
+        # Per categorical-feature-column union vocabulary, accumulated in the
+        # VARCHAR/CHAR/TEXT cast pass and emitted under the same
+        # ``attributes.feature_stats[col].categories`` key the backend folds into
+        # the merged dataset's union vocab (backend#1037) and the edge encodes
+        # against for a stable cross-client index (tracebloc-engine#455). The
+        # label column is always excluded — its value-set is a *class* set gated
+        # by ``check_same_labels``, not a feature vocab — as are the row-id and
+        # annotation columns. A column whose distinct count crosses
+        # ``_MAX_CATEGORICAL_CARDINALITY`` is dropped (free text / id, not a
+        # categorical feature). Emitting the value-set discloses category
+        # presence — the same accepted trade as feature_stats min/max.
+        self._categorical_acc: Dict[str, set] = {}
+        self._categorical_over_cap: set = set()
+        self._categorical_excluded = {
+            c
+            for c in (
+                self.unique_id_column,
+                self.annotation_column,
+                self.label_column,
+            )
+            if c
+        }
+
+        # Temporal facts for time-series forecasting (di#360): the timestamp
+        # column's timezone (tz-aware iff the parsed dtype carries a tz) and a
+        # bounded in-order sample used to infer ``sampling_frequency`` via
+        # ``pd.infer_freq``. Accumulated in the TIMESTAMP cast branch.
+        self._timestamp_sample: List[Any] = []
+        self._timestamp_tz: Optional[str] = None
+
     def _validate_csv(self, df: pd.DataFrame) -> None:
         """Validate CSV data against schema using pandas functionality.
 
@@ -369,6 +412,8 @@ class CSVIngestor(BaseIngestor):
                     # substrings "DATE" and "TIME" both appear in "DATETIME"
                     # (and "TIME" in "TIMESTAMP").
                     df[column] = _cast_datetime_strict(df[column], column, dtype)
+                    if column == _TIMESTAMP_COLUMN:
+                        self._accumulate_temporal(df[column])
                 elif "DATE" in dtype.upper():
                     # DATE only — emit a plain date so the value doesn't gain a
                     # spurious time ('2026-01-02' was becoming '2026-01-02 00:00:00').
@@ -393,6 +438,7 @@ class CSVIngestor(BaseIngestor):
                             df[column].notna(), None
                         )
                     )
+                    self._accumulate_categorical(column, df[column])
             except Exception as e:
                 # Our own ValueErrors above are already content-safe; any
                 # OTHER exception may embed cell values (pandas/numpy
@@ -465,18 +511,110 @@ class CSVIngestor(BaseIngestor):
         """
         return {col: dict(stats) for col, stats in self._feature_stats_acc.items()}
 
-    def _collect_run_metadata(self) -> Dict[str, Any]:
-        """Contribute ``feature_stats`` under the shared ``attributes`` namespace
-        on the global-metadata channel (#360).
+    def _accumulate_categorical(self, column: str, series: pd.Series) -> None:
+        """Fold one chunk's distinct categorical values into the running vocab.
 
-        Per backend#1037's final ``dataset_meta`` shape, every per-column extra
-        lives under ``attributes.feature_stats`` — ``schema`` stays a plain
-        ``{column: dtype}`` map. See ``BaseIngestor._collect_run_metadata``.
-        Omitted entirely when there are no numeric feature columns so the payload
-        stays clean.
+        Called from the VARCHAR/CHAR/TEXT cast branch of ``_validate_csv`` with
+        the already-cast column, so there is no second read. Non-null distinct
+        values accumulate into a set per column; once a column crosses
+        ``_MAX_CATEGORICAL_CARDINALITY`` it is dropped and never re-considered
+        (free text / id, not a categorical feature). Excluded columns (label,
+        row-id, annotation) are skipped.
         """
-        stats = self.feature_stats()
-        return {"attributes": {"feature_stats": stats}} if stats else {}
+        if (
+            column in self._categorical_excluded
+            or column in self._categorical_over_cap
+        ):
+            return
+        vals = series.dropna()
+        if vals.empty:
+            return
+        acc = self._categorical_acc.setdefault(column, set())
+        acc.update(str(v) for v in pd.unique(vals))
+        if len(acc) > _MAX_CATEGORICAL_CARDINALITY:
+            self._categorical_over_cap.add(column)
+            self._categorical_acc.pop(column, None)
+
+    def categorical_vocab(self) -> Dict[str, List[str]]:
+        """The finalized per-categorical-column union vocabulary (sorted).
+
+        Empty when the dataset has no categorical feature columns within the
+        cardinality cap. Sorted so the emitted order is deterministic and the
+        backend's union / the edge's label index are stable.
+        """
+        return {
+            col: sorted(vals)
+            for col, vals in self._categorical_acc.items()
+            if vals
+        }
+
+    def _accumulate_temporal(self, series: pd.Series) -> None:
+        """Fold one chunk of the (already-parsed) timestamp column into the
+        temporal accumulators: capture the timezone and grow a bounded in-order
+        sample for ``pd.infer_freq``. Rows arrive in time order
+        (``TimeOrderedValidator`` gates it), so appending across chunks preserves
+        the cadence.
+        """
+        s = series.dropna()
+        if s.empty:
+            return
+        tz = getattr(s.dt, "tz", None)
+        if tz is not None:
+            self._timestamp_tz = str(tz)
+        if len(self._timestamp_sample) < _MAX_TIMESTAMP_SAMPLE:
+            need = _MAX_TIMESTAMP_SAMPLE - len(self._timestamp_sample)
+            self._timestamp_sample.extend(s.iloc[:need].tolist())
+
+    def _temporal_attributes(self) -> Dict[str, Any]:
+        """Reconcilable temporal facts for time-series forecasting (di#360):
+        ``timezone`` (when the timestamps are tz-aware) and ``sampling_frequency``
+        (a pandas offset alias, only when a regular cadence is inferable). Both
+        are omitted when unavailable — forward-compatible (absent → WARN)."""
+        if self.category != TaskCategory.TIME_SERIES_FORECASTING:
+            return {}
+        attrs: Dict[str, Any] = {}
+        if self._timestamp_tz is not None:
+            attrs["timezone"] = self._timestamp_tz
+        if len(self._timestamp_sample) >= 3:
+            try:
+                freq = pd.infer_freq(pd.DatetimeIndex(self._timestamp_sample))
+            except (ValueError, TypeError):
+                freq = None
+            if freq:
+                attrs["sampling_frequency"] = freq
+        return attrs
+
+    def _collect_run_metadata(self) -> Dict[str, Any]:
+        """Contribute this run's derived facts under the shared ``attributes``
+        namespace on the global-metadata channel (#360).
+
+        Per backend#1037's final ``dataset_meta`` shape, per-column extras live
+        under ``attributes.feature_stats`` (``schema`` stays a plain
+        ``{column: dtype}`` map): numeric columns carry the folded sufficient
+        stats ``{count, sum, sum_sq, min, max}``; categorical columns carry the
+        union vocabulary ``{categories: [...]}`` — a column is one or the other,
+        so they never collide. Time-series runs also add the reconcilable
+        ``timezone`` / ``sampling_frequency`` scalar facts. The base's
+        data-format scalar attributes (image ``resolution``, text ``encoding``)
+        are folded in via ``super()`` so a CSV manifest for an image/text dataset
+        still emits them. Omitted entirely when there is nothing to contribute so
+        the payload stays clean.
+        """
+        # Start from the base's data-format scalar attributes (image resolution,
+        # text encoding) so a CSV manifest for an image/text dataset still emits
+        # them, then add the tabular/temporal facts this ingestor derives.
+        meta = super()._collect_run_metadata()
+        attributes = meta.get("attributes", {})
+
+        feature_stats = self.feature_stats()
+        for column, categories in self.categorical_vocab().items():
+            feature_stats[column] = {"categories": categories}
+        if feature_stats:
+            attributes["feature_stats"] = feature_stats
+
+        attributes.update(self._temporal_attributes())
+
+        return {"attributes": attributes} if attributes else {}
 
     def read_data(self, file_path: str) -> Generator[Dict[str, Any], None, None]:
         """Read and validate CSV file using pandas optimizations.

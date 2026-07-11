@@ -164,14 +164,18 @@ def test_feature_stats_omits_all_null_column(make_csv):
     assert "blank" not in stats
 
 
-def test_feature_stats_empty_when_no_numeric_columns(make_csv):
+def test_numeric_feature_stats_empty_but_categorical_vocab_emitted(make_csv):
+    # No numeric columns, but a VARCHAR column is a categorical feature (di#360):
+    # numeric feature_stats() stays empty while the emit hook contributes the
+    # union vocab. A DATE column is not categorical and contributes nothing.
     path = make_csv({"name": ["x", "y"], "when": ["2024-01-01", "2024-01-02"]})
     ing = make_csv_ingestor(schema={"name": "VARCHAR(10)", "when": "DATE"})
     list(ing.read_data(str(path)))
 
     assert ing.feature_stats() == {}
-    # And the emit hook contributes nothing to the payload.
-    assert ing._collect_run_metadata() == {}
+    fs = ing._collect_run_metadata()["attributes"]["feature_stats"]
+    assert fs["name"] == {"categories": ["x", "y"]}
+    assert "when" not in fs
 
 
 def test_feature_stats_nested_under_attributes(make_csv):
@@ -203,10 +207,92 @@ def test_apply_run_metadata_merges_into_attributes(make_csv):
     assert attrs["feature_stats"]["age"]["count"] == 3
 
 
-def test_apply_run_metadata_noop_without_numeric(make_csv):
-    path = make_csv({"name": ["x", "y"]})
-    ing = make_csv_ingestor(schema={"name": "VARCHAR(10)"})
+def test_apply_run_metadata_noop_without_features(make_csv):
+    # No numeric and no categorical feature columns (a lone DATE column) — the
+    # emit hook contributes nothing to the payload.
+    path = make_csv({"when": ["2024-01-01", "2024-01-02"]})
+    ing = make_csv_ingestor(schema={"when": "DATE"})
     list(ing.read_data(str(path)))
 
     ing._apply_run_metadata()
     assert "attributes" not in ing.file_options
+
+
+# ---------------------------------------------------------------------------
+# Categorical union vocab (di#360) — emitted under feature_stats[col].categories
+# ---------------------------------------------------------------------------
+def test_categorical_vocab_sorted_and_deduped(make_csv):
+    path = make_csv({"region": ["S", "N", "S", "E", "N"]})
+    ing = make_csv_ingestor(schema={"region": "VARCHAR(4)"})
+    list(ing.read_data(str(path)))
+
+    assert ing.categorical_vocab() == {"region": ["E", "N", "S"]}
+    fs = ing._collect_run_metadata()["attributes"]["feature_stats"]
+    assert fs["region"] == {"categories": ["E", "N", "S"]}
+
+
+def test_categorical_vocab_accumulates_across_chunks(make_csv):
+    path = make_csv({"c": ["a", "b", "a", "c", "b", "d"]})
+    ing = make_csv_ingestor(schema={"c": "VARCHAR(4)"}, csv_options={"chunk_size": 2})
+    list(ing.read_data(str(path)))
+
+    assert ing.categorical_vocab() == {"c": ["a", "b", "c", "d"]}
+
+
+def test_categorical_vocab_excludes_label_id_annotation(make_csv):
+    # A categorical label is a class (gated by check_same_labels), not a feature
+    # vocab; row-id and annotation are never features.
+    path = make_csv(
+        {
+            "region": ["N", "S"],
+            "label": ["cat", "dog"],
+            "rowid": ["r1", "r2"],
+            "ann": ["a1", "a2"],
+        }
+    )
+    ing = make_csv_ingestor(
+        schema={
+            "region": "VARCHAR(4)",
+            "label": "VARCHAR(8)",
+            "rowid": "VARCHAR(4)",
+            "ann": "VARCHAR(4)",
+        },
+        label_column="label",
+        unique_id_column="rowid",
+        annotation_column="ann",
+        category=TaskCategory.TABULAR_CLASSIFICATION,
+    )
+    list(ing.read_data(str(path)))
+
+    assert set(ing.categorical_vocab()) == {"region"}
+
+
+def test_categorical_vocab_ignores_nulls(make_csv):
+    path = make_csv({"c": ["a", None, "b"]})
+    ing = make_csv_ingestor(schema={"c": "VARCHAR(4)"})
+    list(ing.read_data(str(path)))
+
+    assert ing.categorical_vocab() == {"c": ["a", "b"]}
+
+
+def test_categorical_vocab_dropped_above_cardinality_cap(make_csv, monkeypatch):
+    # A near-unique VARCHAR (free text / id) is not a categorical feature and is
+    # dropped once it crosses the cap, rather than emitting a huge value-set.
+    import tracebloc_ingestor.ingestors.csv_ingestor as mod
+
+    monkeypatch.setattr(mod, "_MAX_CATEGORICAL_CARDINALITY", 3)
+    path = make_csv({"c": ["a", "b", "c", "d", "e"]})  # 5 distinct > cap of 3
+    ing = make_csv_ingestor(schema={"c": "VARCHAR(4)"})
+    list(ing.read_data(str(path)))
+
+    assert ing.categorical_vocab() == {}
+
+
+def test_numeric_and_categorical_coexist_in_feature_stats(make_csv):
+    path = make_csv({"age": [1, 2, 3], "region": ["N", "S", "N"]})
+    ing = make_csv_ingestor(schema={"age": "INT", "region": "VARCHAR(4)"})
+    list(ing.read_data(str(path)))
+
+    fs = ing._collect_run_metadata()["attributes"]["feature_stats"]
+    assert fs["age"]["count"] == 3  # numeric sufficient stats
+    assert fs["region"] == {"categories": ["N", "S"]}  # categorical vocab

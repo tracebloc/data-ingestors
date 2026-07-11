@@ -15,6 +15,7 @@ from ..utils.constants import (
     RED,
     YELLOW,
     CYAN,
+    DataFormat,
 )
 from ..utils import label_policy as label_policy_module
 from ..utils.columns import resolve_column
@@ -420,7 +421,38 @@ class BaseIngestor(ABC):
         text/image facts in later #360 slices) is merged *into* any existing
         ``attributes`` rather than replacing it; other keys ``.update`` normally.
         """
-        return {}
+        return self._scalar_attribute_metadata()
+
+    def _scalar_attribute_metadata(self) -> Dict[str, Any]:
+        """Data-format-derived scalar attributes for combine-time alignment
+        (di#360). Format-agnostic so any ingestor (CSV or JSON manifest)
+        contributes them — image/text datasets are manifest-based and inherit
+        this base hook. Subclasses that override ``_collect_run_metadata`` (e.g.
+        ``CSVIngestor``) must fold this in via ``super()``.
+
+        - **Image:** ``resolution`` from the run's uniform ``target_size`` (the
+          resolution validator enforces every image to it, so no image read is
+          needed here). Emitted as ``[height, width]`` — ``target_size`` is
+          ``[width, height]``.
+        - **Text/NLP:** ``encoding`` is ``"utf-8"`` — text is staged and
+          validated as UTF-8 (non-UTF-8 is rejected at validation), so that is
+          the canonical, true value.
+
+        ``channels``/``color_mode``/``bit_depth`` (need a per-image PIL scan) and
+        ``sampling_frequency`` are separate slices.
+        """
+        attributes: Dict[str, Any] = {}
+
+        if self.data_format == DataFormat.IMAGE:
+            target = self.file_options.get("target_size")
+            if isinstance(target, (list, tuple)) and len(target) == 2:
+                width, height = int(target[0]), int(target[1])
+                attributes["resolution"] = [height, width]
+
+        if self.category in _NLP_CATEGORIES:
+            attributes["encoding"] = "utf-8"
+
+        return {"attributes": attributes} if attributes else {}
 
     def _apply_run_metadata(self) -> None:
         """Merge ``_collect_run_metadata()`` into ``file_options`` just before the
