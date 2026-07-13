@@ -18,6 +18,7 @@ from ..utils.constants import (
 )
 from ..utils import label_policy as label_policy_module
 from ..utils.columns import resolve_column
+from ..utils.correlation import resolve_correlation_id
 from ..utils.validators_mapping import map_validators
 from ..file_transfer import map_file_transfer
 from ..text_profile import compute_text_profile
@@ -122,6 +123,9 @@ class BaseIngestor(ABC):
 
     Attributes:
         ingestor_id: Unique identifier for this ingestor instance
+        correlation_id: End-to-end run id from the TRACEBLOC_INGEST_CORRELATION_ID
+            env var (the CLI's idempotency key, stamped by jobs-manager), or
+            None outside jobs-manager-spawned Jobs (backend#1028 item 3)
         database: Database instance for data storage
         engine: SQLAlchemy engine instance
         api_client: API client for sending data
@@ -196,6 +200,24 @@ class BaseIngestor(ABC):
         self.data_format = data_format
         self.file_options = file_options or {}
         self.label_policy = label_policy
+
+        # backend#1028 item 3: end-to-end correlation id. When spawned by
+        # jobs-manager, the Job env carries the CLI's idempotency key — the
+        # same string the Job name is derived from and the
+        # tracebloc.io/ingestion-run label holds. Kept ALONGSIDE the
+        # per-process ingestor_id (row scoping — label counts, the #227
+        # compensating delete — must stay per-process across Job retries);
+        # riding file_options puts it in the registration payload's
+        # meta_data, so the backend dataset row carries it too. None when
+        # the env is absent/invalid — behaviour is then exactly as before.
+        self.correlation_id = resolve_correlation_id()
+        if self.correlation_id:
+            self.file_options["correlation_id"] = self.correlation_id
+            logger.info(
+                "Correlation id %s (ingestor_id %s)",
+                self.correlation_id,
+                self.ingestor_id,
+            )
 
         # Default behavior is UUID-generated data_id (no source column leaves
         # the cluster). Opting into source-column mapping is allowed but loud:
