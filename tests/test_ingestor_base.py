@@ -1466,3 +1466,120 @@ def test_late_failure_after_registration_never_deletes():
             ing.ingest("src", batch_size=10)
     ing.api_client.send_ingest_summary.assert_called_once()
     ing.database.delete_by_ingestor_id.assert_not_called()
+
+
+# ── backend#1028 item 2: orphan-row reconciliation on start ──────────────────
+# The #227 compensating delete only runs on a CAUGHT failure. A hard kill
+# (OOMKilled / SIGKILL mid-ingest) bypasses it, leaving the dead run's rows in
+# the table with its dataset never registered — and the k8s Job retry then
+# duplicates them. Every ingest therefore (1) reclaims rows of
+# journaled-started-but-never-registered prior runs BEFORE processing,
+# (2) journals its own start BEFORE its first insert, and (3) journals its
+# registration right after send_ingest_summary returns.
+
+
+def _run_happy_ingest(ing):
+    with patch.object(base_mod, "Session") as Sess, patch.object(
+        ing, "validate_data", return_value=True
+    ):
+        Sess.return_value.__enter__.return_value = MagicMock()
+        return ing.ingest("src", batch_size=10)
+
+
+def test_reconcile_and_start_journal_run_before_first_insert():
+    """Order contract: create_table → reclaim orphans → journal own start →
+    first insert_batch. Reconciling after inserting would misread the run's
+    own rows; journaling after inserting would let a kill in between leave
+    rows the journal never heard about (undetectable orphans)."""
+    ing = make_ingestor(records=[{"a": "1"}], label_column="a")
+    _run_happy_ingest(ing)
+
+    ing.database.reclaim_dead_run_rows.assert_called_once_with(
+        ing.table_name, ing.ingestor_id
+    )
+    ing.database.record_ingest_started.assert_called_once_with(
+        ing.table_name, ing.ingestor_id
+    )
+    names = [name for name, _, _ in ing.database.mock_calls]
+    assert names.index("create_table") < names.index("reclaim_dead_run_rows")
+    assert names.index("reclaim_dead_run_rows") < names.index(
+        "record_ingest_started"
+    )
+    assert names.index("record_ingest_started") < names.index("insert_batch")
+
+
+def test_successful_registration_marks_journal_registered():
+    """After send_ingest_summary returns, the run must be journaled as
+    REGISTERED — the durable marker that stops any future reconcile pass from
+    reclaiming this run's rows."""
+    ing = make_ingestor(records=[{"a": "1"}], label_column="a")
+    _run_happy_ingest(ing)
+    ing.database.mark_ingest_registered.assert_called_once_with(
+        ing.table_name, ing.ingestor_id
+    )
+
+
+def test_failed_registration_never_marks_journal_registered():
+    """A run whose registration failed must stay started-but-unregistered in
+    the journal (its rows are removed by the #227 delete anyway, which still
+    fires — asserted here so the two cleanups are known to coexist)."""
+    ing = make_ingestor(records=[{"a": "1"}], label_column="a")
+    ing.api_client.send_ingest_summary.side_effect = RuntimeError(
+        "backend rejected"
+    )
+    with patch.object(base_mod, "Session") as Sess, patch.object(
+        ing, "validate_data", return_value=True
+    ):
+        Sess.return_value.__enter__.return_value = MagicMock()
+        with pytest.raises(RuntimeError):
+            ing.ingest("src", batch_size=10)
+    ing.database.mark_ingest_registered.assert_not_called()
+    ing.database.delete_by_ingestor_id.assert_called_once_with(
+        ing.table_name, ing.ingestor_id
+    )
+
+
+def test_mark_registered_failure_never_fails_a_registered_run(caplog):
+    """The journal UPDATE failing AFTER successful registration must not fail
+    the run (the dataset exists!) nor trigger the #227 delete — raising here
+    would hand the retry a journal entry telling it to purge a registered
+    dataset's rows. Logged CRITICAL instead."""
+    import logging
+
+    ing = make_ingestor(records=[{"a": "1"}], label_column="a")
+    ing.database.mark_ingest_registered.side_effect = Exception("journal down")
+    with caplog.at_level(logging.CRITICAL):
+        _run_happy_ingest(ing)  # must NOT raise
+    ing.database.delete_by_ingestor_id.assert_not_called()
+    assert any(
+        "Failed to journal registration" in r.message for r in caplog.records
+    )
+
+
+def test_reclaim_failure_never_blocks_the_ingest(caplog):
+    """Reconciliation failing (journal table unreachable, unexpected SQL
+    error) must degrade to today's status quo — orphans stay, the ingest
+    itself proceeds — never brick every ingest into that table. Logged
+    CRITICAL."""
+    import logging
+
+    ing = make_ingestor(records=[{"a": "1"}], label_column="a")
+    ing.database.reclaim_dead_run_rows.side_effect = Exception("mysql sick")
+    with caplog.at_level(logging.CRITICAL):
+        _run_happy_ingest(ing)  # must NOT raise
+    ing.database.insert_batch.assert_called()
+    ing.database.record_ingest_started.assert_called_once()
+    assert any(
+        "Orphan-row reconciliation failed" in r.message for r in caplog.records
+    )
+
+
+def test_zero_record_run_journals_start_but_not_registered():
+    """A run that inserts nothing sends no summary, so it must journal its
+    start but never its registration — its (row-less) journal entry is inert
+    for future reconcile passes, which only reclaim ids that still own rows."""
+    ing = make_ingestor(records=[], label_column="a")
+    ing.database.get_label_counts.return_value = {}
+    _run_happy_ingest(ing)
+    ing.database.record_ingest_started.assert_called_once()
+    ing.database.mark_ingest_registered.assert_not_called()

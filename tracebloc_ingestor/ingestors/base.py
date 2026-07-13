@@ -529,6 +529,37 @@ class BaseIngestor(ABC):
                 self.table_name, self._table_schema, index_columns=index_columns
             )
 
+        # Reconcile-on-start (backend#1028 item 2): a prior attempt that died
+        # HARD (OOMKilled / SIGKILL) never reached the #227 compensating
+        # delete in the except-branch below, so its rows are still in the
+        # table while its dataset was never registered — and this run (the
+        # k8s Job retry re-ingests the SAME source into the SAME table) would
+        # otherwise duplicate every one of them under fresh data_ids. Reclaim
+        # those orphans BEFORE processing: the run journal knows exactly
+        # which ingestor_ids started here and never registered. Runs under
+        # the table lock, like the rest of this method. Defensive try/except:
+        # a reconcile failure must never block an otherwise healthy ingest —
+        # the fallback is simply today's status quo (the orphans stay), and
+        # this run's own counts are unaffected because every summary query
+        # is scoped to its ingestor_id.
+        try:
+            self.database.reclaim_dead_run_rows(self.table_name, self.ingestor_id)
+        except Exception as reclaim_error:
+            logger.critical(
+                f"Orphan-row reconciliation failed for table "
+                f"{self.table_name!r}: {reclaim_error}. Continuing the "
+                f"ingest — rows left by a previous hard-killed run may "
+                f"remain in the table (backend#1028)."
+            )
+        # Journal this run as STARTED before its first row insert, so that if
+        # THIS process dies hard at any later point, the next attempt's
+        # reconcile pass can recognise (and reclaim) whatever rows it left
+        # behind. Deliberately NOT wrapped: if MySQL can't take this one-row
+        # insert, the batch inserts below would fail anyway — better to fail
+        # now, before any row lands, than to insert rows the journal never
+        # heard about.
+        self.database.record_ingest_started(self.table_name, self.ingestor_id)
+
         batch = []
         failed_records = []
 
@@ -784,6 +815,30 @@ class BaseIngestor(ABC):
                         meta_data=self.file_options,
                     )
                     dataset_registered = True
+                    # Durably flip the run journal to REGISTERED
+                    # (backend#1028 item 2) so no future reconcile pass can
+                    # mistake this run's rows for orphans. Swallow-and-log on
+                    # failure: the dataset IS registered — raising here would
+                    # fail a healthy run and, worse, hand the retry a
+                    # started-but-unregistered journal entry telling it to
+                    # delete a registered dataset's rows. The residual window
+                    # (process killed between send_ingest_summary returning
+                    # and this UPDATE committing) is strictly narrower than
+                    # the #227 two-generals window documented below.
+                    try:
+                        self.database.mark_ingest_registered(
+                            self.table_name, self.ingestor_id
+                        )
+                    except Exception as journal_error:
+                        logger.critical(
+                            f"Failed to journal registration for "
+                            f"ingestor_id={self.ingestor_id!r} in table "
+                            f"{self.table_name!r}: {journal_error}. A future "
+                            f"ingest into this table could reclaim this "
+                            f"registered dataset's rows as orphans "
+                            f"(backend#1028) — investigate before "
+                            f"re-ingesting into this table."
+                        )
                     stats["api_sent_records"] = stats["inserted_records"]
 
                 summary = IngestionSummary(**stats)

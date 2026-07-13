@@ -207,3 +207,91 @@ def test_blob_columns_roundtrip_from_string_cells(db, table):
     assert failures == []
     rows = _query(f"SELECT payload, thumb FROM `{table}`")
     assert rows[0][0] == b"JVBERi0xLjQ=" and rows[0][1] == b"iVBOR"
+
+
+# ── Run journal: orphan-row reconciliation (backend#1028 item 2) ─────────────
+# A hard kill (OOMKilled / SIGKILL) bypasses the #227 compensating delete, so
+# the dead run's rows survive while its dataset was never registered — and the
+# Job retry then duplicates them. The run journal + reclaim pass below is the
+# fix; these run it against a real MySQL (real DDL, INSERT IGNORE, JOIN).
+
+
+def _run_id(prefix):
+    return f"{prefix}-{uuid.uuid4().hex[:8]}"
+
+
+def test_hard_killed_run_rows_reclaimed_on_retry(db, table):
+    """The bug scenario end-to-end: attempt 1 journals its start, inserts
+    rows, and dies hard (no registration, no compensating delete). The
+    retry's reconcile pass removes exactly those rows, so its own insert
+    (fresh uuid data_ids) converges to N rows instead of 2N."""
+    dead, retry = _run_id("dead"), _run_id("retry")
+    db.create_table(table, {"feature": "FLOAT"})
+
+    # Attempt 1 — the same calls the engine makes, cut off mid-ingest:
+    db.record_ingest_started(table, dead)
+    db.insert_batch(
+        table,
+        [
+            _rec("a1", feature=1.0, ingestor_id=dead),
+            _rec("a2", feature=2.0, ingestor_id=dead),
+        ],
+    )
+    # -- hard kill here: no send_ingest_summary, no #227 delete --
+    assert _query(f"SELECT COUNT(*) FROM `{table}`")[0][0] == 2
+
+    # Attempt 2 (the Job retry), in engine order:
+    reclaimed = db.reclaim_dead_run_rows(table, retry)
+    assert reclaimed == {dead: 2}
+    db.record_ingest_started(table, retry)
+    db.insert_batch(
+        table,
+        [
+            _rec("b1", feature=1.0, ingestor_id=retry),
+            _rec("b2", feature=2.0, ingestor_id=retry),
+        ],
+    )
+    db.mark_ingest_registered(table, retry)
+
+    assert _query(f"SELECT COUNT(*) FROM `{table}`")[0][0] == 2  # converged
+    owners = {r[0] for r in _query(f"SELECT DISTINCT ingestor_id FROM `{table}`")}
+    assert owners == {retry}
+    assert db.get_label_counts(table, retry) == {"": 2}
+
+
+def test_reclaim_never_touches_registered_or_legacy_rows(db, table):
+    """Safety contract: rows of a REGISTERED run (journaled start + mark) and
+    legacy rows that predate the journal entirely (no entry at all — every
+    pre-fix dataset, registered or not) must both survive the reclaim pass
+    untouched."""
+    registered, legacy = _run_id("registered"), _run_id("legacy")
+    db.create_table(table, {"feature": "FLOAT"})
+
+    db.record_ingest_started(table, registered)
+    db.insert_batch(table, [_rec("r1", feature=1.0, ingestor_id=registered)])
+    db.mark_ingest_registered(table, registered)
+
+    # Legacy run: rows only, no journal entry (ingested before the fix).
+    db.insert_batch(table, [_rec("l1", feature=2.0, ingestor_id=legacy)])
+
+    assert db.reclaim_dead_run_rows(table, _run_id("current")) == {}
+    assert _query(f"SELECT COUNT(*) FROM `{table}`")[0][0] == 2
+
+
+def test_reclaim_is_idempotent_and_excludes_current_run(db, table):
+    """Running the reclaim pass twice is safe (second pass finds nothing),
+    and the current run's own journaled-but-unregistered rows are never
+    touched — so the pass may re-run at any point of a live ingest."""
+    dead, current = _run_id("dead"), _run_id("current")
+    db.create_table(table, {"feature": "FLOAT"})
+
+    db.record_ingest_started(table, dead)
+    db.insert_batch(table, [_rec("d1", feature=1.0, ingestor_id=dead)])
+
+    db.record_ingest_started(table, current)
+    db.insert_batch(table, [_rec("c1", feature=2.0, ingestor_id=current)])
+
+    assert db.reclaim_dead_run_rows(table, current) == {dead: 1}
+    assert db.reclaim_dead_run_rows(table, current) == {}  # idempotent
+    rows = _query(f"SELECT data_id, ingestor_id FROM `{table}`")
+    assert rows == [("c1", current)]
