@@ -151,10 +151,13 @@ def _column_types(table):
 
 
 @pytest.mark.parametrize("case", CASES, ids=[c["id"] for c in CASES])
-def test_stored_content_matches_source_csv(case, tmp_path, monkeypatch):
+def test_stored_content_matches_source_csv(case, tmp_path, monkeypatch, request):
     cfg = case["cfg"]
     table = cfg["table"]
     _drop(table)  # deterministic on re-run
+    # Drop again on exit so a passing run leaves the DB clean and a re-run
+    # (or a later fixture) never trips over a leftover table.
+    request.addfinalizer(lambda: _drop(table))
 
     config_path = tmp_path / "ingest.yaml"
     config_path.write_text(yaml.safe_dump(cfg))
