@@ -1,7 +1,7 @@
 """End-to-end ingest correlation id (backend#1028 item 3).
 
 One id threads a single ingest run across every layer. The CLI generates an
-idempotency key per ``tracebloc dataset push`` invocation; jobs-manager
+idempotency key per ``tracebloc data ingest`` invocation; jobs-manager
 (client-runtime) derives the Job name from that key, labels every spawned
 resource with it (``tracebloc.io/ingestion-run``), and stamps it into the
 ingestor container as the ``TRACEBLOC_INGEST_CORRELATION_ID`` env var. This
