@@ -517,6 +517,8 @@ class BaseIngestor(ABC):
         - **Survival (time-to-event):** uploader-declared ``time_unit`` and
           ``event_indicator`` (``{event, censored}``), re-checked against the
           contract's accepted shapes before emission.
+        - **Embeddings:** uploader-declared ``positive_definition`` (what counts
+          as a positive pair) — the embeddings-specific alignment fact.
         """
         attributes: Dict[str, Any] = {}
 
@@ -575,6 +577,14 @@ class BaseIngestor(ABC):
                     "event": int(event_indicator["event"]),
                     "censored": int(event_indicator["censored"]),
                 }
+
+        if self.category == TaskCategory.EMBEDDINGS:
+            # The embeddings-specific alignment fact (uploader-declared): what
+            # defines a positive pair. Its own contract field, distinct from the
+            # text facts above (which the contract does not allow on embeddings).
+            positive_definition = self.file_options.get("positive_definition")
+            if isinstance(positive_definition, str) and positive_definition.strip():
+                attributes["positive_definition"] = positive_definition.strip()
 
         return {"attributes": attributes} if attributes else {}
 
@@ -1000,7 +1010,14 @@ class BaseIngestor(ABC):
                         category=self.category,
                         schema=self._schema_payload(schema_dict),
                         samples=samples,
-                        meta_data=self.file_options,
+                        # The internal, label-stripped ``schema`` copy in
+                        # file_options is a validator artifact; the canonical
+                        # schema ships as the top-level ``schema`` arg above
+                        # (enriched, target-bearing). Drop the duplicate so a
+                        # single, unambiguous schema is on the wire (G8, #360).
+                        meta_data={
+                            k: v for k, v in self.file_options.items() if k != "schema"
+                        },
                     )
                     dataset_registered = True
                     stats["api_sent_records"] = stats["inserted_records"]

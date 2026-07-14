@@ -447,3 +447,10 @@ def test_invalid_event_indicator_raises():
     config["event_indicator"] = {"event": 1}  # missing 'censored'
     with pytest.raises(ValueError, match="event_indicator"):
         resolve(config)
+
+
+def test_positive_definition_bridged():
+    config = _load("embeddings.yaml")
+    config["positive_definition"] = "same-question paraphrase"
+    r = resolve(config)
+    assert r.file_options["positive_definition"] == "same-question paraphrase"

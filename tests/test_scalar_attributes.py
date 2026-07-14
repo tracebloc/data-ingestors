@@ -291,3 +291,31 @@ def test_survival_facts_not_emitted_for_tabular():
     )
     attrs = ing._collect_run_metadata().get("attributes", {})
     assert "time_unit" not in attrs
+
+
+# ---------------------------------------------------------------------------
+# Embeddings alignment fact: positive_definition (uploader-declared)
+# ---------------------------------------------------------------------------
+def test_positive_definition_emitted_for_embeddings():
+    ing = make_ingestor(
+        schema={"filename": "VARCHAR(64)"},
+        category=TaskCategory.EMBEDDINGS,
+        data_format=DataFormat.TEXT,
+        file_options={"positive_definition": "same-question paraphrase"},
+    )
+    attrs = ing._collect_run_metadata()["attributes"]
+    assert attrs["positive_definition"] == "same-question paraphrase"
+    # embeddings is not a text category — no encoding/language leaks in.
+    assert "encoding" not in attrs and "language" not in attrs
+
+
+def test_positive_definition_not_emitted_for_text():
+    ing = make_ingestor(
+        schema={"filename": "VARCHAR(64)", "label": "VARCHAR(8)"},
+        category=TaskCategory.TEXT_CLASSIFICATION,
+        data_format=DataFormat.TEXT,
+        label_column="label",
+        file_options={"positive_definition": "nope"},
+    )
+    attrs = ing._collect_run_metadata()["attributes"]
+    assert "positive_definition" not in attrs

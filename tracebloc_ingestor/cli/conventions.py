@@ -404,6 +404,15 @@ def resolve(config: Dict[str, Any]) -> ResolvedConfig:
             "censored": int(ev["censored"]),
         }
 
+    # 7g. Embeddings: the uploader-declared `positive_definition` — what counts
+    #     as a positive pair (di#360). Any string; passed through for the
+    #     embeddings category. Same spec.file_options-wins precedence.
+    if (
+        "positive_definition" in config
+        and "positive_definition" not in spec_file_options
+    ):
+        resolved.file_options["positive_definition"] = config["positive_definition"]
+
     # 8. annotation_column — keypoint_detection's existing template uses
     #    column "Annotation" (the keypoint coords carried in the CSV). The
     #    YAML schema doesn't expose this directly in v1; we honour the
