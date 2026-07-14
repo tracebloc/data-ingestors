@@ -365,6 +365,45 @@ def resolve(config: Dict[str, Any]) -> ResolvedConfig:
     if "columns" in config and "column_descriptors" not in spec_file_options:
         resolved.file_options["column_descriptors"] = config["columns"]
 
+    # 7e. Text alignment facts the uploader declares (di#360): the dataset
+    #     `language` and the text `normalization` applied. Emitted for text
+    #     categories; carried on file_options for BaseIngestor to attach. Passed
+    #     through as-is (any string) — the contract accepts any string.
+    if "language" in config and "language" not in spec_file_options:
+        resolved.file_options["language"] = config["language"]
+    if "normalization" in config and "normalization" not in spec_file_options:
+        resolved.file_options["normalization"] = config["normalization"]
+
+    # 7f. Survival (time-to-event) alignment facts (di#360): the duration
+    #     `time_unit` and the `event_indicator` encoding. Validated here so a bad
+    #     value fails at config time, not silently after ingest. Same
+    #     spec.file_options-wins precedence as the bridges above.
+    if "time_unit" in config and "time_unit" not in spec_file_options:
+        time_unit = config["time_unit"]
+        if time_unit not in ("days", "weeks", "months", "years"):
+            raise ValueError(
+                f"Invalid time_unit {time_unit!r}; supported values are "
+                f"'days', 'weeks', 'months', 'years'."
+            )
+        resolved.file_options["time_unit"] = time_unit
+    if "event_indicator" in config and "event_indicator" not in spec_file_options:
+        ev = config["event_indicator"]
+        if (
+            not isinstance(ev, dict)
+            or isinstance(ev.get("event"), bool)
+            or isinstance(ev.get("censored"), bool)
+            or not isinstance(ev.get("event"), int)
+            or not isinstance(ev.get("censored"), int)
+        ):
+            raise ValueError(
+                "Invalid event_indicator; expected an object "
+                "{event: <int>, censored: <int>}."
+            )
+        resolved.file_options["event_indicator"] = {
+            "event": int(ev["event"]),
+            "censored": int(ev["censored"]),
+        }
+
     # 8. annotation_column — keypoint_detection's existing template uses
     #    column "Annotation" (the keypoint coords carried in the CSV). The
     #    YAML schema doesn't expose this directly in v1; we honour the

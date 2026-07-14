@@ -37,9 +37,16 @@ def make_ingestor(*, enriched: bool, label_column=None, file_options=None):
 # ---- the config gate ----------------------------------------------------
 
 
-def test_gate_defaults_off(monkeypatch):
+def test_gate_defaults_on(monkeypatch):
+    # Default is now ON — backend#1037 / engine#460 depend on the enriched shape.
     monkeypatch.delenv("EMIT_ENRICHED_SCHEMA", raising=False)
-    assert Config().EMIT_ENRICHED_SCHEMA is False
+    assert Config().EMIT_ENRICHED_SCHEMA is True
+
+
+def test_gate_empty_env_is_unset_defaults_on(monkeypatch):
+    # An empty value is treated as unset (not a falsey override) -> default on.
+    monkeypatch.setenv("EMIT_ENRICHED_SCHEMA", "")
+    assert Config().EMIT_ENRICHED_SCHEMA is True
 
 
 @pytest.mark.parametrize("val", ["1", "true", "TRUE", "yes", "On"])
@@ -48,8 +55,9 @@ def test_gate_truthy_env(monkeypatch, val):
     assert Config().EMIT_ENRICHED_SCHEMA is True
 
 
-@pytest.mark.parametrize("val", ["0", "false", "no", "", "maybe"])
+@pytest.mark.parametrize("val", ["0", "false", "no", "maybe"])
 def test_gate_falsy_env(monkeypatch, val):
+    # A non-empty, non-truthy value forces the legacy flat map back off.
     monkeypatch.setenv("EMIT_ENRICHED_SCHEMA", val)
     assert Config().EMIT_ENRICHED_SCHEMA is False
 

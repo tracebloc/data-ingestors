@@ -203,3 +203,91 @@ def test_temporal_not_emitted_for_non_time_series(make_csv):
     attrs = ing._collect_run_metadata().get("attributes", {})
     assert "timezone" not in attrs
     assert "sampling_frequency" not in attrs
+
+
+# ---------------------------------------------------------------------------
+# Text alignment facts: language + normalization (uploader-declared, text-only)
+# ---------------------------------------------------------------------------
+def test_language_and_normalization_emitted_for_text():
+    ing = make_ingestor(
+        schema={"filename": "VARCHAR(64)", "label": "VARCHAR(8)"},
+        category=TaskCategory.TEXT_CLASSIFICATION,
+        data_format=DataFormat.TEXT,
+        label_column="label",
+        file_options={"language": "en", "normalization": "nfc"},
+    )
+    attrs = ing._collect_run_metadata()["attributes"]
+    assert attrs["encoding"] == "utf-8"
+    assert attrs["language"] == "en"
+    assert attrs["normalization"] == "nfc"
+
+
+def test_text_facts_absent_when_not_declared():
+    ing = make_ingestor(
+        schema={"filename": "VARCHAR(64)", "label": "VARCHAR(8)"},
+        category=TaskCategory.TEXT_CLASSIFICATION,
+        data_format=DataFormat.TEXT,
+        label_column="label",
+    )
+    attrs = ing._collect_run_metadata()["attributes"]
+    assert "language" not in attrs and "normalization" not in attrs
+
+
+def test_no_text_facts_for_embeddings():
+    # embeddings is NLP but NOT a text category in the contract — the backend
+    # rejects text facts on it, so none must be emitted (not even encoding).
+    ing = make_ingestor(
+        schema={"filename": "VARCHAR(64)"},
+        category=TaskCategory.EMBEDDINGS,
+        data_format=DataFormat.TEXT,
+        file_options={"language": "en", "normalization": "nfc"},
+    )
+    attrs = ing._collect_run_metadata().get("attributes", {})
+    assert "encoding" not in attrs
+    assert "language" not in attrs
+    assert "normalization" not in attrs
+
+
+# ---------------------------------------------------------------------------
+# Survival alignment facts: time_unit + event_indicator (uploader-declared)
+# ---------------------------------------------------------------------------
+def test_survival_facts_emitted_for_time_to_event():
+    ing = make_ingestor(
+        schema={"duration": "FLOAT", "label": "INT"},
+        category=TaskCategory.TIME_TO_EVENT_PREDICTION,
+        label_column="label",
+        file_options={
+            "time_unit": "days",
+            "event_indicator": {"event": 1, "censored": 0},
+        },
+    )
+    attrs = ing._collect_run_metadata()["attributes"]
+    assert attrs["time_unit"] == "days"
+    assert attrs["event_indicator"] == {"event": 1, "censored": 0}
+
+
+def test_survival_facts_reject_bad_shape_at_emission():
+    # A bad value that bypassed conventions.resolve (set straight on file_options)
+    # is dropped, not emitted — it can never reach the contract as a 400.
+    ing = make_ingestor(
+        schema={"duration": "FLOAT", "label": "INT"},
+        category=TaskCategory.TIME_TO_EVENT_PREDICTION,
+        label_column="label",
+        file_options={
+            "time_unit": "fortnights",
+            "event_indicator": {"event": True, "censored": 0},
+        },
+    )
+    attrs = ing._collect_run_metadata().get("attributes", {})
+    assert "time_unit" not in attrs
+    assert "event_indicator" not in attrs
+
+
+def test_survival_facts_not_emitted_for_tabular():
+    ing = make_ingestor(
+        schema={"a": "INT"},
+        category=TaskCategory.TABULAR_CLASSIFICATION,
+        file_options={"time_unit": "days"},
+    )
+    attrs = ing._collect_run_metadata().get("attributes", {})
+    assert "time_unit" not in attrs

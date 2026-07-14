@@ -407,3 +407,43 @@ def test_columns_bridge_into_file_options():
 def test_no_columns_leaves_no_descriptors():
     r = resolve(_load("tabular_classification.yaml"))
     assert "column_descriptors" not in r.file_options
+
+
+# ---------------------------------------------------------------------------
+# Text + survival alignment facts bridged into file_options (di#360)
+# ---------------------------------------------------------------------------
+def test_language_and_normalization_bridged():
+    config = _load("text_classification.yaml")
+    config["language"] = "en"
+    config["normalization"] = "nfc"
+    r = resolve(config)
+    assert r.file_options["language"] == "en"
+    assert r.file_options["normalization"] == "nfc"
+
+
+def test_time_unit_bridged():
+    config = _load("time_to_event_prediction.yaml")
+    config["time_unit"] = "months"
+    r = resolve(config)
+    assert r.file_options["time_unit"] == "months"
+
+
+def test_invalid_time_unit_raises():
+    config = _load("time_to_event_prediction.yaml")
+    config["time_unit"] = "fortnights"
+    with pytest.raises(ValueError, match="time_unit"):
+        resolve(config)
+
+
+def test_event_indicator_bridged():
+    config = _load("time_to_event_prediction.yaml")
+    config["event_indicator"] = {"event": 1, "censored": 0}
+    r = resolve(config)
+    assert r.file_options["event_indicator"] == {"event": 1, "censored": 0}
+
+
+def test_invalid_event_indicator_raises():
+    config = _load("time_to_event_prediction.yaml")
+    config["event_indicator"] = {"event": 1}  # missing 'censored'
+    with pytest.raises(ValueError, match="event_indicator"):
+        resolve(config)

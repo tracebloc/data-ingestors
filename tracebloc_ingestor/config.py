@@ -221,18 +221,21 @@ class Config:
         metadata channel — ``{col: {dtype, role, …}}`` — instead of the legacy
         flat ``{col: SQL_type}`` map (data-ingestors#360 slice 1b).
 
-        This is a **breaking wire-format change**: the object-per-column shape is
-        only understood by a backend carrying backend#1037 (its ``_column_dtype``
-        reads both shapes; older backends parse ``schema`` values as type
-        strings). So it defaults to **off** and must be flipped on in the
-        deployment only once the paired backend is live — the coordinated
-        cutover the #360 plan calls for. ``feature_stats`` is unaffected
-        (additive, already live).
+        Defaults to **on**: the paired backend (backend#1037 — its
+        ``_canonical_schema`` preserves the enriched shape and ``_column_dtype``
+        reads both) and edge (tracebloc-engine#460 — reads ``role`` from the
+        schema to identify the prediction target) now depend on it. Set the
+        ``EMIT_ENRICHED_SCHEMA`` env var / override to a falsey value ("0",
+        "false", …) to force the legacy flat map back for a deployment whose
+        backend predates the cutover. ``feature_stats`` is unaffected (additive).
         """
         ov = self._override("EMIT_ENRICHED_SCHEMA")
         if ov is not _MISSING:
             return ov if isinstance(ov, bool) else str(ov).strip().lower() in self._TRUE_STRINGS
-        return os.environ.get("EMIT_ENRICHED_SCHEMA", "").strip().lower() in self._TRUE_STRINGS
+        env = os.environ.get("EMIT_ENRICHED_SCHEMA")
+        if env is not None and env.strip() != "":
+            return env.strip().lower() in self._TRUE_STRINGS
+        return True
 
     def validate(self) -> None:
         """Fail fast on missing backend authentication.

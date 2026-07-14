@@ -16,6 +16,7 @@ from ..utils.constants import (
     YELLOW,
     CYAN,
     DataFormat,
+    TaskCategory,
     COLOR_MODE_CHANNELS,
     canonical_color_mode,
 )
@@ -68,6 +69,28 @@ _TARGET_COLUMN = "label"
 # convention would surface as a mismatch.
 _NULL_ENCODING = "null"
 _BOOL_ENCODING = "1/0"
+
+# Text alignment facts (encoding/language/normalization) apply to the text
+# categories only — the NLP modalities minus embeddings, whose per-category fact
+# is the embedding-specific ``positive_definition`` instead. Mirrors the
+# backend contract's ``_TEXT`` group; the contract rejects a text fact declared
+# on the embeddings category, so scoping here keeps ingest from being rejected.
+_TEXT_CATEGORIES = _NLP_CATEGORIES - {TaskCategory.EMBEDDINGS}
+
+# Survival (time-to-event) duration units the combine-time contract accepts.
+_TIME_UNITS = ("days", "weeks", "months", "years")
+
+
+def _valid_event_indicator(v: Any) -> bool:
+    """A survival ``event_indicator`` is ``{event: int, censored: int}`` — the
+    contract's shape (backend#1037). bool is rejected (it's an int subclass)."""
+    return (
+        isinstance(v, dict)
+        and not isinstance(v.get("event"), bool)
+        and not isinstance(v.get("censored"), bool)
+        and isinstance(v.get("event"), int)
+        and isinstance(v.get("censored"), int)
+    )
 
 
 def _rows_state_clause(inserted_records: int) -> str:
@@ -487,9 +510,13 @@ class BaseIngestor(ABC):
           ``bit_depth`` from ``file_options`` when the user supplies them for the
           vision run (RGB/grayscale only — the values the contract accepts). Not
           auto-detected: PIL modes like RGBA/CMYK aren't in the contract enum.
-        - **Text/NLP:** ``encoding`` is ``"utf-8"`` — text is staged and
-          validated as UTF-8 (non-UTF-8 is rejected at validation), so that is
-          the canonical, true value.
+        - **Text:** ``encoding`` is ``"utf-8"`` (text is staged/validated as
+          UTF-8, the canonical value); ``language`` and ``normalization`` are
+          uploader-declared when present. Text categories only (not embeddings,
+          which the contract scopes to its own ``positive_definition``).
+        - **Survival (time-to-event):** uploader-declared ``time_unit`` and
+          ``event_indicator`` (``{event, censored}``), re-checked against the
+          contract's accepted shapes before emission.
         """
         attributes: Dict[str, Any] = {}
 
@@ -518,8 +545,36 @@ class BaseIngestor(ABC):
             ):
                 attributes["bit_depth"] = bit_depth
 
-        if self.category in _NLP_CATEGORIES:
+        if self.category in _TEXT_CATEGORIES:
+            # encoding is the canonical UTF-8 (text is staged/validated as UTF-8).
             attributes["encoding"] = "utf-8"
+            # language + text normalization are uploader-declared alignment facts
+            # (bridged into file_options by conventions.resolve); they drive the
+            # edge's cross-client text handling and the backend's BLOCK check on
+            # a language mismatch, so emit them when declared.
+            language = self.file_options.get("language")
+            if isinstance(language, str) and language.strip():
+                attributes["language"] = language.strip()
+            normalization = self.file_options.get("normalization")
+            if isinstance(normalization, str) and normalization.strip():
+                attributes["normalization"] = normalization.strip()
+
+        if self.category == TaskCategory.TIME_TO_EVENT_PREDICTION:
+            # Survival alignment facts, uploader-declared (di#360): the duration
+            # unit and the event/censoring encoding. Both are BLOCK-guarded on
+            # mismatch by the backend, so a merge silently flipping event vs
+            # censored — or comparing days against months — is caught. Re-checked
+            # against the contract's shape here (a value set directly in
+            # spec.file_options bypasses conventions.resolve's validation).
+            time_unit = self.file_options.get("time_unit")
+            if time_unit in _TIME_UNITS:
+                attributes["time_unit"] = time_unit
+            event_indicator = self.file_options.get("event_indicator")
+            if _valid_event_indicator(event_indicator):
+                attributes["event_indicator"] = {
+                    "event": int(event_indicator["event"]),
+                    "censored": int(event_indicator["censored"]),
+                }
 
         return {"attributes": attributes} if attributes else {}
 
