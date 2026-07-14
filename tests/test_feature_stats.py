@@ -128,8 +128,11 @@ def test_feature_stats_includes_target_for_regression_class(make_csv, category):
     list(ing.read_data(str(path)))
 
     stats = ing.feature_stats()
-    assert set(stats) == {"feat", "target"}
-    assert stats["target"] == {
+    # The target is re-keyed from its original name ("target") to the
+    # standardized "label" so it matches the enriched schema's role:"target".
+    assert set(stats) == {"feat", "label"}
+    assert "target" not in stats
+    assert stats["label"] == {
         "count": 3,
         "sum": 60.0,
         "sum_sq": 10.0**2 + 20.0**2 + 30.0**2,
@@ -137,6 +140,22 @@ def test_feature_stats_includes_target_for_regression_class(make_csv, category):
         "max": pytest.approx(30.0),
     }
     assert "rowid" not in stats
+
+
+def test_target_already_named_label_is_left_in_place(make_csv):
+    # If the user's label column is already "label", the re-key is a no-op
+    # (no self-clobber) and the target stats are present under "label".
+    path = make_csv({"feat": [1, 2], "label": [10, 20]})
+    ing = make_csv_ingestor(
+        schema={"feat": "FLOAT", "label": "FLOAT"},
+        label_column="label",
+        category=TaskCategory.TIME_SERIES_FORECASTING,
+    )
+    list(ing.read_data(str(path)))
+
+    stats = ing.feature_stats()
+    assert set(stats) == {"feat", "label"}
+    assert stats["label"]["count"] == 2
 
 
 def test_feature_stats_ignores_nulls(make_csv):

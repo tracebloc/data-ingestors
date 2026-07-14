@@ -96,6 +96,14 @@ logger.setLevel(config.LOG_LEVEL)
 
 __all__ = ["CSVIngestor"]
 
+# The framework's standard prediction-target column: the user's label_column is
+# mapped onto a fixed ``label`` column (database.create_table), and the enriched
+# schema flags THAT column role:"target". feature_stats keys the regression-class
+# target under the same name so the two channels agree on the target key — a
+# consumer can look up feature_stats[label] directly instead of guessing which
+# column is the target (see the tracebloc-engine TSF scaler_y seeding).
+_TARGET_COLUMN = "label"
+
 
 def _cast_datetime_strict(series: pd.Series, column: str, dtype: str) -> pd.Series:
     """Cast a CSV column to datetime with the SAME error policy as numeric
@@ -462,8 +470,24 @@ class CSVIngestor(BaseIngestor):
         Empty when the dataset has no numeric feature columns (e.g. an image
         manifest, or a table of only string/date columns) — the caller then
         omits the field entirely.
+
+        For regression-class tasks the target's stats are re-keyed from its
+        original CSV column name to the standardized ``label`` name, so the key
+        matches the enriched schema's ``role: "target"`` column and the target
+        stored in the DB ``label`` column. Feature columns keep their own names.
         """
-        return {col: dict(stats) for col, stats in self._feature_stats_acc.items()}
+        stats = {col: dict(s) for col, s in self._feature_stats_acc.items()}
+        if (
+            self.label_column
+            and self.category in REGRESSION_CLASS_CATEGORIES
+            and self.label_column in stats
+            and self.label_column != _TARGET_COLUMN
+        ):
+            # pop→assign standardizes the key; if a feature were literally named
+            # "label" it would collide, but "label" is the framework's own target
+            # column name, so a user feature can't legitimately claim it.
+            stats[_TARGET_COLUMN] = stats.pop(self.label_column)
+        return stats
 
     def _collect_run_metadata(self) -> Dict[str, Any]:
         """Contribute ``feature_stats`` under the shared ``attributes`` namespace
