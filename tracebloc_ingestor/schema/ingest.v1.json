@@ -137,6 +137,28 @@
       "description": "Column → SQL type map (e.g. {'age': 'INT', 'name': 'VARCHAR(255)'}). Required for tabular and time-series categories."
     },
 
+    "columns": {
+      "type": "object",
+      "description": "Optional per-column alignment descriptors that cannot be inferred from the data. Keyed by column name; every field is optional. Used at dataset-combination time to keep merged datasets consistent.",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "unit": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Physical unit of the column's values (e.g. 'years', 'USD'). Combining columns whose declared units disagree is flagged, so an income-in-USD dataset isn't silently merged with income-in-EUR."
+          },
+          "ordinal": {
+            "type": "array",
+            "items": { "type": "string" },
+            "minItems": 1,
+            "description": "Category values in order (low → high) for an ordinal column, so the ordering is preserved consistently across merged datasets."
+          }
+        }
+      }
+    },
+
     "time_column": {
       "type": "string",
       "minLength": 1,

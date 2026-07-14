@@ -356,3 +356,22 @@ def test_json_source_dispatches_correctly():
     r = resolve(config)
     assert r.source_type == "json"
     assert r.source_path == "/data/events.json"
+
+
+# ---------------------------------------------------------------------------
+# Uploader-declared per-column descriptors (di#360)
+# ---------------------------------------------------------------------------
+
+def test_columns_bridge_into_file_options():
+    """Top-level `columns` (unit/ordinal) is carried on file_options as
+    `column_descriptors`, where BaseIngestor merges it into the enriched
+    schema."""
+    config = _load("tabular_classification.yaml")
+    config["columns"] = {"age": {"unit": "years"}}
+    r = resolve(config)
+    assert r.file_options["column_descriptors"] == {"age": {"unit": "years"}}
+
+
+def test_no_columns_leaves_no_descriptors():
+    r = resolve(_load("tabular_classification.yaml"))
+    assert "column_descriptors" not in r.file_options

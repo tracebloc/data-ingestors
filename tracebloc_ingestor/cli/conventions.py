@@ -335,6 +335,15 @@ def resolve(config: Dict[str, Any]) -> ResolvedConfig:
     ):
         resolved.file_options["number_of_keypoints"] = config["number_of_keypoints"]
 
+    # 7c. Uploader-declared per-column descriptors (`unit`, `ordinal`) — the
+    #     alignment facts that CAN'T be inferred from the data (di#360). Carried
+    #     on file_options so BaseIngestor merges them into the enriched schema
+    #     descriptors, where the backend's combine-time checks read them (a USD
+    #     vs EUR `unit` mismatch is a silent federated-data hazard). Same
+    #     spec.file_options-wins precedence as the bridges above.
+    if "columns" in config and "column_descriptors" not in spec_file_options:
+        resolved.file_options["column_descriptors"] = config["columns"]
+
     # 8. annotation_column — keypoint_detection's existing template uses
     #    column "Annotation" (the keypoint coords carried in the CSV). The
     #    YAML schema doesn't expose this directly in v1; we honour the

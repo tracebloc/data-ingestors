@@ -471,6 +471,21 @@ class BaseIngestor(ABC):
         # must not claim one.
         if self.label_column and _TARGET_COLUMN in enriched:
             enriched[_TARGET_COLUMN]["role"] = "target"
+
+        # Merge uploader-declared per-column descriptors that CAN'T be inferred
+        # from the data — ``unit`` and ``ordinal`` (di#360). These activate the
+        # backend's combine-time descriptor checks (e.g. a ``unit`` mismatch —
+        # merging a USD column with an EUR one — is otherwise silent). Declared
+        # by CSV column name; entries for a column absent from the schema (or the
+        # target, which the physical schema keys as ``label``) are ignored.
+        declared = self.file_options.get("column_descriptors") or {}
+        for col, desc in declared.items():
+            if col not in enriched or not isinstance(desc, dict):
+                continue
+            if desc.get("unit") is not None:
+                enriched[col]["unit"] = desc["unit"]
+            if desc.get("ordinal") is not None:
+                enriched[col]["ordinal"] = desc["ordinal"]
         return enriched
 
     def _count_records(self, source: Any) -> Optional[int]:

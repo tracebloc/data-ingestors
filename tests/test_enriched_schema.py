@@ -18,7 +18,7 @@ from tracebloc_ingestor.config import Config
 from tracebloc_ingestor.ingestors.csv_ingestor import CSVIngestor
 
 
-def make_ingestor(*, enriched: bool, label_column=None):
+def make_ingestor(*, enriched: bool, label_column=None, file_options=None):
     db = MagicMock()
     db.config = Config(EMIT_ENRICHED_SCHEMA=enriched)
     api = MagicMock()
@@ -30,6 +30,7 @@ def make_ingestor(*, enriched: bool, label_column=None):
         intent="train",
         category=None,
         label_column=label_column,
+        file_options=file_options,
     )
 
 
@@ -99,6 +100,43 @@ def test_no_target_role_for_self_supervised():
 
     assert out["label"] == {"dtype": "string"}
     assert "role" not in out["label"]
+
+
+def test_declared_unit_and_ordinal_merged_into_descriptors():
+    # Uploader-declared column descriptors (di#360) ride on file_options and are
+    # merged into the enriched schema for columns that exist in it.
+    ing = make_ingestor(
+        enriched=True,
+        label_column="y",
+        file_options={
+            "column_descriptors": {
+                "a": {"unit": "years"},
+                "b": {"ordinal": ["low", "med", "high"]},
+            }
+        },
+    )
+    out = ing._schema_payload({"a": "INT", "b": "VARCHAR(10)"})
+    assert out["a"] == {"dtype": "int", "unit": "years"}
+    assert out["b"] == {"dtype": "string", "ordinal": ["low", "med", "high"]}
+
+
+def test_declared_descriptor_for_unknown_column_ignored():
+    ing = make_ingestor(
+        enriched=True,
+        file_options={"column_descriptors": {"ghost": {"unit": "kg"}}},
+    )
+    out = ing._schema_payload({"a": "INT"})
+    assert out == {"a": {"dtype": "int"}}
+
+
+def test_declared_descriptors_ignored_when_gate_off():
+    # Descriptors are part of the enriched contract; the flat legacy shape
+    # carries none.
+    ing = make_ingestor(
+        enriched=False,
+        file_options={"column_descriptors": {"a": {"unit": "years"}}},
+    )
+    assert ing._schema_payload({"a": "INT"}) == {"a": "INT"}
 
 
 def test_enriched_does_not_mutate_input():
