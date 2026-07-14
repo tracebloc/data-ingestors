@@ -102,7 +102,7 @@ def test_unknown_override_kwarg_raises(clean_env):
     assert "NOT_A_REAL_FIELD" in str(exc.value)
 
 
-@pytest.mark.parametrize("field", ["DB_PORT", "BATCH_SIZE"])
+@pytest.mark.parametrize("field", ["DB_PORT", "BATCH_SIZE", "CATEGORICAL_MIN_COUNT"])
 def test_numeric_override_rejects_none_at_construction(clean_env, field):
     """``None`` is a valid suppression for nullable fields (BACKEND_TOKEN
     etc.) but is nonsensical for numeric ones whose properties do
@@ -116,10 +116,20 @@ def test_numeric_override_rejects_none_at_construction(clean_env, field):
     assert "None" in msg
 
 
-@pytest.mark.parametrize("field,value", [("DB_PORT", 3307), ("BATCH_SIZE", "8000")])
+@pytest.mark.parametrize(
+    "field,value",
+    [("DB_PORT", 3307), ("BATCH_SIZE", "8000"), ("CATEGORICAL_MIN_COUNT", "5")],
+)
 def test_numeric_override_accepts_ints_and_str_ints(clean_env, field, value):
     config = Config(**{field: value})
     assert getattr(config, field) == int(value)
+
+
+def test_categorical_min_count_defaults_to_one(clean_env, monkeypatch):
+    """Default is 1 — no rare-category suppression until a deployment opts in
+    (the privacy/OOV trade needs backend sign-off)."""
+    monkeypatch.delenv("CATEGORICAL_MIN_COUNT", raising=False)
+    assert Config().CATEGORICAL_MIN_COUNT == 1
 
 
 def test_laptop_path_defaults_are_gone(clean_env):

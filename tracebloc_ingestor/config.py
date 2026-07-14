@@ -42,13 +42,14 @@ class Config:
         "BACKEND_TOKEN", "CLIENT_USERNAME", "CLIENT_PASSWORD",
         "SRC_PATH", "LABEL_FILE", "TABLE_NAME", "TITLE",
         "LOG_LEVEL",
+        "CATEGORICAL_MIN_COUNT",
     })
 
     # Numeric fields whose properties unconditionally coerce via ``int(...)``.
     # ``Config(FIELD=None)`` works for nullable fields (BACKEND_TOKEN etc.)
     # but is nonsensical here — reject at construction with a clear message
     # rather than letting ``int(None)`` blow up later at property access.
-    _NUMERIC_FIELDS = frozenset({"DB_PORT", "BATCH_SIZE"})
+    _NUMERIC_FIELDS = frozenset({"DB_PORT", "BATCH_SIZE", "CATEGORICAL_MIN_COUNT"})
 
     def __init__(self, **overrides: Any) -> None:
         unknown = set(overrides) - self._ENV_FIELDS
@@ -125,6 +126,23 @@ class Config:
         ov = self._override("BATCH_SIZE")
         raw = ov if ov is not _MISSING else os.environ.get("BATCH_SIZE", "4000")
         return self._as_int("BATCH_SIZE", "BATCH_SIZE", raw)
+
+    @property
+    def CATEGORICAL_MIN_COUNT(self) -> int:
+        """Minimum occurrence count for a categorical value to be emitted in the
+        alignment vocab (data-ingestors#360). Values seen fewer than this many
+        times are suppressed — a re-identification guard for rare categories
+        (a value present for a single record).
+
+        Defaults to **1** (keep every observed value — no suppression), because
+        raising it drops rare values from the union vocab, which the edge must
+        then handle as out-of-vocabulary at encode time; that trade needs the
+        backend privacy sign-off + engine OOV handling (backend#1079/#1053). Set
+        it above 1 in the deployment once those are in place.
+        """
+        ov = self._override("CATEGORICAL_MIN_COUNT")
+        raw = ov if ov is not _MISSING else os.environ.get("CATEGORICAL_MIN_COUNT", "1")
+        return self._as_int("CATEGORICAL_MIN_COUNT", "CATEGORICAL_MIN_COUNT", raw)
 
     # ===== API =====
     @property

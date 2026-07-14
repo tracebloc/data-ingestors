@@ -6,6 +6,7 @@ pandas-based reading and validation capabilities.
 
 from typing import Dict, Any, Generator, Optional, List
 import codecs
+from collections import Counter
 import csv as _csv
 import numpy as np
 import pandas as pd
@@ -254,7 +255,10 @@ class CSVIngestor(BaseIngestor):
         # ``_MAX_CATEGORICAL_CARDINALITY`` is dropped (free text / id, not a
         # categorical feature). Emitting the value-set discloses category
         # presence — the same accepted trade as feature_stats min/max.
-        self._categorical_acc: Dict[str, set] = {}
+        # Per-value OCCURRENCE COUNTS (not just presence) so a min-count
+        # threshold can suppress rare, re-identifying values at finalize
+        # (CATEGORICAL_MIN_COUNT).
+        self._categorical_acc: Dict[str, Counter] = {}
         self._categorical_over_cap: set = set()
         self._categorical_excluded = {
             c
@@ -516,11 +520,12 @@ class CSVIngestor(BaseIngestor):
         """Fold one chunk's distinct categorical values into the running vocab.
 
         Called from the VARCHAR/CHAR/TEXT cast branch of ``_validate_csv`` with
-        the already-cast column, so there is no second read. Non-null distinct
-        values accumulate into a set per column; once a column crosses
-        ``_MAX_CATEGORICAL_CARDINALITY`` it is dropped and never re-considered
-        (free text / id, not a categorical feature). Excluded columns (label,
-        row-id, annotation) are skipped.
+        the already-cast column, so there is no second read. Non-null values
+        accumulate into a per-column ``Counter`` (occurrence counts, so a
+        min-count threshold can drop rare values at finalize); once a column's
+        distinct count crosses ``_MAX_CATEGORICAL_CARDINALITY`` it is dropped and
+        never re-considered (free text / id, not a categorical feature). Excluded
+        columns (label, row-id, annotation) are skipped.
 
         Exclusion matches the configured names case- and whitespace-insensitively
         via ``resolve_column`` (the #340 rule): this runs during ``_validate_csv``
@@ -535,8 +540,9 @@ class CSVIngestor(BaseIngestor):
         vals = series.dropna()
         if vals.empty:
             return
-        acc = self._categorical_acc.setdefault(column, set())
-        acc.update(str(v) for v in pd.unique(vals))
+        acc = self._categorical_acc.setdefault(column, Counter())
+        # Vectorised per-chunk counts; Counter.update ADDS them across chunks.
+        acc.update(vals.astype(str).value_counts().to_dict())
         if len(acc) > _MAX_CATEGORICAL_CARDINALITY:
             self._categorical_over_cap.add(column)
             self._categorical_acc.pop(column, None)
@@ -544,15 +550,20 @@ class CSVIngestor(BaseIngestor):
     def categorical_vocab(self) -> Dict[str, List[str]]:
         """The finalized per-categorical-column union vocabulary (sorted).
 
-        Empty when the dataset has no categorical feature columns within the
-        cardinality cap. Sorted so the emitted order is deterministic and the
-        backend's union / the edge's label index are stable.
+        Values seen fewer than ``CATEGORICAL_MIN_COUNT`` times are suppressed —
+        a re-identification guard for rare categories (default 1 ⇒ keep all; see
+        the config field). A column left with no values is omitted. Empty when
+        the dataset has no categorical feature columns within the cardinality
+        cap. Sorted so the emitted order is deterministic and the backend's union
+        / the edge's label index are stable.
         """
-        return {
-            col: sorted(vals)
-            for col, vals in self._categorical_acc.items()
-            if vals
-        }
+        min_count = self.database.config.CATEGORICAL_MIN_COUNT
+        vocab: Dict[str, List[str]] = {}
+        for col, counts in self._categorical_acc.items():
+            kept = sorted(v for v, n in counts.items() if n >= min_count)
+            if kept:
+                vocab[col] = kept
+        return vocab
 
     def _accumulate_temporal(self, series: pd.Series) -> None:
         """Fold one chunk of the (already-parsed) timestamp column into the

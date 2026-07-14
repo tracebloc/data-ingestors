@@ -13,13 +13,17 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from tracebloc_ingestor.config import Config
 from tracebloc_ingestor.ingestors.csv_ingestor import CSVIngestor
 from tracebloc_ingestor.utils.constants import TaskCategory
 
 
-def make_csv_ingestor(schema=None, **overrides):
+def make_csv_ingestor(schema=None, categorical_min_count=1, **overrides):
     db = MagicMock()
     db.create_table.return_value = MagicMock()
+    # A real Config so categorical_vocab's CATEGORICAL_MIN_COUNT is a true int
+    # (default 1 ⇒ keep all values).
+    db.config = Config(CATEGORICAL_MIN_COUNT=categorical_min_count)
     api = MagicMock()
     kwargs = dict(
         database=db,
@@ -290,6 +294,48 @@ def test_categorical_vocab_ignores_nulls(make_csv):
     list(ing.read_data(str(path)))
 
     assert ing.categorical_vocab() == {"c": ["a", "b"]}
+
+
+def test_categorical_vocab_min_count_suppresses_rare_values(make_csv):
+    # "S" appears 3×, "N" 2×, "E" once. With CATEGORICAL_MIN_COUNT=2 the
+    # single-occurrence "E" (a re-identification risk) is dropped.
+    path = make_csv({"region": ["S", "N", "S", "E", "N", "S"]})
+    ing = make_csv_ingestor(schema={"region": "VARCHAR(4)"}, categorical_min_count=2)
+    list(ing.read_data(str(path)))
+
+    assert ing.categorical_vocab() == {"region": ["N", "S"]}
+
+
+def test_categorical_vocab_default_keeps_all_values(make_csv):
+    # Default CATEGORICAL_MIN_COUNT=1 ⇒ no suppression (every observed value).
+    path = make_csv({"region": ["S", "N", "E"]})
+    ing = make_csv_ingestor(schema={"region": "VARCHAR(4)"})
+    list(ing.read_data(str(path)))
+
+    assert ing.categorical_vocab() == {"region": ["E", "N", "S"]}
+
+
+def test_categorical_vocab_column_dropped_when_all_values_suppressed(make_csv):
+    # Every value unique (count 1) → with min_count=2 the column has nothing left
+    # and is omitted entirely rather than emitted empty.
+    path = make_csv({"c": ["a", "b", "c"]})
+    ing = make_csv_ingestor(schema={"c": "VARCHAR(4)"}, categorical_min_count=2)
+    list(ing.read_data(str(path)))
+
+    assert ing.categorical_vocab() == {}
+
+
+def test_categorical_vocab_min_count_across_chunks(make_csv):
+    # Counts accumulate across chunks: "a" reaches 2 only by summing chunks.
+    path = make_csv({"c": ["a", "b", "a", "c"]})
+    ing = make_csv_ingestor(
+        schema={"c": "VARCHAR(4)"},
+        categorical_min_count=2,
+        csv_options={"chunk_size": 2},
+    )
+    list(ing.read_data(str(path)))
+
+    assert ing.categorical_vocab() == {"c": ["a"]}
 
 
 def test_categorical_vocab_dropped_above_cardinality_cap(make_csv, monkeypatch):
