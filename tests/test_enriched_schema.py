@@ -70,14 +70,25 @@ def test_flat_schema_unchanged_when_gate_off():
 
 def test_enriched_shape_and_target_role_for_supervised():
     ing = make_ingestor(enriched=True, label_column="y")
-    flat = {"a": "INT", "b": "VARCHAR(255)", "label": "VARCHAR(255)"}
+    flat = {"a": "INT", "b": "VARCHAR(255)", "label": "DECIMAL(10,2)"}
 
     out = ing._schema_payload(flat)
 
-    assert out["a"] == {"dtype": "INT"}
-    assert out["b"] == {"dtype": "VARCHAR(255)"}
+    # dtype is the CANONICAL logical type, not the raw storage type.
+    assert out["a"] == {"dtype": "int"}
+    assert out["b"] == {"dtype": "string"}
     # `label` is the framework target column → role:"target" for supervised.
-    assert out["label"] == {"dtype": "VARCHAR(255)", "role": "target"}
+    assert out["label"] == {"dtype": "float", "role": "target"}
+
+
+def test_dtype_is_canonicalized_across_storage_variants():
+    # Two datasets whose "same" column differs only in storage width/size must
+    # canonicalize to the SAME logical dtype (so #1037 doesn't spuriously block).
+    ing = make_ingestor(enriched=True, label_column=None)
+    a = ing._schema_payload({"name": "VARCHAR(255)", "n": "BIGINT"})
+    b = ing._schema_payload({"name": "VARCHAR(100)", "n": "INT"})
+    assert a["name"]["dtype"] == b["name"]["dtype"] == "string"
+    assert a["n"]["dtype"] == b["n"]["dtype"] == "int"
 
 
 def test_no_target_role_for_self_supervised():
@@ -86,7 +97,7 @@ def test_no_target_role_for_self_supervised():
     ing = make_ingestor(enriched=True, label_column=None)
     out = ing._schema_payload({"a": "INT", "label": "VARCHAR(255)"})
 
-    assert out["label"] == {"dtype": "VARCHAR(255)"}
+    assert out["label"] == {"dtype": "string"}
     assert "role" not in out["label"]
 
 
@@ -94,5 +105,5 @@ def test_enriched_does_not_mutate_input():
     ing = make_ingestor(enriched=True, label_column="y")
     flat = {"a": "INT", "label": "VARCHAR(255)"}
     ing._schema_payload(flat)
-    # The caller's dict is untouched (values still strings).
+    # The caller's dict is untouched (values still storage-type strings).
     assert flat == {"a": "INT", "label": "VARCHAR(255)"}

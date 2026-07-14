@@ -15,9 +15,49 @@ import pytest
 
 from tracebloc_ingestor.schema_inference import (
     SAMPLE_CAP,
+    canonical_dtype,
     infer_column_type,
     infer_schema,
 )
+
+
+@pytest.mark.parametrize(
+    "sql_type,expected",
+    [
+        ("INT", "int"),
+        ("integer", "int"),
+        ("BIGINT", "int"),
+        ("SMALLINT", "int"),
+        ("TINYINT", "int"),
+        ("FLOAT", "float"),
+        ("DOUBLE", "float"),
+        ("DECIMAL(10,2)", "float"),
+        ("NUMERIC", "float"),
+        ("BOOLEAN", "bool"),
+        ("BOOL", "bool"),
+        ("VARCHAR(255)", "string"),
+        ("CHAR(3)", "string"),
+        ("TEXT", "string"),
+        ("DATE", "date"),
+        ("DATETIME", "datetime"),
+        ("TIMESTAMP", "datetime"),
+        ("TIME", "time"),
+        ("BLOB", "binary"),
+    ],
+)
+def test_canonical_dtype_maps_storage_types(sql_type, expected):
+    assert canonical_dtype(sql_type) == expected
+
+
+def test_canonical_dtype_folds_width_and_size_variants():
+    # Width/size differences must not read as a type divergence at combine time.
+    assert canonical_dtype("VARCHAR(255)") == canonical_dtype("VARCHAR(100)")
+    assert canonical_dtype("INT") == canonical_dtype("BIGINT")
+
+
+def test_canonical_dtype_unknown_falls_through_lowercased():
+    # Honest passthrough rather than a silent coercion to "string".
+    assert canonical_dtype("GEOMETRY") == "geometry"
 
 _FIXTURE = Path(__file__).parent / "fixtures" / "schema_inference_parity.json"
 _PARITY = json.loads(_FIXTURE.read_text())

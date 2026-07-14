@@ -21,6 +21,7 @@ from ..utils.columns import resolve_column
 from ..utils.validators_mapping import map_validators
 from ..file_transfer import map_file_transfer
 from ..text_profile import compute_text_profile
+from ..schema_inference import canonical_dtype
 from ..reporting import ConsoleRenderer
 from . import preflight
 from .batch_writer import BatchWriter
@@ -446,19 +447,23 @@ class BaseIngestor(ABC):
         current backend consumes.
 
         Enriched (``EMIT_ENRICHED_SCHEMA`` — data-ingestors#360 slice 1b, gated
-        for the backend#1037 cutover) — ``{col: {"dtype": SQL_type}}`` with the
+        for the backend#1037 cutover) — ``{col: {"dtype": <canonical>}}`` with the
         framework ``label`` column carrying ``role: "target"`` for supervised
         tasks. That lets combine-time alignment identify the prediction target
         from the contract (backend#1037's ``role``-based check) rather than
-        inferring it. Physical-table shape: keys/types are exactly what
-        ``get_table_schema`` reflected, so ``label`` (String(255)) is the target
-        key — distinct from ``feature_stats``, which keys the target by its
-        original column name.
+        inferring it. ``dtype`` is the CANONICAL logical type
+        (``schema_inference.canonical_dtype``), not the raw storage type, so a
+        merged dataset compares column types by logical family — ``VARCHAR(255)``
+        vs ``VARCHAR(100)`` (or ``INT`` vs ``BIGINT``) no longer read as a
+        divergence. Physical-table shape otherwise: keys are exactly what
+        ``get_table_schema`` reflected, so ``label`` is the target key — distinct
+        from ``feature_stats``, which keys the target by its original column name.
         """
         if not self.database.config.EMIT_ENRICHED_SCHEMA:
             return schema_dict
         enriched: Dict[str, Any] = {
-            col: {"dtype": sql_type} for col, sql_type in schema_dict.items()
+            col: {"dtype": canonical_dtype(sql_type)}
+            for col, sql_type in schema_dict.items()
         }
         # ``label`` is the standard column the user's label_column is mapped onto
         # (database.create_table). It's always present, but is only a prediction
