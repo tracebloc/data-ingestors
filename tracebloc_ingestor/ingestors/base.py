@@ -52,6 +52,15 @@ __all__ = ["BaseIngestor", "IngestionSummary"]
 # the physical-table schema emitted to the backend.
 _TARGET_COLUMN = "label"
 
+# Post-normalization value encodings the ingested (physical) table uses, stated
+# per column in the enriched schema so combine-time alignment can confirm they
+# agree (backend#1037's WARN checks) — di#360. The ingestor maps every
+# recognized NA token to SQL NULL and stores booleans as MySQL 1/0, so these are
+# uniform across every dataset it produces; a dataset ingested under a different
+# convention would surface as a mismatch.
+_NULL_ENCODING = "null"
+_BOOL_ENCODING = "1/0"
+
 
 def _rows_state_clause(inserted_records: int) -> str:
     """Phrase the parenthetical about what's already in the database for a
@@ -465,6 +474,13 @@ class BaseIngestor(ABC):
             col: {"dtype": canonical_dtype(sql_type)}
             for col, sql_type in schema_dict.items()
         }
+        # Value encodings of the ingested data: missing is SQL NULL for every
+        # column; booleans are stored MySQL 1/0. Uniform by construction, stated
+        # per column so #1037 can verify cross-dataset consistency.
+        for desc in enriched.values():
+            desc["null_encoding"] = _NULL_ENCODING
+            if desc["dtype"] == "bool":
+                desc["bool_encoding"] = _BOOL_ENCODING
         # ``label`` is the standard column the user's label_column is mapped onto
         # (database.create_table). It's always present, but is only a prediction
         # target for SUPERVISED tasks — self-supervised runs (no label_column)

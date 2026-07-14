@@ -75,11 +75,16 @@ def test_enriched_shape_and_target_role_for_supervised():
 
     out = ing._schema_payload(flat)
 
-    # dtype is the CANONICAL logical type, not the raw storage type.
-    assert out["a"] == {"dtype": "int"}
-    assert out["b"] == {"dtype": "string"}
+    # dtype is the CANONICAL logical type, not the raw storage type; every column
+    # states the ingested null encoding (missing → SQL NULL).
+    assert out["a"] == {"dtype": "int", "null_encoding": "null"}
+    assert out["b"] == {"dtype": "string", "null_encoding": "null"}
     # `label` is the framework target column → role:"target" for supervised.
-    assert out["label"] == {"dtype": "float", "role": "target"}
+    assert out["label"] == {
+        "dtype": "float",
+        "role": "target",
+        "null_encoding": "null",
+    }
 
 
 def test_dtype_is_canonicalized_across_storage_variants():
@@ -98,7 +103,7 @@ def test_no_target_role_for_self_supervised():
     ing = make_ingestor(enriched=True, label_column=None)
     out = ing._schema_payload({"a": "INT", "label": "VARCHAR(255)"})
 
-    assert out["label"] == {"dtype": "string"}
+    assert out["label"] == {"dtype": "string", "null_encoding": "null"}
     assert "role" not in out["label"]
 
 
@@ -116,8 +121,12 @@ def test_declared_unit_and_ordinal_merged_into_descriptors():
         },
     )
     out = ing._schema_payload({"a": "INT", "b": "VARCHAR(10)"})
-    assert out["a"] == {"dtype": "int", "unit": "years"}
-    assert out["b"] == {"dtype": "string", "ordinal": ["low", "med", "high"]}
+    assert out["a"] == {"dtype": "int", "null_encoding": "null", "unit": "years"}
+    assert out["b"] == {
+        "dtype": "string",
+        "null_encoding": "null",
+        "ordinal": ["low", "med", "high"],
+    }
 
 
 def test_declared_descriptor_for_unknown_column_ignored():
@@ -126,7 +135,23 @@ def test_declared_descriptor_for_unknown_column_ignored():
         file_options={"column_descriptors": {"ghost": {"unit": "kg"}}},
     )
     out = ing._schema_payload({"a": "INT"})
-    assert out == {"a": {"dtype": "int"}}
+    assert out == {"a": {"dtype": "int", "null_encoding": "null"}}
+
+
+def test_bool_and_null_encoding():
+    ing = make_ingestor(enriched=True, label_column=None)
+    out = ing._schema_payload({"flag": "BOOLEAN", "age": "INT", "name": "VARCHAR(9)"})
+
+    # Bool columns state the stored 1/0 encoding; non-bool columns don't.
+    assert out["flag"] == {
+        "dtype": "bool",
+        "null_encoding": "null",
+        "bool_encoding": "1/0",
+    }
+    assert "bool_encoding" not in out["age"]
+    assert "bool_encoding" not in out["name"]
+    # Every column states the null encoding.
+    assert all(d["null_encoding"] == "null" for d in out.values())
 
 
 def test_declared_descriptors_ignored_when_gate_off():
