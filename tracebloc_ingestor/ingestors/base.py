@@ -15,6 +15,9 @@ from ..utils.constants import (
     RED,
     YELLOW,
     CYAN,
+    DataFormat,
+    COLOR_MODE_CHANNELS,
+    canonical_color_mode,
 )
 from ..utils import label_policy as label_policy_module
 from ..utils.columns import resolve_column
@@ -43,6 +46,11 @@ from ..modalities.registry import (
 logger = logging.getLogger(__name__)
 
 __all__ = ["BaseIngestor", "IngestionSummary"]
+
+# Image bit depths the combine-time contract accepts (mirrors the check in
+# cli.conventions.resolve). Values outside this set must not reach the emitted
+# attributes even when bit_depth bypasses resolve() via spec.file_options.
+_SUPPORTED_BIT_DEPTHS = (8, 16)
 
 
 def _rows_state_clause(inserted_records: int) -> str:
@@ -420,7 +428,57 @@ class BaseIngestor(ABC):
         text/image facts in later #360 slices) is merged *into* any existing
         ``attributes`` rather than replacing it; other keys ``.update`` normally.
         """
-        return {}
+        return self._scalar_attribute_metadata()
+
+    def _scalar_attribute_metadata(self) -> Dict[str, Any]:
+        """Data-format-derived scalar attributes for combine-time alignment
+        (di#360). Format-agnostic so any ingestor (CSV or JSON manifest)
+        contributes them — image/text datasets are manifest-based and inherit
+        this base hook. Subclasses that override ``_collect_run_metadata`` (e.g.
+        ``CSVIngestor``) must fold this in via ``super()``.
+
+        - **Image:** ``resolution`` from the run's uniform ``target_size`` (the
+          resolution validator enforces every image to it, so no image read is
+          needed here), emitted as ``[height, width]`` (``target_size`` is
+          ``[width, height]``); ``color_mode`` + derived ``channels`` and
+          ``bit_depth`` from ``file_options`` when the user supplies them for the
+          vision run (RGB/grayscale only — the values the contract accepts). Not
+          auto-detected: PIL modes like RGBA/CMYK aren't in the contract enum.
+        - **Text/NLP:** ``encoding`` is ``"utf-8"`` — text is staged and
+          validated as UTF-8 (non-UTF-8 is rejected at validation), so that is
+          the canonical, true value.
+        """
+        attributes: Dict[str, Any] = {}
+
+        if self.data_format == DataFormat.IMAGE:
+            target = self.file_options.get("target_size")
+            if isinstance(target, (list, tuple)) and len(target) == 2:
+                width, height = int(target[0]), int(target[1])
+                attributes["resolution"] = [height, width]
+
+            # color_mode is user-provided in file_options for vision use cases;
+            # emit only the canonical RGB/grayscale values and derive channels.
+            color_mode = canonical_color_mode(self.file_options.get("color_mode"))
+            if color_mode:
+                attributes["color_mode"] = color_mode
+                attributes["channels"] = COLOR_MODE_CHANNELS[color_mode]
+
+            # Only the contract-accepted depths (8/16) — mirrors color_mode's
+            # canonicalisation. conventions.resolve() rejects other values, but a
+            # bit_depth set directly in spec.file_options or a modality spec
+            # bypasses that gate, so re-check here before it reaches the contract.
+            bit_depth = self.file_options.get("bit_depth")
+            if (
+                isinstance(bit_depth, int)
+                and not isinstance(bit_depth, bool)
+                and bit_depth in _SUPPORTED_BIT_DEPTHS
+            ):
+                attributes["bit_depth"] = bit_depth
+
+        if self.category in _NLP_CATEGORIES:
+            attributes["encoding"] = "utf-8"
+
+        return {"attributes": attributes} if attributes else {}
 
     def _apply_run_metadata(self) -> None:
         """Merge ``_collect_run_metadata()`` into ``file_options`` just before the

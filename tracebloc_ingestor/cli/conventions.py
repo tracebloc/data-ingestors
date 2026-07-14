@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, FrozenSet, List, Optional
 
 from ..modalities.registry import spec_for
-from ..utils.constants import TaskCategory
+from ..utils.constants import TaskCategory, canonical_color_mode
 
 # ---------------------------------------------------------------------------
 # Category groupings — used both here and by the entrypoint when deciding
@@ -312,6 +312,27 @@ def resolve(config: Dict[str, Any]) -> ResolvedConfig:
         and "number_of_keypoints" not in spec_file_options
     ):
         resolved.file_options["number_of_keypoints"] = config["number_of_keypoints"]
+
+    # 7c. Bridge the vision alignment facts the user declares (di#360): the
+    #     dataset's `color_mode` (RGB/grayscale only — the values the combine-time
+    #     contract accepts; channels are derived from it downstream) and optional
+    #     `bit_depth`. Same precedence as target_size (spec > top-level). Validated
+    #     here so a bad value fails at config time, not after ingest.
+    if "color_mode" in config and "color_mode" not in spec_file_options:
+        canonical = canonical_color_mode(config["color_mode"])
+        if canonical is None:
+            raise ValueError(
+                f"Invalid color_mode {config['color_mode']!r}; supported values "
+                f"are 'RGB' and 'grayscale'."
+            )
+        resolved.file_options["color_mode"] = canonical
+    if "bit_depth" in config and "bit_depth" not in spec_file_options:
+        bit_depth = config["bit_depth"]
+        if bit_depth not in (8, 16):
+            raise ValueError(
+                f"Invalid bit_depth {bit_depth!r}; supported values are 8 and 16."
+            )
+        resolved.file_options["bit_depth"] = bit_depth
 
     # 8. annotation_column — keypoint_detection's existing template uses
     #    column "Annotation" (the keypoint coords carried in the CSV). The
