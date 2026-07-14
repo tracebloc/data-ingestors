@@ -220,7 +220,7 @@ class APIClient:
         data_format: str,
         data_intent: str,
         category: str,
-        schema: Dict[str, str],
+        schema: Dict[str, Any],
         samples: List[Dict[str, Any]],
         meta_data: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:

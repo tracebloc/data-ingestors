@@ -45,6 +45,12 @@ logger = logging.getLogger(__name__)
 
 __all__ = ["BaseIngestor", "IngestionSummary"]
 
+# The framework's standard prediction-target column. The user's declared
+# label_column is mapped onto it (database.create_table creates a fixed
+# ``label`` column), so this — not the original CSV name — is the target key in
+# the physical-table schema emitted to the backend.
+_TARGET_COLUMN = "label"
+
 
 def _rows_state_clause(inserted_records: int) -> str:
     """Phrase the parenthetical about what's already in the database for a
@@ -433,6 +439,35 @@ class BaseIngestor(ABC):
         """Read data from the input source"""
         pass
 
+    def _schema_payload(self, schema_dict: Dict[str, str]) -> Dict[str, Any]:
+        """The ``schema`` value shipped on the global-metadata channel.
+
+        Default — the legacy flat ``{col: SQL_type}`` map, unchanged, which the
+        current backend consumes.
+
+        Enriched (``EMIT_ENRICHED_SCHEMA`` — data-ingestors#360 slice 1b, gated
+        for the backend#1037 cutover) — ``{col: {"dtype": SQL_type}}`` with the
+        framework ``label`` column carrying ``role: "target"`` for supervised
+        tasks. That lets combine-time alignment identify the prediction target
+        from the contract (backend#1037's ``role``-based check) rather than
+        inferring it. Physical-table shape: keys/types are exactly what
+        ``get_table_schema`` reflected, so ``label`` (String(255)) is the target
+        key — distinct from ``feature_stats``, which keys the target by its
+        original column name.
+        """
+        if not self.database.config.EMIT_ENRICHED_SCHEMA:
+            return schema_dict
+        enriched: Dict[str, Any] = {
+            col: {"dtype": sql_type} for col, sql_type in schema_dict.items()
+        }
+        # ``label`` is the standard column the user's label_column is mapped onto
+        # (database.create_table). It's always present, but is only a prediction
+        # target for SUPERVISED tasks — self-supervised runs (no label_column)
+        # must not claim one.
+        if self.label_column and _TARGET_COLUMN in enriched:
+            enriched[_TARGET_COLUMN]["role"] = "target"
+        return enriched
+
     def _count_records(self, source: Any) -> Optional[int]:
         """
         Try to count total records in the source for progress tracking.
@@ -779,7 +814,7 @@ class BaseIngestor(ABC):
                         data_format=self.data_format,
                         data_intent=self.intent,
                         category=self.category,
-                        schema=schema_dict,
+                        schema=self._schema_payload(schema_dict),
                         samples=samples,
                         meta_data=self.file_options,
                     )
