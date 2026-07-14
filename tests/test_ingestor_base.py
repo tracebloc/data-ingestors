@@ -582,7 +582,11 @@ def test_ingest_creates_table_after_validation_passes():
     with patch.object(base_mod, "Session") as Sess:
         Sess.return_value.__enter__.return_value = MagicMock()
         ing.ingest("src", batch_size=10)
-    ing.database.create_table.assert_called_once_with("tbl", {"a": "INT"})
+    # index_columns=None: only grouped categories (ModalitySpec.grouping)
+    # request the composite secondary index (backend#1054 WS1).
+    ing.database.create_table.assert_called_once_with(
+        "tbl", {"a": "INT"}, index_columns=None
+    )
     assert ing.table is not None
 
 

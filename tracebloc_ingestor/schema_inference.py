@@ -94,7 +94,45 @@ import pandas as pd
 
 from .utils import coercion
 
-__all__ = ["SAMPLE_CAP", "infer_column_type", "infer_schema"]
+__all__ = ["SAMPLE_CAP", "canonical_dtype", "infer_column_type", "infer_schema"]
+
+# Storage SQL type -> canonical LOGICAL dtype, for the enriched schema's
+# cross-dataset comparison at combine time (data-ingestors#360 slice 1b,
+# backend#1037). Parametrisation (``VARCHAR(255)``, ``DECIMAL(10,2)``) is
+# stripped first, so two datasets whose "same" column differs only in width
+# (``VARCHAR(255)`` vs ``VARCHAR(100)``) — or in integer storage size (``INT``
+# vs ``BIGINT``) — compare EQUAL, while a genuine ``int`` vs ``float`` divergence
+# still differs. Covers both the MySQL keywords ``get_table_schema`` reflects
+# and the types ``infer_column_type`` emits.
+_CANONICAL_DTYPE = {
+    "INT": "int", "INTEGER": "int", "BIGINT": "int", "SMALLINT": "int",
+    "MEDIUMINT": "int", "TINYINT": "int",
+    "FLOAT": "float", "DOUBLE": "float", "DOUBLE_PRECISION": "float",
+    "REAL": "float", "DECIMAL": "float", "NUMERIC": "float",
+    "BOOL": "bool", "BOOLEAN": "bool",
+    "DATE": "date",
+    "DATETIME": "datetime", "TIMESTAMP": "datetime",
+    "TIME": "time",
+    "VARCHAR": "string", "CHAR": "string", "TEXT": "string",
+    "TINYTEXT": "string", "MEDIUMTEXT": "string", "LONGTEXT": "string",
+    "STRING": "string", "ENUM": "string",
+    "BLOB": "binary", "BINARY": "binary", "VARBINARY": "binary",
+    "LARGEBINARY": "binary",
+}
+
+
+def canonical_dtype(sql_type: str) -> str:
+    """Map a storage SQL type (``"VARCHAR(255)"``, ``"BIGINT"``) to a canonical
+    logical dtype (``"string"``, ``"int"``).
+
+    Strips any ``(...)`` parametrisation and folds storage-size variants to one
+    logical family, so cross-dataset ``dtype`` equality reflects a real type
+    divergence rather than a width difference. An unrecognised type falls
+    through as its lower-cased base keyword — honest rather than silently
+    coerced to ``"string"``.
+    """
+    base = sql_type.split("(", 1)[0].strip().upper()
+    return _CANONICAL_DTYPE.get(base, base.lower())
 
 # First N rows per column that influence inference. Mirrors the CLI's cap so
 # the two implementations agree on the same prefix of a file.

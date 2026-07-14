@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 
 if TYPE_CHECKING:  # annotations are strings (future import) — type-only import
-    from .layout import RecordFormat, Sidecar
+    from .layout import Grouping, RecordFormat, Sidecar
 
 
 @dataclass(frozen=True)
@@ -105,3 +105,13 @@ class ModalitySpec:
     #   the file is free text with no field structure the CLI must preview.
     sidecars: Tuple["Sidecar", ...] = ()
     record_format: Optional["RecordFormat"] = None
+    # Sequence grouping (backend#1054 Decision-4): set for categories whose
+    # SAMPLE UNIT is a group of manifest rows rather than a single row
+    # (time_series_classification: many timestep rows per ``sequence_id``,
+    # one label per sequence). Consumed trait-style by ``ingestors/base.py``
+    # — sequence-unit label counts (``COUNT(DISTINCT group_column)`` per
+    # label), the composite ``(group_column, time_column)`` index, and the
+    # post-insert group-integrity pass are all gated on ``grouping is not
+    # None``, never on the category string. ``None`` for every per-row
+    # category.
+    grouping: Optional["Grouping"] = None

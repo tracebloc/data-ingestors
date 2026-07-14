@@ -29,6 +29,23 @@ def row_refs(indices: List[Any], total: int, limit: int = 5) -> str:
     return f"rows {shown}{suffix}"
 
 
+def column_preview(columns: Any, limit: int = 10) -> str:
+    """``['a', 'b', ...] (+N more of M)`` — capped column-name preview.
+
+    Column NAMES are dataset structure and may appear in errors (policy
+    above), but wide panels (genomics / proteomics) can carry thousands of
+    headers — an uncapped ``list(df.columns)`` makes a single validation
+    failure bloat the install log and CLI output. Show the first ``limit``
+    names; the FULL list belongs in the result's metadata, not the message
+    (review: #359, Bugbot learned rule).
+    """
+    cols = [str(c) for c in columns]
+    shown = cols[:limit]
+    more = len(cols) - len(shown)
+    suffix = f" (+{more} more of {len(cols)})" if more > 0 else ""
+    return f"{shown}{suffix}"
+
+
 def mask_shape(value: Any, cap: int = 24) -> str:
     """Structure-preserving mask: digits → ``#``, letters → ``x``.
 

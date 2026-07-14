@@ -24,6 +24,7 @@ from ..utils.columns import resolve_column
 from ..utils.validators_mapping import map_validators
 from ..file_transfer import map_file_transfer
 from ..text_profile import compute_text_profile
+from ..schema_inference import canonical_dtype
 from ..reporting import ConsoleRenderer
 from . import preflight
 from .batch_writer import BatchWriter
@@ -38,6 +39,7 @@ from .table_lock import TableLock
 from ..modalities.registry import (
     FILE_BEARING_CATEGORIES as _FILE_BEARING_CATEGORIES,
     NLP_CATEGORIES as _NLP_CATEGORIES,
+    REGISTRY as _MODALITY_REGISTRY,
     TABULAR_FAMILY_CATEGORIES as _TABULAR_FAMILY_CATEGORIES,
 )
 
@@ -51,6 +53,21 @@ __all__ = ["BaseIngestor", "IngestionSummary"]
 # cli.conventions.resolve). Values outside this set must not reach the emitted
 # attributes even when bit_depth bypasses resolve() via spec.file_options.
 _SUPPORTED_BIT_DEPTHS = (8, 16)
+
+# The framework's standard prediction-target column. The user's declared
+# label_column is mapped onto it (database.create_table creates a fixed
+# ``label`` column), so this — not the original CSV name — is the target key in
+# the physical-table schema emitted to the backend.
+_TARGET_COLUMN = "label"
+
+# Post-normalization value encodings the ingested (physical) table uses, stated
+# per column in the enriched schema so combine-time alignment can confirm they
+# agree (backend#1037's WARN checks) — di#360. The ingestor maps every
+# recognized NA token to SQL NULL and stores booleans as MySQL 1/0, so these are
+# uniform across every dataset it produces; a dataset ingested under a different
+# convention would surface as a mismatch.
+_NULL_ENCODING = "null"
+_BOOL_ENCODING = "1/0"
 
 
 def _rows_state_clause(inserted_records: int) -> str:
@@ -315,6 +332,18 @@ class BaseIngestor(ABC):
         return True
 
     @property
+    def _grouping(self):
+        """The category's sequence-grouping trait (``ModalitySpec.grouping``,
+        backend#1054 Decision-4), or ``None`` for per-row categories /
+        unknown categories. Read trait-style from the registry — never via a
+        category string comparison — so a future grouped category is a
+        registry entry, not a base.py edit. Gates the sequence-unit label
+        counts, the composite ``(group, time)`` index, and the post-insert
+        group-integrity pass."""
+        spec = _MODALITY_REGISTRY.get(self.category)
+        return spec.grouping if spec is not None else None
+
+    @property
     def _table_lock(self) -> TableLock:
         """The run's table lock (P5b). ``TableLock`` owns the file-lock
         lifecycle — compute path, atomic acquire with stale-reclaim, release —
@@ -366,6 +395,20 @@ class BaseIngestor(ABC):
                 # sneak an effectively single-class dataset past the gate
                 # (bugbot #252).
                 "full_schema": self.schema,
+                # The run's csv read options (delimiter / encoding / ...), so a
+                # CSV-reading validator parses the manifest BYTE-IDENTICALLY to
+                # CSVIngestor. Without it a non-comma or BOM manifest that ingests
+                # fine is falsely rejected at preflight (delimiter is a supported
+                # option — schema/ingest.v1.json). getattr: only CSVIngestor
+                # carries csv_options; JSON/other ingestors default to {}.
+                "csv_options": getattr(self, "csv_options", {}),
+                # The run's data_id source column (data_id.strategy=column),
+                # for SequenceGroupValidator's T6 guard: mapping data_id
+                # from the sequence column would upsert-collapse every
+                # sequence to one row (backend#1054 WS1). None for the
+                # default UUID / content_hash strategies; non-grouped
+                # factories ignore the key.
+                "unique_id_column": self.unique_id_column,
             },
             # Inject the run's resolved Config so path-reading validators
             # (SRC_PATH / DEST_PATH / TABLE_NAME) use it instead of a
@@ -491,6 +534,62 @@ class BaseIngestor(ABC):
             self.file_options.setdefault("attributes", {}).update(attributes)
         self.file_options.update(run_meta)
 
+    def _schema_payload(self, schema_dict: Dict[str, str]) -> Dict[str, Any]:
+        """The ``schema`` value shipped on the global-metadata channel.
+
+        Default — the legacy flat ``{col: SQL_type}`` map, unchanged, which the
+        current backend consumes.
+
+        Enriched (``EMIT_ENRICHED_SCHEMA`` — data-ingestors#360 slice 1b, gated
+        for the backend#1037 cutover) — ``{col: {"dtype": <canonical>}}`` with the
+        framework ``label`` column carrying ``role: "target"`` for supervised
+        tasks. That lets combine-time alignment identify the prediction target
+        from the contract (backend#1037's ``role``-based check) rather than
+        inferring it. ``dtype`` is the CANONICAL logical type
+        (``schema_inference.canonical_dtype``), not the raw storage type, so a
+        merged dataset compares column types by logical family — ``VARCHAR(255)``
+        vs ``VARCHAR(100)`` (or ``INT`` vs ``BIGINT``) no longer read as a
+        divergence. Physical-table shape otherwise: keys are exactly what
+        ``get_table_schema`` reflected, so ``label`` is the target key — the same
+        key ``feature_stats`` re-keys the regression-class target under, so schema
+        ``role: "target"`` and the target's stats line up on one column name.
+        """
+        if not self.database.config.EMIT_ENRICHED_SCHEMA:
+            return schema_dict
+        enriched: Dict[str, Any] = {
+            col: {"dtype": canonical_dtype(sql_type)}
+            for col, sql_type in schema_dict.items()
+        }
+        # Value encodings of the ingested data: missing is SQL NULL for every
+        # column; booleans are stored MySQL 1/0. Uniform by construction, stated
+        # per column so #1037 can verify cross-dataset consistency.
+        for desc in enriched.values():
+            desc["null_encoding"] = _NULL_ENCODING
+            if desc["dtype"] == "bool":
+                desc["bool_encoding"] = _BOOL_ENCODING
+        # ``label`` is the standard column the user's label_column is mapped onto
+        # (database.create_table). It's always present, but is only a prediction
+        # target for SUPERVISED tasks — self-supervised runs (no label_column)
+        # must not claim one.
+        if self.label_column and _TARGET_COLUMN in enriched:
+            enriched[_TARGET_COLUMN]["role"] = "target"
+
+        # Merge uploader-declared per-column descriptors that CAN'T be inferred
+        # from the data — ``unit`` and ``ordinal`` (di#360). These activate the
+        # backend's combine-time descriptor checks (e.g. a ``unit`` mismatch —
+        # merging a USD column with an EUR one — is otherwise silent). Declared
+        # by CSV column name; entries for a column absent from the schema (or the
+        # target, which the physical schema keys as ``label``) are ignored.
+        declared = self.file_options.get("column_descriptors") or {}
+        for col, desc in declared.items():
+            if col not in enriched or not isinstance(desc, dict):
+                continue
+            if desc.get("unit") is not None:
+                enriched[col]["unit"] = desc["unit"]
+            if desc.get("ordinal") is not None:
+                enriched[col]["ordinal"] = desc["ordinal"]
+        return enriched
+
     def _count_records(self, source: Any) -> Optional[int]:
         """
         Try to count total records in the source for progress tracking.
@@ -574,7 +673,18 @@ class BaseIngestor(ABC):
             )
 
         if self.table is None:
-            self.table = self.database.create_table(self.table_name, self._table_schema)
+            # Grouped categories get a composite (group, time) secondary
+            # index (backend#1054 WS1) so the engine's "fetch all rows of
+            # the sampled sequences, ordered" reads don't full-scan.
+            grouping = self._grouping
+            index_columns = (
+                [grouping.group_column, grouping.time_column]
+                if grouping is not None
+                else None
+            )
+            self.table = self.database.create_table(
+                self.table_name, self._table_schema, index_columns=index_columns
+            )
 
         batch = []
         failed_records = []
@@ -713,11 +823,75 @@ class BaseIngestor(ABC):
                 session.commit()
                 pbar.close()
 
-                # Query accurate label counts from the DB (excludes any rows that
-                # failed insertion) and collect a small preview sample.
-                label_counts = self.database.get_label_counts(
-                    self.table_name, self.ingestor_id
-                )
+                # Post-insert group-integrity pass (backend#1054 WS1, T5).
+                # Row-drop-and-continue is correct per-row, but for grouped
+                # categories a dropped row means its SEQUENCE is now missing
+                # a timestep — training would read a truncated series as if
+                # complete. Collect the sequence ids touched by any dropped/
+                # failed record and remove those sequences' surviving rows,
+                # so a sequence is stored whole or not at all. The dropped
+                # rows stay in failed_records — the run still exits non-zero.
+                grouping = self._grouping
+                if grouping is not None and failed_records:
+                    # Failed-row dicts carry the RAW CSV header spellings, so
+                    # the fixed trait name must be resolved against each
+                    # record's actual keys with the shared #340 rule
+                    # (case-/whitespace-insensitive, resolve_column) — a
+                    # header drifting only in case or whitespace would
+                    # otherwise read None here, leave partial_ids empty, and
+                    # keep a truncated sequence's surviving rows in MySQL.
+                    partial_id_set = set()
+                    for failure in failed_records:
+                        record = failure.get("record")
+                        if not isinstance(record, dict):
+                            continue
+                        key = resolve_column(record.keys(), grouping.group_column)
+                        seq_id = record.get(key) if key is not None else None
+                        if seq_id is not None and str(seq_id).strip():
+                            partial_id_set.add(str(seq_id))
+                    partial_ids = sorted(partial_id_set)
+                    if partial_ids and stats["inserted_records"]:
+                        removed = self.database.delete_sequences(
+                            self.table_name,
+                            self.ingestor_id,
+                            partial_ids,
+                            group_column=grouping.group_column,
+                        )
+                        stats["inserted_records"] = max(
+                            stats["inserted_records"] - removed, 0
+                        )
+                        logger.warning(
+                            f"{YELLOW}Group-integrity pass (T5): dropped "
+                            f"row(s) left {len(partial_ids)} partial "
+                            f"sequence(s); removed their {removed} "
+                            f"already-inserted row(s) so no truncated "
+                            f"sequence is ever trained on.{RESET}"
+                        )
+
+                # Query accurate label counts from the DB (excludes any rows
+                # that failed insertion) and collect a small preview sample.
+                # The trait's ``count_unit`` selects the unit (review: #359 —
+                # this is its behavioral consumer): "sequences" counts one
+                # dataset item per sequence (backend#1054 Decision-3/T2); a
+                # future grouped category counting rows falls through to the
+                # standard row counts like every non-grouped category.
+                if grouping is not None and grouping.count_unit == "sequences":
+                    label_counts = self.database.get_label_sequence_counts(
+                        self.table_name,
+                        self.ingestor_id,
+                        group_column=grouping.group_column,
+                    )
+                    # number_of_sequences rides the meta_data channel (the
+                    # serializer is unchanged — counts only, no id-lists).
+                    # Labels are constant per sequence, so the per-label
+                    # sequence counts sum to the sequence total.
+                    self.file_options["number_of_sequences"] = sum(
+                        label_counts.values()
+                    )
+                else:
+                    label_counts = self.database.get_label_counts(
+                        self.table_name, self.ingestor_id
+                    )
 
                 if not stats["inserted_records"]:
                     logger.warning(
@@ -725,9 +899,15 @@ class BaseIngestor(ABC):
                         "skipping ingest summary."
                     )
                 elif not label_counts:
+                    counts_helper = (
+                        "get_label_sequence_counts"
+                        if grouping is not None
+                        and grouping.count_unit == "sequences"
+                        else "get_label_counts"
+                    )
                     raise RuntimeError(
                         f"Inserted {stats['inserted_records']} row(s) but "
-                        f"get_label_counts returned nothing for "
+                        f"{counts_helper} returned nothing for "
                         f"ingestor_id={self.ingestor_id!r}. "
                         "The dataset was not registered with the backend; "
                         "this run's rows will be removed by the "
@@ -763,7 +943,7 @@ class BaseIngestor(ABC):
                         data_format=self.data_format,
                         data_intent=self.intent,
                         category=self.category,
-                        schema=schema_dict,
+                        schema=self._schema_payload(schema_dict),
                         samples=samples,
                         meta_data=self.file_options,
                     )

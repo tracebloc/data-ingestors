@@ -684,13 +684,14 @@ class CSVIngestor(BaseIngestor):
 
             # NA handling — PER COLUMN, identical to the validator gate. Every
             # schema column treats ""/NA/null/None as missing (-> NULL);
-            # non-schema columns (filename, mask_id, …) are omitted so a file
-            # named "NA.jpg" survives. The same builder feeds DataValidator's
-            # read, so a file can't pass validation and then crash the cast on a
-            # token one layer treats as missing and the other as data — the
-            # whole-category split (tabular vs other) that caused #237. Used
-            # with keep_default_na=False so pandas' global default set never
-            # reaches a non-schema column.
+            # non-schema columns (filename, unique-id, …) are omitted so a file
+            # named "NA.jpg" survives. (semseg's mask_id is a DECLARED schema
+            # column — backend#816 — so it DOES get this treatment.) The same
+            # builder feeds DataValidator's read, so a file can't pass validation
+            # and then crash the cast on a token one layer treats as missing and
+            # the other as data — the whole-category split (tabular vs other)
+            # that caused #237. Used with keep_default_na=False so pandas' global
+            # default set never reaches a non-schema column.
             na_values = coercion.build_csv_na_values(self.schema)
 
             # Pin string-family schema columns to dtype=str so pandas can't infer

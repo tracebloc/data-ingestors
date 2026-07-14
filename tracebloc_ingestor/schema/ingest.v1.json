@@ -36,6 +36,7 @@
         "tabular_classification",
         "tabular_regression",
         "time_series_forecasting",
+        "time_series_classification",
         "time_to_event_prediction",
         "masked_language_modeling",
         "causal_language_modeling",
@@ -134,6 +135,28 @@
         "type": "string"
       },
       "description": "Column → SQL type map (e.g. {'age': 'INT', 'name': 'VARCHAR(255)'}). Required for tabular and time-series categories."
+    },
+
+    "columns": {
+      "type": "object",
+      "description": "Optional per-column alignment descriptors that cannot be inferred from the data. Keyed by column name; every field is optional. Used at dataset-combination time to keep merged datasets consistent.",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "unit": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Physical unit of the column's values (e.g. 'years', 'USD'). Combining columns whose declared units disagree is flagged, so an income-in-USD dataset isn't silently merged with income-in-EUR."
+          },
+          "ordinal": {
+            "type": "array",
+            "items": { "type": "string" },
+            "minItems": 1,
+            "description": "Category values in order (low → high) for an ordinal column, so the ordering is preserved consistently across merged datasets."
+          }
+        }
+      }
     },
 
     "time_column": {
@@ -388,6 +411,7 @@
               "tabular_classification",
               "tabular_regression",
               "time_series_forecasting",
+              "time_series_classification",
               "time_to_event_prediction"
             ]
           }
@@ -395,6 +419,19 @@
         "required": ["category"]
       },
       "then": { "required": ["schema"] }
+    },
+    {
+      "description": "time_series_classification requires the fixed sequence columns: `schema` must declare both `sequence_id` (VARCHAR — groups the timestep rows of one sequence, e.g. a patient/device/session id) and `timestamp` (SQL TIMESTAMP, or a numeric step index like INT — orders the rows WITHIN each sequence). The column names are fixed by the platform; rename your columns to `sequence_id` / `timestamp` before ingest.",
+      "if": {
+        "properties": { "category": { "const": "time_series_classification" } },
+        "required": ["category"]
+      },
+      "then": {
+        "properties": {
+          "schema": { "required": ["sequence_id", "timestamp"] }
+        },
+        "required": ["schema"]
+      }
     },
     {
       "description": "Regression-class tasks require an explicit label.policy decision (must be the object form).",
@@ -441,7 +478,8 @@
               "text_classification",
               "token_classification",
               "sentence_pair_classification",
-              "tabular_classification"
+              "tabular_classification",
+              "time_series_classification"
             ]
           }
         },

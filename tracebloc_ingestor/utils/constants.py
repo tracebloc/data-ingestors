@@ -46,6 +46,7 @@ class TaskCategory:
     TABULAR_CLASSIFICATION = "tabular_classification"
     TABULAR_REGRESSION = "tabular_regression"
     TIME_SERIES_FORECASTING = "time_series_forecasting"
+    TIME_SERIES_CLASSIFICATION = "time_series_classification"
     TIME_TO_EVENT_PREDICTION = "time_to_event_prediction"
     SEMANTIC_SEGMENTATION = "semantic_segmentation"
     MASKED_LANGUAGE_MODELING = "masked_language_modeling"
@@ -77,6 +78,7 @@ class TaskCategory:
             cls.TABULAR_CLASSIFICATION,
             cls.TABULAR_REGRESSION,
             cls.TIME_SERIES_FORECASTING,
+            cls.TIME_SERIES_CLASSIFICATION,
             cls.TIME_TO_EVENT_PREDICTION,
             cls.SEMANTIC_SEGMENTATION,
             cls.MASKED_LANGUAGE_MODELING,

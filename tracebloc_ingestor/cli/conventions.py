@@ -69,10 +69,30 @@ TABULAR_CATEGORIES: FrozenSet[str] = frozenset(
     }
 )
 
-TIME_SERIES_CATEGORIES: FrozenSet[str] = frozenset(
+# The two time-series categories are SIBLINGS (same level, backend#1054):
+# forecasting predicts future values of a series (regression-class, numeric
+# label -> policy required); classification maps one whole sequence per
+# ``sequence_id`` to one class label (classification-class, string-shorthand
+# label, passthrough policy). Neither is a variant of the other — each has
+# its own category name at ingest, its own ModalitySpec, and its own
+# validator set.
+TIME_SERIES_FORECASTING_CATEGORIES: FrozenSet[str] = frozenset(
     {
         TaskCategory.TIME_SERIES_FORECASTING,
     }
+)
+
+TIME_SERIES_CLASSIFICATION_CATEGORIES: FrozenSet[str] = frozenset(
+    {
+        TaskCategory.TIME_SERIES_CLASSIFICATION,
+    }
+)
+
+# Umbrella over BOTH time-series categories — for callers that mean "any
+# time-series-family task". Never use this to decide label policy; that is
+# what the class-specific sets above are for.
+TIME_SERIES_CATEGORIES: FrozenSet[str] = (
+    TIME_SERIES_FORECASTING_CATEGORIES | TIME_SERIES_CLASSIFICATION_CATEGORIES
 )
 
 TIME_TO_EVENT_CATEGORIES: FrozenSet[str] = frozenset(
@@ -89,10 +109,12 @@ MLM_CATEGORIES: FrozenSet[str] = frozenset(
 
 # Categories where the label is a numeric prediction target rather than
 # class metadata. The schema requires `label.policy` for these so the raw
-# value never ships to the central backend by default.
+# value never ships to the central backend by default. Built from the
+# FORECASTING set only — time_series_classification is classification-class
+# and must not inherit the regression label policy.
 REGRESSION_CLASS_CATEGORIES: FrozenSet[str] = frozenset(
     {TaskCategory.TABULAR_REGRESSION}
-    | TIME_SERIES_CATEGORIES
+    | TIME_SERIES_FORECASTING_CATEGORIES
     | TIME_TO_EVENT_CATEGORIES
 )
 
@@ -334,6 +356,15 @@ def resolve(config: Dict[str, Any]) -> ResolvedConfig:
             )
         resolved.file_options["bit_depth"] = bit_depth
 
+    # 7d. Uploader-declared per-column descriptors (`unit`, `ordinal`) — the
+    #     alignment facts that CAN'T be inferred from the data (di#360). Carried
+    #     on file_options so BaseIngestor merges them into the enriched schema
+    #     descriptors, where the backend's combine-time checks read them (a USD
+    #     vs EUR `unit` mismatch is a silent federated-data hazard). Same
+    #     spec.file_options-wins precedence as the bridges above.
+    if "columns" in config and "column_descriptors" not in spec_file_options:
+        resolved.file_options["column_descriptors"] = config["columns"]
+
     # 8. annotation_column — keypoint_detection's existing template uses
     #    column "Annotation" (the keypoint coords carried in the CSV). The
     #    YAML schema doesn't expose this directly in v1; we honour the
@@ -396,6 +427,8 @@ __all__ = [
     "IMAGE_CATEGORIES",
     "TEXT_CATEGORIES",
     "TABULAR_CATEGORIES",
+    "TIME_SERIES_FORECASTING_CATEGORIES",
+    "TIME_SERIES_CLASSIFICATION_CATEGORIES",
     "TIME_SERIES_CATEGORIES",
     "TIME_TO_EVENT_CATEGORIES",
     "REGRESSION_CLASS_CATEGORIES",

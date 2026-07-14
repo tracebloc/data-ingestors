@@ -55,6 +55,12 @@ def map_validators(
             extension=options.get("extension", FileExtension.TXT),
         )
     ]
+    # Thread the spec's grouping trait into the factory options so the
+    # group/time column names have ONE source of truth (the ModalitySpec) —
+    # the per-category factories must never re-hardcode the names that
+    # ``ingestors/base.py`` reads from the same trait (review: #359).
+    if spec.grouping is not None:
+        options = {**options, "grouping": spec.grouping}
     validators += spec.build_validators(options)
     # Classification-family datasets need >= 2 distinct labels.
     if spec.is_classification:

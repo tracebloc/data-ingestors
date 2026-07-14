@@ -43,7 +43,12 @@ class Config:
         "SRC_PATH", "LABEL_FILE", "TABLE_NAME", "TITLE",
         "LOG_LEVEL",
         "CATEGORICAL_MIN_COUNT",
+        "EMIT_ENRICHED_SCHEMA",
     })
+
+    # Env values (case-insensitive) that read as boolean true; anything else
+    # (including unset) is false.
+    _TRUE_STRINGS = frozenset({"1", "true", "yes", "on"})
 
     # Numeric fields whose properties unconditionally coerce via ``int(...)``.
     # ``Config(FIELD=None)`` works for nullable fields (BACKEND_TOKEN etc.)
@@ -209,6 +214,25 @@ class Config:
         if ov is not _MISSING:
             return ov if isinstance(ov, int) else LogLevel.get_level_code(ov)
         return LogLevel.get_level_code(os.environ.get("LOG_LEVEL", "WARNING"))
+
+    @property
+    def EMIT_ENRICHED_SCHEMA(self) -> bool:
+        """Whether to emit the per-column *enriched* ``schema`` on the global-
+        metadata channel — ``{col: {dtype, role, …}}`` — instead of the legacy
+        flat ``{col: SQL_type}`` map (data-ingestors#360 slice 1b).
+
+        This is a **breaking wire-format change**: the object-per-column shape is
+        only understood by a backend carrying backend#1037 (its ``_column_dtype``
+        reads both shapes; older backends parse ``schema`` values as type
+        strings). So it defaults to **off** and must be flipped on in the
+        deployment only once the paired backend is live — the coordinated
+        cutover the #360 plan calls for. ``feature_stats`` is unaffected
+        (additive, already live).
+        """
+        ov = self._override("EMIT_ENRICHED_SCHEMA")
+        if ov is not _MISSING:
+            return ov if isinstance(ov, bool) else str(ov).strip().lower() in self._TRUE_STRINGS
+        return os.environ.get("EMIT_ENRICHED_SCHEMA", "").strip().lower() in self._TRUE_STRINGS
 
     def validate(self) -> None:
         """Fail fast on missing backend authentication.

@@ -252,6 +252,31 @@ def test_tabular_without_schema_rejected(validator):
         validator.validate(config)
 
 
+def test_columns_descriptors_accepted(validator):
+    # Optional per-column alignment descriptors (di#360): unit + ordinal.
+    config = _load_example("tabular_classification.yaml")
+    config["columns"] = {
+        "age": {"unit": "years"},
+        "size": {"ordinal": ["low", "med", "high"]},
+    }
+    validator.validate(config)  # must not raise
+
+
+def test_columns_unknown_descriptor_key_rejected(validator):
+    # additionalProperties:false on the descriptor catches typos like "units".
+    config = _load_example("tabular_classification.yaml")
+    config["columns"] = {"age": {"units": "years"}}
+    with pytest.raises(ValidationError):
+        validator.validate(config)
+
+
+def test_columns_ordinal_must_be_string_array(validator):
+    config = _load_example("tabular_classification.yaml")
+    config["columns"] = {"size": {"ordinal": [1, 2, 3]}}
+    with pytest.raises(ValidationError):
+        validator.validate(config)
+
+
 def test_masked_language_modeling_with_label_rejected(validator):
     """Issue #213: self-supervised categories (MLM, …) MUST NOT carry a
     `label:` field. The CSV has no label column, and the framework registers

@@ -1,0 +1,35 @@
+# Time-series classification: one multivariate sequence per entity (patient /
+# device / session) -> ONE label. Classification-class task, so `label` takes
+# the plain string shorthand (passthrough policy).
+#
+# The physical column names are FIXED by the platform (backend#1054):
+#   - `sequence_id` (VARCHAR)  groups the timestep rows of one sequence
+#   - `timestamp`  (TIMESTAMP, or a numeric step index like INT) orders the
+#     rows WITHIN each sequence — ordering across sequences doesn't matter
+#   - `label` is constant within each sequence (one outcome per sequence)
+# All other columns are numeric features (nulls allowed).
+#
+# Counting is per SEQUENCE, not per row: the ingest summary reports
+# {label: number_of_sequences_with_that_label}. A sequence must be fully
+# contained in one ingest run (don't split one patient across two pushes).
+apiVersion: tracebloc.io/v1
+kind: IngestConfig
+table: icu_vitals_sepsis_train
+intent: train
+category: time_series_classification
+csv: /data/shared/icu-sepsis/vitals.csv
+schema:
+  # Group key: the entity whose rows form one sequence. VARCHAR — it is an
+  # identifier, not a feature.
+  sequence_id: VARCHAR(64)
+  # Order key WITHIN each sequence: SQL TIMESTAMP, or a numeric step index
+  # (e.g. INT hours-since-admission). Must be non-decreasing per sequence.
+  timestamp: TIMESTAMP
+  # Numeric feature columns (nulls allowed — e.g. a lab value not measured
+  # at every timestep).
+  heart_rate: FLOAT
+  resp_rate: FLOAT
+  temperature: FLOAT
+  # The per-sequence outcome; every row of a sequence repeats the same value.
+  sepsis: INT
+label: sepsis
