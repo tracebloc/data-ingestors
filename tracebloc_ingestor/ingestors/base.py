@@ -47,6 +47,11 @@ logger = logging.getLogger(__name__)
 
 __all__ = ["BaseIngestor", "IngestionSummary"]
 
+# Image bit depths the combine-time contract accepts (mirrors the check in
+# cli.conventions.resolve). Values outside this set must not reach the emitted
+# attributes even when bit_depth bypasses resolve() via spec.file_options.
+_SUPPORTED_BIT_DEPTHS = (8, 16)
+
 
 def _rows_state_clause(inserted_records: int) -> str:
     """Phrase the parenthetical about what's already in the database for a
@@ -458,8 +463,16 @@ class BaseIngestor(ABC):
                 attributes["color_mode"] = color_mode
                 attributes["channels"] = COLOR_MODE_CHANNELS[color_mode]
 
+            # Only the contract-accepted depths (8/16) — mirrors color_mode's
+            # canonicalisation. conventions.resolve() rejects other values, but a
+            # bit_depth set directly in spec.file_options or a modality spec
+            # bypasses that gate, so re-check here before it reaches the contract.
             bit_depth = self.file_options.get("bit_depth")
-            if isinstance(bit_depth, int) and not isinstance(bit_depth, bool):
+            if (
+                isinstance(bit_depth, int)
+                and not isinstance(bit_depth, bool)
+                and bit_depth in _SUPPORTED_BIT_DEPTHS
+            ):
                 attributes["bit_depth"] = bit_depth
 
         if self.category in _NLP_CATEGORIES:

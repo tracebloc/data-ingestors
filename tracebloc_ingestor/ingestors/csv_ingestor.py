@@ -10,6 +10,7 @@ import csv as _csv
 import numpy as np
 import pandas as pd
 from ..utils import redaction
+from ..utils.columns import resolve_column
 import logging
 from pathlib import Path
 
@@ -520,10 +521,15 @@ class CSVIngestor(BaseIngestor):
         ``_MAX_CATEGORICAL_CARDINALITY`` it is dropped and never re-considered
         (free text / id, not a categorical feature). Excluded columns (label,
         row-id, annotation) are skipped.
+
+        Exclusion matches the configured names case- and whitespace-insensitively
+        via ``resolve_column`` (the #340 rule): this runs during ``_validate_csv``
+        on the raw header, before label pinning, so a header spelled ``Label`` /
+        ``" label "`` must still exclude a config that says ``label`` — otherwise
+        a row-id / label column's raw values would leak into ``feature_stats``.
         """
-        if (
-            column in self._categorical_excluded
-            or column in self._categorical_over_cap
+        if column in self._categorical_over_cap or any(
+            resolve_column([column], name) for name in self._categorical_excluded
         ):
             return
         vals = series.dropna()

@@ -267,6 +267,23 @@ def test_categorical_vocab_excludes_label_id_annotation(make_csv):
     assert set(ing.categorical_vocab()) == {"region"}
 
 
+def test_categorical_vocab_excludes_label_by_case_insensitive_name(make_csv):
+    # The CSV header spelling differs from the configured name (Label vs label):
+    # exclusion must still match case-/whitespace-insensitively (the #340 rule),
+    # or the label column's raw values would leak into the emitted vocab.
+    path = make_csv({"region": ["N", "S"], "Label": ["cat", "dog"]})
+    ing = make_csv_ingestor(
+        schema={"region": "VARCHAR(4)", "Label": "VARCHAR(8)"},
+        label_column="label",  # lower-case config vs "Label" header
+        category=TaskCategory.TABULAR_CLASSIFICATION,
+    )
+    list(ing.read_data(str(path)))
+
+    vocab = ing.categorical_vocab()
+    assert set(vocab) == {"region"}
+    assert "Label" not in vocab
+
+
 def test_categorical_vocab_ignores_nulls(make_csv):
     path = make_csv({"c": ["a", None, "b"]})
     ing = make_csv_ingestor(schema={"c": "VARCHAR(4)"})

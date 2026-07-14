@@ -66,6 +66,21 @@ def test_grayscale_color_mode_channels():
     assert attrs["bit_depth"] == 16
 
 
+def test_invalid_bit_depth_in_file_options_is_skipped():
+    # bit_depth set directly in file_options bypasses conventions.resolve()'s
+    # 8/16 gate; the base hook must still drop a value the contract rejects
+    # (mirrors color_mode canonicalisation).
+    ing = make_ingestor(
+        schema={"filename": "VARCHAR(64)"},
+        category=TaskCategory.IMAGE_CLASSIFICATION,
+        data_format=DataFormat.IMAGE,
+        file_options={"color_mode": "rgb", "bit_depth": 12},
+    )
+    attrs = ing._collect_run_metadata()["attributes"]
+    assert "bit_depth" not in attrs  # 12 is not a contract-accepted depth
+    assert attrs["color_mode"] == "RGB"  # the valid sibling still emits
+
+
 def test_invalid_color_mode_in_file_options_is_skipped():
     # Directly-set (unvalidated) file_options with a non-canonical mode: the base
     # hook emits nothing rather than shipping a value the contract would reject.
