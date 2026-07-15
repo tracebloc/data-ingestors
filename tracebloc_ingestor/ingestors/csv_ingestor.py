@@ -482,7 +482,13 @@ class CSVIngestor(BaseIngestor):
         ``_feature_stats_excluded``. An all-null column contributes nothing and
         never appears in the emitted stats (min/max would be undefined).
         """
-        if column in self._feature_stats_excluded:
+        # Match configured excluded names case-/whitespace-insensitively against
+        # the actual header via resolve_column (the #340 rule) — accumulation runs
+        # on raw CSV headers during _validate_csv, before label pinning, so a
+        # config ``Label`` must still exclude a header ``label`` (or a drifted
+        # id / annotation column). Mirrors the categorical exclusion below;
+        # exact membership here would leak the label/id/annotation into stats.
+        if any(resolve_column([column], name) for name in self._feature_stats_excluded):
             return
         vals = series.dropna()
         if vals.empty:
@@ -528,16 +534,25 @@ class CSVIngestor(BaseIngestor):
         stored in the DB ``label`` column. Feature columns keep their own names.
         """
         stats = {col: dict(s) for col, s in self._feature_stats_acc.items()}
+        # Resolve the configured target against the accumulator keys (actual CSV
+        # headers) case-/whitespace-insensitively: the keys use the raw header
+        # spelling, which can differ from label_column by case/whitespace, so an
+        # exact match would leave the target under the CSV name and break
+        # alignment with the schema's role:"target" and backend feature_stats[label].
+        resolved_target = (
+            resolve_column(stats.keys(), self.label_column)
+            if self.label_column
+            else None
+        )
         if (
-            self.label_column
+            resolved_target
             and self.category in REGRESSION_CLASS_CATEGORIES
-            and self.label_column in stats
-            and self.label_column != _TARGET_COLUMN
+            and resolved_target != _TARGET_COLUMN
         ):
             # pop→assign standardizes the key; if a feature were literally named
             # "label" it would collide, but "label" is the framework's own target
             # column name, so a user feature can't legitimately claim it.
-            stats[_TARGET_COLUMN] = stats.pop(self.label_column)
+            stats[_TARGET_COLUMN] = stats.pop(resolved_target)
         return stats
 
     def _accumulate_categorical(self, column: str, series: pd.Series) -> None:
