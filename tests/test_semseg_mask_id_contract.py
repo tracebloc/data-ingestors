@@ -147,7 +147,7 @@ def test_missing_column_message_caps_header_list(make_csv):
     path = make_csv(pd.DataFrame({f"c{i}": ["x"] for i in range(50)}))
     result = MaskIdColumnValidator(column="mask_id").validate(str(path))
     assert not result.is_valid
-    assert "more)" in result.errors[0]  # truncation marker
+    assert "more of 50)" in result.errors[0]  # column_preview truncation marker
     assert len(result.metadata["columns"]) == 50  # full detail retained
 
 
@@ -159,7 +159,7 @@ def test_undeclared_message_caps_schema_key_list(make_csv):
     schema = {f"c{i}": "VARCHAR(255)" for i in range(50)}  # 50 keys, no mask_id
     result = MaskIdColumnValidator(column="mask_id", schema=schema).validate(str(path))
     assert not result.is_valid
-    assert "more)" in result.errors[0]  # truncation marker
+    assert "more of 50)" in result.errors[0]  # column_preview truncation marker
     assert len(result.metadata["schema_columns"]) == 50  # full detail retained
 
 
