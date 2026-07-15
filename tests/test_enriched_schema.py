@@ -146,6 +146,33 @@ def test_declared_descriptor_for_unknown_column_ignored():
     assert out == {"a": {"dtype": "int", "null_encoding": "null"}}
 
 
+def test_declared_descriptor_case_drift_resolved():
+    # Review (#361): a descriptor key that drifts by case/whitespace from the
+    # reflected column name must still attach (resolve_column), not be dropped.
+    ing = make_ingestor(
+        enriched=True,
+        file_options={"column_descriptors": {"A": {"unit": "years"}}},
+    )
+    out = ing._schema_payload({"a": "INT"})
+    assert out["a"]["unit"] == "years"
+
+
+def test_declared_descriptor_for_target_maps_to_label():
+    # Review (#361): descriptors are declared by CSV column name, but the physical
+    # schema keys the target as `label`. A unit/ordinal declared for the target
+    # (by its source name, e.g. "demand_mw") must attach to `label`, not be
+    # dropped because the source name isn't a physical column.
+    ing = make_ingestor(
+        enriched=True,
+        label_column="demand_mw",
+        file_options={"column_descriptors": {"demand_mw": {"unit": "MW"}}},
+    )
+    out = ing._schema_payload({"feat": "FLOAT", "label": "FLOAT"})
+    assert out["label"]["role"] == "target"
+    assert out["label"]["unit"] == "MW"
+    assert "demand_mw" not in out
+
+
 def test_bool_and_null_encoding():
     ing = make_ingestor(enriched=True, label_column=None)
     out = ing._schema_payload({"flag": "BOOLEAN", "age": "INT", "name": "VARCHAR(9)"})

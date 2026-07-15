@@ -398,24 +398,24 @@ def test_feature_stats_excludes_case_drifted_label(make_csv):
     assert "label" not in stats
 
 
-def test_feature_stats_rekeys_case_drifted_target_and_excludes_drifted_id(make_csv):
+def test_feature_stats_rekeys_case_drifted_target(make_csv):
     # Review (#361): for regression-class the target re-key must resolve the
-    # configured target against the accumulator keys case-insensitively, and the
-    # id exclusion likewise — a header ("target"/"RowId") that drifts from the
-    # config ("Target"/"rowid") must still re-key/exclude correctly, else the
-    # target stays under the CSV name (breaking schema role:"target" / backend
-    # feature_stats["label"]) and the id pollutes the stats.
+    # configured target against the accumulator keys case-insensitively — a header
+    # ("target") that drifts from config ("Target") must still re-key to "label",
+    # else the target stays under the CSV name (breaking schema role:"target" /
+    # backend feature_stats["label"]). (A drifted unique_id_column is a separate
+    # matter — the unique_id validation rejects it at ingest, so it can never
+    # reach the stats to pollute them; here the id matches its header.)
     path = make_csv({"feat": [1, 2, 3], "target": [10, 20, 30], "RowId": [7, 8, 9]})
     ing = make_csv_ingestor(
         schema={"feat": "FLOAT", "target": "FLOAT", "RowId": "INT"},
         label_column="Target",  # drifts from header "target"
-        unique_id_column="rowid",  # drifts from header "RowId"
+        unique_id_column="RowId",  # matches header
         category=TaskCategory.TABULAR_REGRESSION,
     )
     list(ing.read_data(str(path)))
 
     stats = ing.feature_stats()
     assert set(stats) == {"feat", "label"}
-    assert "target" not in stats
-    assert "RowId" not in stats and "rowid" not in stats
+    assert "target" not in stats and "RowId" not in stats
     assert stats["label"]["sum"] == 60.0

@@ -647,12 +647,23 @@ class BaseIngestor(ABC):
         # target, which the physical schema keys as ``label``) are ignored.
         declared = self.file_options.get("column_descriptors") or {}
         for col, desc in declared.items():
-            if col not in enriched or not isinstance(desc, dict):
+            if not isinstance(desc, dict):
+                continue
+            # Resolve the declared name against the physical schema case-/
+            # whitespace-insensitively (the #340 resolve_column rule). A descriptor
+            # for the target is declared by its CSV column name (e.g. "demand_mw"),
+            # but the physical schema keys the target as ``label`` — map it there;
+            # every other column resolves to its reflected key.
+            if self.label_column and resolve_column([col], self.label_column):
+                target = _TARGET_COLUMN if _TARGET_COLUMN in enriched else None
+            else:
+                target = resolve_column(enriched.keys(), col)
+            if not target:
                 continue
             if desc.get("unit") is not None:
-                enriched[col]["unit"] = desc["unit"]
+                enriched[target]["unit"] = desc["unit"]
             if desc.get("ordinal") is not None:
-                enriched[col]["ordinal"] = desc["ordinal"]
+                enriched[target]["ordinal"] = desc["ordinal"]
         return enriched
 
     def _count_records(self, source: Any) -> Optional[int]:
