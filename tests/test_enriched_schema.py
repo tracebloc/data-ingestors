@@ -205,3 +205,16 @@ def test_enriched_does_not_mutate_input():
     ing._schema_payload(flat)
     # The caller's dict is untouched (values still storage-type strings).
     assert flat == {"a": "INT", "label": "VARCHAR(255)"}
+
+
+def test_declared_descriptor_feature_not_misrouted_to_label():
+    # Review (#361): a descriptor for a real feature that only case-matches the
+    # label's source name must route to that feature, not be misrouted to `label`.
+    ing = make_ingestor(
+        enriched=True,
+        label_column="demand_mw",  # target's source name
+        file_options={"column_descriptors": {"Demand_MW": {"unit": "MW"}}},
+    )
+    out = ing._schema_payload({"Demand_MW": "FLOAT", "label": "FLOAT"})
+    assert out["Demand_MW"]["unit"] == "MW"  # feature keeps its descriptor
+    assert "unit" not in out["label"]  # not misrouted to the target

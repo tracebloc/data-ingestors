@@ -251,6 +251,12 @@ class CSVIngestor(BaseIngestor):
         if self.label_column and self.category not in REGRESSION_CLASS_CATEGORIES:
             excluded.add(self.label_column)
         self._feature_stats_excluded = excluded
+        # Configured names resolved to their ACTUAL header spellings, pinned once
+        # the real columns are seen (_validate_csv). Resolving up front then
+        # excluding by EXACT membership handles drifted headers (#340) WITHOUT
+        # over-matching a distinct feature that merely shares a role name's
+        # case-variant. Populated lazily; None until the first chunk.
+        self._feature_stats_excluded_resolved = None
 
         # Per categorical-feature-column union vocabulary, accumulated in the
         # VARCHAR/CHAR/TEXT cast pass and emitted under the same
@@ -277,6 +283,8 @@ class CSVIngestor(BaseIngestor):
             )
             if c
         }
+        # Same resolve-once-then-exact-match treatment as the numeric exclusion.
+        self._categorical_excluded_resolved = None
 
         # Temporal facts for time-series forecasting (di#360): the timestamp
         # column's timezone (tz-aware iff the parsed dtype carries a tz) and a
@@ -300,6 +308,24 @@ class CSVIngestor(BaseIngestor):
         """
         # Only validate columns that exist in both schema and CSV
         common_columns = set(self.schema.keys()) & set(df.columns)
+
+        # Pin the feature_stats exclusion sets to the ACTUAL header spellings once
+        # the real columns are known (#340): resolve each configured name to its
+        # column, then exclude by exact membership. Columns are identical across
+        # chunks, so resolve only on the first chunk. This excludes a case-/
+        # whitespace-drifted label/id/annotation header while NOT dropping a
+        # distinct feature that only case-matches a role name.
+        if self._feature_stats_excluded_resolved is None:
+            self._feature_stats_excluded_resolved = {
+                resolved
+                for name in self._feature_stats_excluded
+                if (resolved := resolve_column(df.columns, name))
+            }
+            self._categorical_excluded_resolved = {
+                resolved
+                for name in self._categorical_excluded
+                if (resolved := resolve_column(df.columns, name))
+            }
 
         # Log which schema columns are not in the CSV (for information only)
         missing_columns = set(self.schema.keys()) - set(df.columns)
@@ -482,13 +508,11 @@ class CSVIngestor(BaseIngestor):
         ``_feature_stats_excluded``. An all-null column contributes nothing and
         never appears in the emitted stats (min/max would be undefined).
         """
-        # Match configured excluded names case-/whitespace-insensitively against
-        # the actual header via resolve_column (the #340 rule) — accumulation runs
-        # on raw CSV headers during _validate_csv, before label pinning, so a
-        # config ``Label`` must still exclude a header ``label`` (or a drifted
-        # id / annotation column). Mirrors the categorical exclusion below;
-        # exact membership here would leak the label/id/annotation into stats.
-        if any(resolve_column([column], name) for name in self._feature_stats_excluded):
+        # Exclude by exact membership against the resolved exclusion set (the
+        # configured label/id/annotation names pinned to their real headers in
+        # _validate_csv). This drops a case-/whitespace-drifted role header but
+        # keeps a distinct feature that merely shares a role name's case-variant.
+        if column in (self._feature_stats_excluded_resolved or ()):
             return
         vals = series.dropna()
         if vals.empty:
@@ -566,14 +590,15 @@ class CSVIngestor(BaseIngestor):
         never re-considered (free text / id, not a categorical feature). Excluded
         columns (label, row-id, annotation) are skipped.
 
-        Exclusion matches the configured names case- and whitespace-insensitively
-        via ``resolve_column`` (the #340 rule): this runs during ``_validate_csv``
-        on the raw header, before label pinning, so a header spelled ``Label`` /
-        ``" label "`` must still exclude a config that says ``label`` — otherwise
-        a row-id / label column's raw values would leak into ``feature_stats``.
+        Exclusion is by exact membership against the resolved exclusion set (the
+        configured names pinned to their real headers in ``_validate_csv``, #340),
+        so a header spelled ``Label`` / ``" label "`` is still excluded for a
+        config that says ``label`` — while a distinct feature that only case-
+        matches a role name is kept, not dropped.
         """
-        if column in self._categorical_over_cap or any(
-            resolve_column([column], name) for name in self._categorical_excluded
+        if (
+            column in self._categorical_over_cap
+            or column in (self._categorical_excluded_resolved or ())
         ):
             return
         vals = series.dropna()

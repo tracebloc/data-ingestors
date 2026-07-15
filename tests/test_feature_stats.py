@@ -419,3 +419,23 @@ def test_feature_stats_rekeys_case_drifted_target(make_csv):
     assert set(stats) == {"feat", "label"}
     assert "target" not in stats and "RowId" not in stats
     assert stats["label"]["sum"] == 60.0
+
+
+def test_feature_stats_keeps_feature_that_case_matches_role_name(make_csv):
+    # Review (#361): resolve_column exclusion must not OVER-match — a distinct
+    # feature ("Label") that only case-matches a role name ("label") must still be
+    # accumulated, not dropped as the label. (Exclusion resolves the configured
+    # names to their exact headers, then matches exactly.)
+    path = make_csv(
+        {"feat": [1.0, 2.0, 3.0], "label": [0, 1, 0], "Label": [5.0, 6.0, 7.0]}
+    )
+    ing = make_csv_ingestor(
+        schema={"feat": "FLOAT", "label": "INT", "Label": "FLOAT"},
+        label_column="label",
+        category=TaskCategory.TABULAR_CLASSIFICATION,
+    )
+    list(ing.read_data(str(path)))
+
+    stats = ing.feature_stats()
+    assert set(stats) == {"feat", "Label"}
+    assert "label" not in stats

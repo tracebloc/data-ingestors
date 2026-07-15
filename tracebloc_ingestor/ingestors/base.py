@@ -649,15 +649,20 @@ class BaseIngestor(ABC):
         for col, desc in declared.items():
             if not isinstance(desc, dict):
                 continue
-            # Resolve the declared name against the physical schema case-/
-            # whitespace-insensitively (the #340 resolve_column rule). A descriptor
-            # for the target is declared by its CSV column name (e.g. "demand_mw"),
-            # but the physical schema keys the target as ``label`` — map it there;
-            # every other column resolves to its reflected key.
-            if self.label_column and resolve_column([col], self.label_column):
+            # Resolve the declared name to a physical column FIRST (the #340
+            # resolve_column rule, case-/whitespace-insensitive). A descriptor for
+            # the target is keyed by its CSV source name (e.g. "demand_mw"), which
+            # isn't a physical column (the schema keys the target as ``label``), so
+            # only THEN map it to ``label``. Resolving physically first means a
+            # real feature that merely case-matches the label's source name is
+            # routed to itself, not misrouted onto the target.
+            target = resolve_column(enriched.keys(), col)
+            if (
+                not target
+                and self.label_column
+                and resolve_column([col], self.label_column)
+            ):
                 target = _TARGET_COLUMN if _TARGET_COLUMN in enriched else None
-            else:
-                target = resolve_column(enriched.keys(), col)
             if not target:
                 continue
             if desc.get("unit") is not None:
