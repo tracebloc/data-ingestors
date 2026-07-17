@@ -218,3 +218,28 @@ def test_declared_descriptor_feature_not_misrouted_to_label():
     out = ing._schema_payload({"Demand_MW": "FLOAT", "label": "FLOAT"})
     assert out["Demand_MW"]["unit"] == "MW"  # feature keeps its descriptor
     assert "unit" not in out["label"]  # not misrouted to the target
+
+
+def test_target_source_column_stripped_from_schema_under_case_drift():
+    # Review (#361): the special columns are removed from the physical table
+    # schema by case-/whitespace-insensitive resolution (#340), not exact match.
+    # A manifest label_column that drifts in case from the header ("Price" vs
+    # "price") must still be stripped — otherwise the target's SOURCE column
+    # survives as a spurious feature column, reflects back into the enriched
+    # schema, and its uploader unit/ordinal descriptor attaches there instead of
+    # the framework `label` column that carries role:"target" (bugbot medium).
+    db = MagicMock()
+    db.config = Config(EMIT_ENRICHED_SCHEMA=True)
+    ing = CSVIngestor(
+        database=db,
+        api_client=MagicMock(),
+        table_name="tbl",
+        schema={"price": "FLOAT", "feat": "FLOAT"},
+        intent="train",
+        category=None,
+        label_column="Price",  # case-drifts from the "price" header
+    )
+    # The target's source column is gone from the prepared physical schema...
+    assert set(ing._table_schema) == {"feat"}
+    # ...and from the sanitized schema shipped to the backend in meta_data.
+    assert "price" not in ing.file_options["schema"]

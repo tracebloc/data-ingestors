@@ -281,14 +281,29 @@ class BaseIngestor(ABC):
             )
 
         # Remove label_column, annotation_column, and unique_id_column from schema
-        # These are handled separately and should not be ingested as regular columns
+        # These are handled separately and should not be ingested as regular columns.
+        # Resolve each against the schema keys case-/whitespace-insensitively (the
+        # #340 rule) rather than by exact key: label_column isn't pinned to the real
+        # header until _resolve_label_column runs mid-ingest, so a manifest
+        # ``label.column: Price`` (or ``" price "``) against a header ``price`` would
+        # otherwise miss here and leave the target's SOURCE column in the physical
+        # table. It would then reflect back into the enriched schema, and its
+        # uploader unit/ordinal descriptor would attach to that feature-named column
+        # instead of the framework ``label`` column that carries role:"target" — so
+        # the backend's combine-time target descriptor checks would miss the declared
+        # unit/ordinal (bugbot medium). The same exact-vs-resolved gap applied to the
+        # annotation / unique_id columns.
         table_schema = schema.copy()
-        if self.label_column and self.label_column in table_schema:
-            del table_schema[self.label_column]
-        if self.annotation_column and self.annotation_column in table_schema:
-            del table_schema[self.annotation_column]
-        if self.unique_id_column and self.unique_id_column in table_schema:
-            del table_schema[self.unique_id_column]
+        for _special in (
+            self.label_column,
+            self.annotation_column,
+            self.unique_id_column,
+        ):
+            if not _special:
+                continue
+            _physical = resolve_column(table_schema.keys(), _special)
+            if _physical:
+                del table_schema[_physical]
 
         # Canonical feature-column ordering (#763, mode A). Tabular-family
         # trainers read features positionally and the averaging service sums
