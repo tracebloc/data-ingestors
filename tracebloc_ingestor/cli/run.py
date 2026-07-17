@@ -139,6 +139,16 @@ def main(argv: List[str] | None = None) -> int:  # pragma: no cover - thin shell
 
     ingestor = _build_ingestor(database, api_client, resolved)
 
+    if ingestor.correlation_id:
+        # backend#1028 item 3: the one always-visible line (print, not
+        # logger — default LOG_LEVEL is WARNING) that ties this Job's log
+        # to the CLI's correlation id and to the per-process ingestor_id
+        # stamped on every MySQL row this run inserts.
+        print(
+            f"Correlation id: {ingestor.correlation_id} "
+            f"(ingestor_id: {ingestor.ingestor_id})"
+        )
+
     with ingestor:
         try:
             failed = ingestor.ingest(resolved.source_path, batch_size=config.BATCH_SIZE)

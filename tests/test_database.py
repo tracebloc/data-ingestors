@@ -767,3 +767,119 @@ def test_get_label_counts_null_label_normalised_to_empty_string(db, mock_engine_
     ]
     result = db.get_label_counts("tbl", "ing-uuid")
     assert result == {"": 5, "cat": 5}
+
+
+# ---------------------------------------------------------------------------
+# Run journal: orphan-row reconciliation (backend#1028 item 2)
+# ---------------------------------------------------------------------------
+
+
+def _executed_sql(conn):
+    """The raw SQL text of every statement executed on the mock connection."""
+    return [str(call.args[0]) for call in conn.execute.call_args_list]
+
+
+def test_record_ingest_started_journals_idempotently(db, mock_engine_factory):
+    """Journaling a run's start must lazily create the journal table and use
+    INSERT IGNORE (idempotent re-entry), then commit — mirroring the salt
+    store's lazy-creation pattern (#225)."""
+    _, _, conn = mock_engine_factory
+    db.record_ingest_started("tbl", "run-a")
+    sql = _executed_sql(conn)
+    assert any(
+        "CREATE TABLE IF NOT EXISTS `tracebloc_ingest_runs`" in s for s in sql
+    )
+    assert any("INSERT IGNORE INTO `tracebloc_ingest_runs`" in s for s in sql)
+    conn.commit.assert_called()
+
+
+def test_mark_ingest_registered_flips_journal_flag(db, mock_engine_factory):
+    """Marking registration must UPDATE the run's journal row to
+    registered=1, scoped to this (ingestor_id, table_name)."""
+    _, _, conn = mock_engine_factory
+    db.mark_ingest_registered("tbl", "run-a")
+    update = next(s for s in _executed_sql(conn) if "UPDATE" in s)
+    assert "registered = 1" in update
+    assert "ingestor_id = :ingestor_id" in update
+    stmt = next(
+        c.args[0] for c in conn.execute.call_args_list if "UPDATE" in str(c.args[0])
+    )
+    assert stmt.compile().params == {"ingestor_id": "run-a", "table_name": "tbl"}
+    conn.commit.assert_called()
+
+
+def test_mark_ingest_unregistered_resets_journal_flag(db, mock_engine_factory):
+    """The failure-path undo must UPDATE the run's journal row back to
+    registered=0 (and clear registered_at), scoped to this
+    (ingestor_id, table_name) — so a send failure after the pre-send flip
+    leaves the rows reclaimable (backend#1028, bugbot High)."""
+    _, _, conn = mock_engine_factory
+    db.mark_ingest_unregistered("tbl", "run-a")
+    update = next(s for s in _executed_sql(conn) if "UPDATE" in s)
+    assert "registered = 0" in update
+    assert "registered_at = NULL" in update
+    assert "ingestor_id = :ingestor_id" in update
+    stmt = next(
+        c.args[0] for c in conn.execute.call_args_list if "UPDATE" in str(c.args[0])
+    )
+    assert stmt.compile().params == {"ingestor_id": "run-a", "table_name": "tbl"}
+    conn.commit.assert_called()
+
+
+def test_reclaim_dead_run_rows_deletes_each_dead_run(db, mock_engine_factory):
+    """The reconcile pass deletes rows per dead run via the #227
+    delete_by_ingestor_id (so logging/retry behavior is shared) and reports
+    ``{dead_id: deleted_count}``."""
+    _, _, conn = mock_engine_factory
+    conn.execute.return_value.fetchall.return_value = [("dead-a",), ("dead-b",)]
+    with patch.object(db, "delete_by_ingestor_id", side_effect=[3, 2]) as delete:
+        result = db.reclaim_dead_run_rows("tbl", "current-run")
+    assert result == {"dead-a": 3, "dead-b": 2}
+    delete.assert_any_call("tbl", "dead-a")
+    delete.assert_any_call("tbl", "dead-b")
+
+
+def test_reclaim_query_targets_only_unregistered_non_current_runs(
+    db, mock_engine_factory
+):
+    """The orphan query must (i) join the journal — rows that predate it
+    (legacy ingests) never match, (ii) require registered = 0, and (iii)
+    exclude the current run, so re-running the pass mid-ingest is safe."""
+    _, _, conn = mock_engine_factory
+    conn.execute.return_value.fetchall.return_value = []
+    db.reclaim_dead_run_rows("tbl", "current-run")
+    select = next(s for s in _executed_sql(conn) if "SELECT DISTINCT" in s)
+    assert "JOIN `tracebloc_ingest_runs`" in select
+    assert "registered = 0" in select
+    assert "!= :current_ingestor_id" in select
+    stmt = next(
+        c.args[0]
+        for c in conn.execute.call_args_list
+        if "SELECT DISTINCT" in str(c.args[0])
+    )
+    assert stmt.compile().params == {
+        "table_name": "tbl",
+        "current_ingestor_id": "current-run",
+    }
+
+
+def test_reclaim_dead_run_rows_noop_when_nothing_dead(db, mock_engine_factory):
+    """No journaled-started-unregistered ids owning rows → no deletes, empty
+    result (idempotency: the second pass after a reclaim hits this path)."""
+    _, _, conn = mock_engine_factory
+    conn.execute.return_value.fetchall.return_value = []
+    with patch.object(db, "delete_by_ingestor_id") as delete:
+        assert db.reclaim_dead_run_rows("tbl", "current-run") == {}
+    delete.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "reserved", ["tracebloc_ingest_meta", "tracebloc_ingest_runs"]
+)
+def test_create_table_rejects_reserved_bookkeeping_tables(reserved):
+    """The salt store (#225) and the run journal (backend#1028) share the
+    cluster MySQL with dataset tables — a dataset must not be able to claim
+    (and corrupt) either name. The guard runs before any DB I/O."""
+    db = Database.__new__(Database)
+    with pytest.raises(ValueError, match="reserved"):
+        db.create_table(reserved, {"feature_0": "FLOAT"})

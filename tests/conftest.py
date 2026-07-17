@@ -33,6 +33,7 @@ _ENV_VARS = (
     "DB_USER",
     "DB_PASSWORD",
     "DB_NAME",
+    "TRACEBLOC_INGEST_CORRELATION_ID",
 )
 
 

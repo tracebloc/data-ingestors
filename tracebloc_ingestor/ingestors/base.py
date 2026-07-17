@@ -21,7 +21,9 @@ from ..utils.constants import (
     canonical_color_mode,
 )
 from ..utils import label_policy as label_policy_module
+from ..utils import redaction
 from ..utils.columns import resolve_column
+from ..utils.correlation import resolve_correlation_id
 from ..utils.validators_mapping import map_validators
 from ..file_transfer import map_file_transfer
 from ..text_profile import compute_text_profile
@@ -169,6 +171,9 @@ class BaseIngestor(ABC):
 
     Attributes:
         ingestor_id: Unique identifier for this ingestor instance
+        correlation_id: End-to-end run id from the TRACEBLOC_INGEST_CORRELATION_ID
+            env var (the CLI's idempotency key, stamped by jobs-manager), or
+            None outside jobs-manager-spawned Jobs (backend#1028 item 3)
         database: Database instance for data storage
         engine: SQLAlchemy engine instance
         api_client: API client for sending data
@@ -244,6 +249,24 @@ class BaseIngestor(ABC):
         self.file_options = file_options or {}
         self.label_policy = label_policy
 
+        # backend#1028 item 3: end-to-end correlation id. When spawned by
+        # jobs-manager, the Job env carries the CLI's idempotency key — the
+        # same string the Job name is derived from and the
+        # tracebloc.io/ingestion-run label holds. Kept ALONGSIDE the
+        # per-process ingestor_id (row scoping — label counts, the #227
+        # compensating delete — must stay per-process across Job retries);
+        # riding file_options puts it in the registration payload's
+        # meta_data, so the backend dataset row carries it too. None when
+        # the env is absent/invalid — behaviour is then exactly as before.
+        self.correlation_id = resolve_correlation_id()
+        if self.correlation_id:
+            self.file_options["correlation_id"] = self.correlation_id
+            logger.info(
+                "Correlation id %s (ingestor_id %s)",
+                self.correlation_id,
+                self.ingestor_id,
+            )
+
         # Default behavior is UUID-generated data_id (no source column leaves
         # the cluster). Opting into source-column mapping is allowed but loud:
         # warn at startup naming the column whose values will be sent to the
@@ -266,6 +289,23 @@ class BaseIngestor(ABC):
             del table_schema[self.annotation_column]
         if self.unique_id_column and self.unique_id_column in table_schema:
             del table_schema[self.unique_id_column]
+
+        # Canonical feature-column ordering (#763, mode A). Tabular-family
+        # trainers read features positionally and the averaging service sums
+        # weights by tensor position, so every edge must agree on which feature
+        # lives at which position. Left alone, the order is whatever each edge's
+        # template ``schema`` dict happened to declare, so two sites can
+        # silently average misaligned features (pos 0 = "age" at one site,
+        # "bmi" at another) with no error. Sorting the cleaned feature columns
+        # into one deterministic order *here* -- the ingest layer, the single
+        # point that defines the stored table schema every edge's trainer later
+        # reads back via its schema-ordered SELECT -- makes the cross-site
+        # contract hold by construction, with no runtime feature_columns
+        # broadcast/reindex needed. Only tabular-family categories are
+        # reordered; image/keypoint schemas (e.g. a "Visibility" column) keep
+        # their declared order.
+        if self.category in _TABULAR_FAMILY_CATEGORIES:
+            table_schema = {key: table_schema[key] for key in sorted(table_schema)}
 
         # Add cleaned schema to file_options for validators / downstream metadata.
         # Always overwrite so a schema passed in by the template (which may still
@@ -767,6 +807,37 @@ class BaseIngestor(ABC):
                 self.table_name, self._table_schema, index_columns=index_columns
             )
 
+        # Reconcile-on-start (backend#1028 item 2): a prior attempt that died
+        # HARD (OOMKilled / SIGKILL) never reached the #227 compensating
+        # delete in the except-branch below, so its rows are still in the
+        # table while its dataset was never registered — and this run (the
+        # k8s Job retry re-ingests the SAME source into the SAME table) would
+        # otherwise duplicate every one of them under fresh data_ids. Reclaim
+        # those orphans BEFORE processing: the run journal knows exactly
+        # which ingestor_ids started here and never registered. Runs under
+        # the table lock, like the rest of this method. Defensive try/except:
+        # a reconcile failure must never block an otherwise healthy ingest —
+        # the fallback is simply today's status quo (the orphans stay), and
+        # this run's own counts are unaffected because every summary query
+        # is scoped to its ingestor_id.
+        try:
+            self.database.reclaim_dead_run_rows(self.table_name, self.ingestor_id)
+        except Exception as reclaim_error:
+            logger.critical(
+                f"Orphan-row reconciliation failed for table "
+                f"{self.table_name!r}: {redaction.safe_db_error(reclaim_error)}. "
+                f"Continuing the ingest — rows left by a previous hard-killed "
+                f"run may remain in the table (backend#1028)."
+            )
+        # Journal this run as STARTED before its first row insert, so that if
+        # THIS process dies hard at any later point, the next attempt's
+        # reconcile pass can recognise (and reclaim) whatever rows it left
+        # behind. Deliberately NOT wrapped: if MySQL can't take this one-row
+        # insert, the batch inserts below would fail anyway — better to fail
+        # now, before any row lands, than to insert rows the journal never
+        # heard about.
+        self.database.record_ingest_started(self.table_name, self.ingestor_id)
+
         batch = []
         failed_records = []
 
@@ -1012,9 +1083,30 @@ class BaseIngestor(ABC):
                     # Per-ingestor data-derived metadata computed during the run
                     # (e.g. the CSV ingestor's numeric feature_stats under
                     # attributes.feature_stats, #360). Merged onto the global-
-                    # metadata channel here, alongside text_profile, just before
-                    # the payload ships.
+                    # metadata channel here, alongside text_profile, so it is
+                    # part of the payload the flip-then-send below ships.
                     self._apply_run_metadata()
+
+                    # Flip the run journal to REGISTERED (backend#1028 item 2)
+                    # BEFORE the remote summary call, not after. The local flip
+                    # and the backend registration can't be made atomic, so
+                    # whichever runs SECOND owns the crash/failure window. With
+                    # the flip second (its previous position) a failed-and-
+                    # swallowed UPDATE — or a hard kill after send returned —
+                    # left the journal at registered=0 while the dataset WAS
+                    # registered, so the next ingest's reclaim pass deleted a
+                    # registered dataset's rows (silent, unrecoverable loss —
+                    # bugbot High). Flipping FIRST inverts the failure mode: a
+                    # crash between this commit and send completing just leaves
+                    # the dataset unregistered, and the k8s retry re-ingests
+                    # from source — a recoverable duplicate the 409-idempotent
+                    # resend and the #227 delete already tolerate — never a
+                    # deletion of registered rows. If send then FAILS, the
+                    # except-branch undoes this flip (mark_ingest_unregistered)
+                    # so reclaim can still recover the rows.
+                    self.database.mark_ingest_registered(
+                        self.table_name, self.ingestor_id
+                    )
 
                     self.api_client.send_ingest_summary(
                         table_name=self.table_name,
@@ -1075,6 +1167,28 @@ class BaseIngestor(ABC):
                     logger.warning(f"session.rollback() failed: {rollback_error}")
                 logger.error(f"Error during ingestion: {str(e)}")
                 if stats.get("inserted_records") and not dataset_registered:
+                    # The journal was flipped to REGISTERED just before the
+                    # summary call (see above). Since registration did NOT
+                    # complete, undo that optimistic flip FIRST — so if the
+                    # compensating delete below fails, a later reclaim pass
+                    # still sees registered=0 and can recover these rows
+                    # instead of stranding them as a phantom registered entry
+                    # (backend#1028). Best-effort: a reset failure must not
+                    # mask the original error or skip the delete.
+                    try:
+                        self.database.mark_ingest_unregistered(
+                            self.table_name, self.ingestor_id
+                        )
+                    except Exception as journal_reset_error:
+                        logger.critical(
+                            f"Failed to reset the run journal to unregistered "
+                            f"for ingestor_id={self.ingestor_id!r} in table "
+                            f"{self.table_name!r}: "
+                            f"{redaction.safe_db_error(journal_reset_error)}. "
+                            f"If the compensating delete also fails, these "
+                            f"rows may not be reclaimed automatically "
+                            f"(backend#1028)."
+                        )
                     try:
                         deleted = self.database.delete_by_ingestor_id(
                             self.table_name, self.ingestor_id
@@ -1089,7 +1203,8 @@ class BaseIngestor(ABC):
                         logger.critical(
                             f"Compensating delete FAILED for "
                             f"ingestor_id={self.ingestor_id!r} in table "
-                            f"{self.table_name!r}: {cleanup_error}. "
+                            f"{self.table_name!r}: "
+                            f"{redaction.safe_db_error(cleanup_error)}. "
                             f"{stats.get('inserted_records', 0)} unregistered "
                             "row(s) remain orphaned (#227)."
                         )

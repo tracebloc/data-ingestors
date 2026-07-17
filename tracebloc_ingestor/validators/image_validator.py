@@ -84,19 +84,35 @@ class ImageResolutionValidator(BaseValidator):
         self.expected_resolution = expected_resolution
         self.subdir = subdir
         # Absolute floor (width, height), normalized once here so every
-        # downstream read can trust it is a 2-tuple. A falsy override falls
-        # back to the module default so the gate is always active, never
-        # silently disabled. A non-iterable or non-2-element override is a
-        # config error, surfaced at construction rather than swallowed
-        # mid-scan as a per-file image-read error.
+        # downstream read can trust it is a 2-tuple of positive ints. A falsy
+        # override falls back to the module default so the gate is always
+        # active, never silently disabled. A non-iterable or non-2-element
+        # override is a config error, surfaced at construction rather than
+        # swallowed mid-scan as a per-file image-read error.
         if min_size:
+            # A str/bytes is iterable, so a 2-char value like "32" would unpack
+            # to ('3', '2') and quietly weaken the floor to (3, 2). Reject it up
+            # front as a shape error — a string is never a (width, height) pair.
+            if isinstance(min_size, (str, bytes)):
+                raise ValueError(
+                    f"min_size must be a (width, height) pair; got {min_size!r}"
+                )
             try:
                 min_w, min_h = min_size
             except (TypeError, ValueError):
                 raise ValueError(
                     f"min_size must be a (width, height) pair; got {min_size!r}"
                 )
-            self.min_size = (min_w, min_h)
+            # Each side must also be a positive integer. A non-integer override
+            # (a "32" string, a float, None) unpacks cleanly above but would blow
+            # up later as an int-vs-str TypeError inside _meets_min_size — caught
+            # by the per-image handler and mislabeled as a corrupt-image error
+            # rather than the config error it is. Normalize each axis once,
+            # loudly, at construction.
+            self.min_size = (
+                self._coerce_dimension(min_w, min_size),
+                self._coerce_dimension(min_h, min_size),
+            )
         else:
             self.min_size = MIN_IMAGE_SIZE
         self.tolerance = 0  # Whether to enforce strict file type checking . we can later make this configurable
@@ -436,6 +452,35 @@ class ImageResolutionValidator(BaseValidator):
                 "tolerance": self.tolerance,
             },
         )
+
+    @staticmethod
+    def _coerce_dimension(value: Any, min_size: Any) -> int:
+        """Normalize one ``min_size`` axis to a positive int at construction.
+
+        Accepts an int or an integer-valued float (``32.0``) — the shapes a
+        numeric literal reaches ``file_options`` as from JSON/YAML — and returns
+        the pixel count. Anything else (``bool``, a non-integral float, a string,
+        ``None``, a negative or zero value) is a config error and raises here, so
+        it never survives to raise a TypeError inside :meth:`_meets_min_size`
+        where the per-image handler would mislabel it as a corrupt-image read.
+        ``bool`` is rejected explicitly — it is an ``int`` subclass but never a
+        valid pixel count. Strings are rejected too (not coerced): the schema
+        declares integers, and a digit string like ``"32"`` would otherwise
+        char-split through the (width, height) unpack into ``('3', '2')`` and
+        silently weaken the floor.
+        """
+        pixels: Optional[int] = None
+        if isinstance(value, bool):
+            pixels = None
+        elif isinstance(value, int):
+            pixels = value
+        elif isinstance(value, float) and value.is_integer():
+            pixels = int(value)
+        if pixels is None or pixels <= 0:
+            raise ValueError(
+                f"min_size must be a pair of positive integers; got {min_size!r}"
+            )
+        return pixels
 
     def _meets_min_size(self, resolution: Tuple[int, int]) -> bool:
         """Return True if ``resolution`` (width, height) is at least the floor
