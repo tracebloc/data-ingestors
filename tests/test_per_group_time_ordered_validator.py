@@ -51,6 +51,20 @@ def test_per_group_ordered_timestamps_pass():
     assert result.metadata["time_kind"] == "timestamp"
 
 
+def test_honors_csv_options_delimiter(tmp_path):
+    # #371 bugbot: parse a non-comma manifest with the run's csv_options. Under
+    # the default comma parse the semicolon file is one squashed column (the
+    # sequence/time columns are absent -> fail); sep=';' resolves it.
+    path = tmp_path / "semi.csv"
+    _ts_df().to_csv(path, index=False, sep=";")
+    assert not PerGroupTimeOrderedValidator(schema=TS_SCHEMA).validate(
+        str(path)
+    ).is_valid
+    assert PerGroupTimeOrderedValidator(
+        schema=TS_SCHEMA, csv_options={"sep": ";"}
+    ).validate(str(path)).is_valid
+
+
 def test_interleaved_sequences_pass_where_global_validator_would_fail():
     # T4: p1 08:00, p2 08:00, p1 09:00, ... is globally NON-monotonic but
     # perfectly ordered per sequence — the whole reason this validator exists.

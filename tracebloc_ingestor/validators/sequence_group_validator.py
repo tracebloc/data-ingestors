@@ -19,6 +19,7 @@ from typing import Any, Optional
 
 from ..utils import redaction
 from ..utils.columns import resolve_column
+from ..utils.csv_dialect import read_dialect_kwargs
 
 try:
     import pandas as pd
@@ -60,6 +61,7 @@ class SequenceGroupValidator(BaseValidator):
         sequence_column: Optional[str] = None,
         unique_id_column: Optional[str] = None,
         schema: Optional[dict] = None,
+        csv_options: Optional[dict] = None,
         name: str = "Sequence Group Validator",
     ):
         """Initialize the sequence group validator.
@@ -70,6 +72,10 @@ class SequenceGroupValidator(BaseValidator):
             unique_id_column: The configured ``data_id`` source column
                 (``data_id.strategy=column``), for the T6 guard
             schema: Optional schema dictionary
+            csv_options: The run's pandas read options (delimiter / encoding /
+                ...), so the manifest is parsed exactly as CSVIngestor parses
+                it. Without it a non-comma or BOM manifest that ingests fine is
+                falsely rejected — or passes for the wrong reason — here.
             name: Human-readable name of the validator
         """
         super().__init__(name)
@@ -78,6 +84,7 @@ class SequenceGroupValidator(BaseValidator):
         )
         self.unique_id_column = unique_id_column
         self.schema = schema or {}
+        self._csv_options = csv_options or {}
 
     def validate(self, data: Any, **kwargs) -> ValidationResult:
         """Validate the sequence group column.
@@ -247,11 +254,14 @@ class SequenceGroupValidator(BaseValidator):
             elif isinstance(data, (str, Path)):
                 path = Path(data)
                 if path.suffix.lower() == ".csv":
+                    # Parse with the run's delimiter / encoding / quoting so the
+                    # validator tokenizes the manifest byte-identically to
+                    # CSVIngestor (bugbot #371); read-shape kwargs layered on top.
                     return pd.read_csv(
                         path,
                         nrows=sample_size,
-                        encoding="utf-8",
                         on_bad_lines="warn",
+                        **read_dialect_kwargs(self._csv_options),
                     )
                 logger.warning(f"Unsupported file type: {path.suffix}, \n\n{path}")
                 return None

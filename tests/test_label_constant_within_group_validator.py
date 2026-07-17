@@ -39,6 +39,18 @@ def test_csv_path_accepted(make_csv):
     assert LabelConstantWithinGroupValidator().validate(str(path)).is_valid
 
 
+def test_honors_csv_options_delimiter(tmp_path):
+    # #371 bugbot: parse a non-comma manifest with the run's csv_options. Under
+    # the default comma parse the semicolon file is one squashed column (no
+    # sequence/label columns -> fail); sep=';' resolves it.
+    path = tmp_path / "semi.csv"
+    _toy_df().to_csv(path, index=False, sep=";")
+    assert not LabelConstantWithinGroupValidator().validate(str(path)).is_valid
+    assert LabelConstantWithinGroupValidator(
+        csv_options={"sep": ";"}
+    ).validate(str(path)).is_valid
+
+
 def test_interleaved_sequences_pass():
     # Row order doesn't matter for constancy — only the per-sequence value set.
     df = _toy_df().sample(frac=1.0, random_state=7).reset_index(drop=True)

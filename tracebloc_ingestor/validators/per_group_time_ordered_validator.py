@@ -22,6 +22,7 @@ import pandas as pd
 
 from ..utils import redaction
 from ..utils.columns import resolve_column
+from ..utils.csv_dialect import read_dialect_kwargs
 
 from .base import BaseValidator, ValidationResult
 from .time_format_validator import parse_month_first_with_ambiguity_mask
@@ -70,6 +71,7 @@ class PerGroupTimeOrderedValidator(BaseValidator):
         sequence_column: Optional[str] = None,
         time_column: Optional[str] = None,
         schema: Optional[dict] = None,
+        csv_options: Optional[dict] = None,
         name: str = "Per Group Time Ordered Validator",
     ):
         super().__init__(name)
@@ -78,6 +80,11 @@ class PerGroupTimeOrderedValidator(BaseValidator):
         )
         self.time_column = time_column if time_column is not None else "timestamp"
         self.schema = schema or {}
+        # The run's pandas read options (delimiter / encoding / ...), so the
+        # manifest is tokenized exactly as CSVIngestor tokenizes it. Without it
+        # a non-comma or BOM manifest that ingests fine is falsely rejected —
+        # or passes for the wrong reason — here (bugbot #371).
+        self._csv_options = csv_options or {}
 
     def _declared_base_type(self) -> Optional[str]:
         """The schema's declared base type for the time column, or None."""
@@ -262,7 +269,14 @@ class PerGroupTimeOrderedValidator(BaseValidator):
             if isinstance(data, (str, Path)):
                 file_path = Path(data).expanduser()
                 if file_path.exists() and file_path.suffix.lower() == ".csv":
-                    return pd.read_csv(file_path, encoding="utf-8", on_bad_lines="warn")
+                    # Parse with the run's delimiter / encoding / quoting so the
+                    # validator tokenizes the manifest byte-identically to
+                    # CSVIngestor (bugbot #371).
+                    return pd.read_csv(
+                        file_path,
+                        on_bad_lines="warn",
+                        **read_dialect_kwargs(self._csv_options),
+                    )
 
             return None
         except Exception as e:
