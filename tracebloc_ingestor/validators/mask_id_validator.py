@@ -29,6 +29,7 @@ import pandas as pd
 from .base import BaseValidator, ValidationResult
 from ..config import Config
 from ..utils.coercion import NA_SENTINELS
+from ..utils.csv_dialect import read_dialect_kwargs, validate_csv_options
 
 config = Config()
 logger = logging.getLogger(__name__)
@@ -41,30 +42,6 @@ logger.setLevel(config.LOG_LEVEL)
 # column then). The semseg factory always passes the resolved schema, so the
 # real ingest path always runs the declaration check.
 _SCHEMA_UNSET = object()
-
-# The ONLY csv_options forwarded to the validator's reads: the keys that control
-# how the manifest is TOKENIZED into columns + cells, so its parse matches
-# CSVIngestor's. A whitelist, not a blacklist — frame-RESTRUCTURING keys
-# (index_col, header, names, usecols, skiprows, nrows, ...) are excluded, because
-# the scan pins its own usecols/dtype/chunksize and forwarding a restructuring
-# key would collide with those (a swallowed error that fail-opens the gate) or
-# change which column mask_id is. New/unknown csv_options are dropped by default.
-_READ_DIALECT_KEYS = frozenset(
-    {
-        "sep",
-        "delimiter",
-        "quotechar",
-        "doublequote",
-        "escapechar",
-        "quoting",
-        "skipinitialspace",
-        "encoding",
-        "encoding_errors",
-        "lineterminator",
-        "comment",
-        "engine",
-    }
-)
 
 # Cap on how many offending row indices the empty-value scan keeps: only a few
 # are shown in the message (redaction.row_refs slices to 5) and the rest are a
@@ -122,32 +99,10 @@ class MaskIdColumnValidator(BaseValidator):
     def _validate_csv_options(self) -> None:
         """Fail fast at construction on a malformed csv_options value, rather than
         deep inside the read where it surfaces as a generic mask-id failure
-        (validate config at construction, not mid-scan). Checks only the dialect
-        keys this validator forwards to pandas (see :data:`_READ_DIALECT_KEYS`)."""
-        str_keys = (
-            "sep",
-            "delimiter",
-            "quotechar",
-            "escapechar",
-            "encoding",
-            "encoding_errors",
-            "lineterminator",
-            "comment",
-            "engine",
-        )
-        for key in str_keys:
-            val = self._csv_options.get(key)
-            if val is not None and not isinstance(val, str):
-                raise ValueError(
-                    f"csv_options['{key}'] must be a string, got "
-                    f"{type(val).__name__} — check the ingest config."
-                )
-        quoting = self._csv_options.get("quoting")
-        if quoting is not None and not isinstance(quoting, int):
-            raise ValueError(
-                f"csv_options['quoting'] must be an int (csv.QUOTE_*), got "
-                f"{type(quoting).__name__} — check the ingest config."
-            )
+        (validate config at construction, not mid-scan). Delegates to the shared
+        :func:`validate_csv_options` so this validator and the grouped
+        time-series validators reject the same malformed dialect values."""
+        validate_csv_options(self._csv_options)
 
     def _read_kwargs(self) -> Dict[str, Any]:
         """The pandas read options needed to parse the manifest exactly as
@@ -155,18 +110,10 @@ class MaskIdColumnValidator(BaseValidator):
         quoting dialect (quotechar / escapechar / quoting / ...), so preflight and
         the write path resolve the same columns + values from the same bytes. A
         sep or quotechar mismatch would split fields differently and desync them.
+        Delegates to the shared :func:`read_dialect_kwargs` so this validator and
+        the grouped time-series validators can't drift on the dialect whitelist.
         """
-        # Lazy import: csv_ingestor -> base -> validators_mapping ->
-        # modalities.validators -> this module, so a top-level import would cycle.
-        from ..ingestors.csv_ingestor import _bom_safe_encoding
-
-        # Forward only the tokenizing dialect keys CSVIngestor honors (see
-        # _READ_DIALECT_KEYS) — never a frame-restructuring key.
-        opts = {k: v for k, v in self._csv_options.items() if k in _READ_DIALECT_KEYS}
-        opts["encoding"] = _bom_safe_encoding(opts.get("encoding"))
-        if "sep" not in opts and "delimiter" not in opts:
-            opts["sep"] = ","
-        return opts
+        return read_dialect_kwargs(self._csv_options)
 
     def validate(self, data: Any, **kwargs) -> ValidationResult:
         try:

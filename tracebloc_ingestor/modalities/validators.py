@@ -411,15 +411,21 @@ def time_series_classification(options: Dict[str, Any]) -> List[BaseValidator]:
             # T6: the run's data_id source column when strategy=column
             # (threaded through options by BaseIngestor.validate_data).
             unique_id_column=options.get("unique_id_column"),
+            # Parse the manifest with the run's delimiter/encoding so a
+            # non-comma or BOM manifest that ingests fine isn't falsely
+            # rejected — or passed for the wrong reason — at preflight (#371).
+            csv_options=options.get("csv_options"),
         ),
         LabelConstantWithinGroupValidator(
             sequence_column=group_column,
             label_column=options.get("label_column") or "label",
+            csv_options=options.get("csv_options"),
         ),
         PerGroupTimeOrderedValidator(
             sequence_column=group_column,
             time_column=time_column,
             schema=schema,
+            csv_options=options.get("csv_options"),
         ),
         NumericColumnsValidator(
             schema=schema, excluded_columns={group_column, time_column}

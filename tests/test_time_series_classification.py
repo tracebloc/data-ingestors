@@ -199,6 +199,28 @@ def test_factory_threads_unique_id_column_to_guard():
     assert guard.unique_id_column == "sequence_id"
 
 
+def test_factory_threads_csv_options_to_all_grouped_validators():
+    # #371 bugbot: every CSV-reading grouped validator must receive the run's
+    # csv_options so it tokenizes the manifest exactly as CSVIngestor does.
+    opts = {"sep": ";", "encoding": "latin-1"}
+    validators = map_validators(TSC, {"schema": dict(SCHEMA), "csv_options": opts})
+    grouped = [
+        v
+        for v in validators
+        if isinstance(
+            v,
+            (
+                SequenceGroupValidator,
+                LabelConstantWithinGroupValidator,
+                PerGroupTimeOrderedValidator,
+            ),
+        )
+    ]
+    assert len(grouped) == 3
+    for v in grouped:
+        assert v._csv_options == opts
+
+
 # ---------------------------------------------------------------------------
 # Done-contract scenario: 3-patient toy CSV, mocked DB boundary
 # ---------------------------------------------------------------------------

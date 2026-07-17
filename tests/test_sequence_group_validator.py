@@ -48,6 +48,31 @@ def test_valid_csv_path_accepted(make_csv):
     assert "number_of_sequences" not in result.metadata
 
 
+def test_honors_csv_options_delimiter(tmp_path):
+    # #371 bugbot: a non-comma manifest must be parsed with the run's
+    # csv_options, exactly as CSVIngestor reads it. Written semicolon-
+    # delimited, it is one squashed column under the default comma parse
+    # (sequence_id not found), and only resolves when sep=';' is forwarded.
+    path = tmp_path / "semi.csv"
+    _toy_df().to_csv(path, index=False, sep=";")
+
+    # No csv_options -> misread as a single column -> the required column is
+    # absent, so validation fails (proves the delimiter actually matters).
+    assert not SequenceGroupValidator().validate(str(path)).is_valid
+
+    # Forwarding the run's delimiter parses it correctly.
+    result = SequenceGroupValidator(csv_options={"sep": ";"}).validate(str(path))
+    assert result.is_valid
+    assert result.metadata["rows_checked"] == 15
+
+
+def test_malformed_csv_options_rejected_at_construction():
+    # #376 bugbot: a bad dialect value must fail fast at construction (clear
+    # config error), not surface as a generic load failure mid-scan.
+    with pytest.raises(ValueError, match="csv_options"):
+        SequenceGroupValidator(csv_options={"sep": 3})
+
+
 def test_column_resolved_case_insensitively():
     # #340 rule: header spelling may differ in case/whitespace.
     df = _toy_df().rename(columns={"sequence_id": " Sequence_ID "})

@@ -16,6 +16,7 @@ from typing import Any, Optional
 
 from ..utils import redaction
 from ..utils.columns import resolve_column
+from ..utils.csv_dialect import read_dialect_kwargs, validate_csv_options
 
 try:
     import pandas as pd
@@ -51,6 +52,7 @@ class LabelConstantWithinGroupValidator(BaseValidator):
         self,
         sequence_column: Optional[str] = None,
         label_column: Optional[str] = None,
+        csv_options: Optional[dict] = None,
         name: str = "Label Constant Within Group Validator",
     ):
         """Initialize the label-constancy validator.
@@ -59,6 +61,10 @@ class LabelConstantWithinGroupValidator(BaseValidator):
             sequence_column: Name of the sequence group column (default:
                 "sequence_id")
             label_column: Name of the label column (default: "label")
+            csv_options: The run's pandas read options (delimiter / encoding /
+                ...), so the manifest is parsed exactly as CSVIngestor parses
+                it. Without it a non-comma or BOM manifest that ingests fine is
+                falsely rejected — or passes for the wrong reason — here.
             name: Human-readable name of the validator
         """
         super().__init__(name)
@@ -66,6 +72,10 @@ class LabelConstantWithinGroupValidator(BaseValidator):
             sequence_column if sequence_column is not None else "sequence_id"
         )
         self.label_column = label_column if label_column is not None else "label"
+        self._csv_options = csv_options or {}
+        # Fail fast on a malformed dialect value at construction — same contract
+        # as MaskIdColumnValidator (bugbot #376).
+        validate_csv_options(self._csv_options)
 
     def validate(self, data: Any, **kwargs) -> ValidationResult:
         """Validate that the label is constant within each sequence.
@@ -193,7 +203,14 @@ class LabelConstantWithinGroupValidator(BaseValidator):
             elif isinstance(data, (str, Path)):
                 path = Path(data)
                 if path.suffix.lower() == ".csv":
-                    return pd.read_csv(path, encoding="utf-8", on_bad_lines="warn")
+                    # Parse with the run's delimiter / encoding / quoting so the
+                    # validator tokenizes the manifest byte-identically to
+                    # CSVIngestor (bugbot #371).
+                    return pd.read_csv(
+                        path,
+                        on_bad_lines="warn",
+                        **read_dialect_kwargs(self._csv_options),
+                    )
                 logger.warning(f"Unsupported file type: {path.suffix}, \n\n{path}")
                 return None
             else:
