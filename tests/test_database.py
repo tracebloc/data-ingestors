@@ -808,6 +808,24 @@ def test_mark_ingest_registered_flips_journal_flag(db, mock_engine_factory):
     conn.commit.assert_called()
 
 
+def test_mark_ingest_unregistered_resets_journal_flag(db, mock_engine_factory):
+    """The failure-path undo must UPDATE the run's journal row back to
+    registered=0 (and clear registered_at), scoped to this
+    (ingestor_id, table_name) — so a send failure after the pre-send flip
+    leaves the rows reclaimable (backend#1028, bugbot High)."""
+    _, _, conn = mock_engine_factory
+    db.mark_ingest_unregistered("tbl", "run-a")
+    update = next(s for s in _executed_sql(conn) if "UPDATE" in s)
+    assert "registered = 0" in update
+    assert "registered_at = NULL" in update
+    assert "ingestor_id = :ingestor_id" in update
+    stmt = next(
+        c.args[0] for c in conn.execute.call_args_list if "UPDATE" in str(c.args[0])
+    )
+    assert stmt.compile().params == {"ingestor_id": "run-a", "table_name": "tbl"}
+    conn.commit.assert_called()
+
+
 def test_reclaim_dead_run_rows_deletes_each_dead_run(db, mock_engine_factory):
     """The reconcile pass deletes rows per dead run via the #227
     delete_by_ingestor_id (so logging/retry behavior is shared) and reports

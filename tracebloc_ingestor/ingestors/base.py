@@ -17,6 +17,7 @@ from ..utils.constants import (
     CYAN,
 )
 from ..utils import label_policy as label_policy_module
+from ..utils import redaction
 from ..utils.columns import resolve_column
 from ..utils.correlation import resolve_correlation_id
 from ..utils.validators_mapping import map_validators
@@ -586,9 +587,9 @@ class BaseIngestor(ABC):
         except Exception as reclaim_error:
             logger.critical(
                 f"Orphan-row reconciliation failed for table "
-                f"{self.table_name!r}: {reclaim_error}. Continuing the "
-                f"ingest — rows left by a previous hard-killed run may "
-                f"remain in the table (backend#1028)."
+                f"{self.table_name!r}: {redaction.safe_db_error(reclaim_error)}. "
+                f"Continuing the ingest — rows left by a previous hard-killed "
+                f"run may remain in the table (backend#1028)."
             )
         # Journal this run as STARTED before its first row insert, so that if
         # THIS process dies hard at any later point, the next attempt's
@@ -841,6 +842,27 @@ class BaseIngestor(ABC):
                         if text_profile:
                             self.file_options["text_profile"] = text_profile
 
+                    # Flip the run journal to REGISTERED (backend#1028 item 2)
+                    # BEFORE the remote summary call, not after. The local flip
+                    # and the backend registration can't be made atomic, so
+                    # whichever runs SECOND owns the crash/failure window. With
+                    # the flip second (its previous position) a failed-and-
+                    # swallowed UPDATE — or a hard kill after send returned —
+                    # left the journal at registered=0 while the dataset WAS
+                    # registered, so the next ingest's reclaim pass deleted a
+                    # registered dataset's rows (silent, unrecoverable loss —
+                    # bugbot High). Flipping FIRST inverts the failure mode: a
+                    # crash between this commit and send completing just leaves
+                    # the dataset unregistered, and the k8s retry re-ingests
+                    # from source — a recoverable duplicate the 409-idempotent
+                    # resend and the #227 delete already tolerate — never a
+                    # deletion of registered rows. If send then FAILS, the
+                    # except-branch undoes this flip (mark_ingest_unregistered)
+                    # so reclaim can still recover the rows.
+                    self.database.mark_ingest_registered(
+                        self.table_name, self.ingestor_id
+                    )
+
                     self.api_client.send_ingest_summary(
                         table_name=self.table_name,
                         ingestor_id=self.ingestor_id,
@@ -854,30 +876,6 @@ class BaseIngestor(ABC):
                         meta_data=self.file_options,
                     )
                     dataset_registered = True
-                    # Durably flip the run journal to REGISTERED
-                    # (backend#1028 item 2) so no future reconcile pass can
-                    # mistake this run's rows for orphans. Swallow-and-log on
-                    # failure: the dataset IS registered — raising here would
-                    # fail a healthy run and, worse, hand the retry a
-                    # started-but-unregistered journal entry telling it to
-                    # delete a registered dataset's rows. The residual window
-                    # (process killed between send_ingest_summary returning
-                    # and this UPDATE committing) is strictly narrower than
-                    # the #227 two-generals window documented below.
-                    try:
-                        self.database.mark_ingest_registered(
-                            self.table_name, self.ingestor_id
-                        )
-                    except Exception as journal_error:
-                        logger.critical(
-                            f"Failed to journal registration for "
-                            f"ingestor_id={self.ingestor_id!r} in table "
-                            f"{self.table_name!r}: {journal_error}. A future "
-                            f"ingest into this table could reclaim this "
-                            f"registered dataset's rows as orphans "
-                            f"(backend#1028) — investigate before "
-                            f"re-ingesting into this table."
-                        )
                     stats["api_sent_records"] = stats["inserted_records"]
 
                 summary = IngestionSummary(**stats)
@@ -917,6 +915,28 @@ class BaseIngestor(ABC):
                     logger.warning(f"session.rollback() failed: {rollback_error}")
                 logger.error(f"Error during ingestion: {str(e)}")
                 if stats.get("inserted_records") and not dataset_registered:
+                    # The journal was flipped to REGISTERED just before the
+                    # summary call (see above). Since registration did NOT
+                    # complete, undo that optimistic flip FIRST — so if the
+                    # compensating delete below fails, a later reclaim pass
+                    # still sees registered=0 and can recover these rows
+                    # instead of stranding them as a phantom registered entry
+                    # (backend#1028). Best-effort: a reset failure must not
+                    # mask the original error or skip the delete.
+                    try:
+                        self.database.mark_ingest_unregistered(
+                            self.table_name, self.ingestor_id
+                        )
+                    except Exception as journal_reset_error:
+                        logger.critical(
+                            f"Failed to reset the run journal to unregistered "
+                            f"for ingestor_id={self.ingestor_id!r} in table "
+                            f"{self.table_name!r}: "
+                            f"{redaction.safe_db_error(journal_reset_error)}. "
+                            f"If the compensating delete also fails, these "
+                            f"rows may not be reclaimed automatically "
+                            f"(backend#1028)."
+                        )
                     try:
                         deleted = self.database.delete_by_ingestor_id(
                             self.table_name, self.ingestor_id
@@ -931,7 +951,8 @@ class BaseIngestor(ABC):
                         logger.critical(
                             f"Compensating delete FAILED for "
                             f"ingestor_id={self.ingestor_id!r} in table "
-                            f"{self.table_name!r}: {cleanup_error}. "
+                            f"{self.table_name!r}: "
+                            f"{redaction.safe_db_error(cleanup_error)}. "
                             f"{stats.get('inserted_records', 0)} unregistered "
                             "row(s) remain orphaned (#227)."
                         )

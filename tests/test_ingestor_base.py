@@ -1544,21 +1544,33 @@ def test_reconcile_and_start_journal_run_before_first_insert():
     assert names.index("record_ingest_started") < names.index("insert_batch")
 
 
-def test_successful_registration_marks_journal_registered():
-    """After send_ingest_summary returns, the run must be journaled as
-    REGISTERED — the durable marker that stops any future reconcile pass from
-    reclaiming this run's rows."""
+def test_successful_registration_marks_journal_registered_before_send():
+    """The run must be journaled as REGISTERED BEFORE send_ingest_summary, not
+    after (backend#1028, bugbot High). The local flip and the remote register
+    can't be atomic; writing the journal first makes a crash in that window a
+    recoverable duplicate rather than a deletion of registered rows. Ordering
+    is the contract, so it is asserted explicitly on the interleaved call log
+    of the db + api mocks (attached to a shared parent BEFORE the run)."""
     ing = make_ingestor(records=[{"a": "1"}], label_column="a")
+    parent = MagicMock()
+    parent.attach_mock(ing.database, "db")
+    parent.attach_mock(ing.api_client, "api")
     _run_happy_ingest(ing)
     ing.database.mark_ingest_registered.assert_called_once_with(
         ing.table_name, ing.ingestor_id
     )
+    seq = [c[0] for c in parent.mock_calls]
+    assert seq.index("db.mark_ingest_registered") < seq.index(
+        "api.send_ingest_summary"
+    )
 
 
-def test_failed_registration_never_marks_journal_registered():
-    """A run whose registration failed must stay started-but-unregistered in
-    the journal (its rows are removed by the #227 delete anyway, which still
-    fires — asserted here so the two cleanups are known to coexist)."""
+def test_failed_registration_undoes_optimistic_flip_and_deletes(caplog):
+    """The journal is flipped to REGISTERED before the summary call, so a
+    FAILED send must undo that flip (mark_ingest_unregistered) — otherwise a
+    later compensating-delete failure would strand the rows as a phantom
+    registered entry no reconcile pass would clean. The #227 delete still
+    fires (rows are not registered)."""
     ing = make_ingestor(records=[{"a": "1"}], label_column="a")
     ing.api_client.send_ingest_summary.side_effect = RuntimeError(
         "backend rejected"
@@ -1569,26 +1581,65 @@ def test_failed_registration_never_marks_journal_registered():
         Sess.return_value.__enter__.return_value = MagicMock()
         with pytest.raises(RuntimeError):
             ing.ingest("src", batch_size=10)
-    ing.database.mark_ingest_registered.assert_not_called()
+    # flipped before send, then undone on failure, then rows deleted.
+    ing.database.mark_ingest_registered.assert_called_once_with(
+        ing.table_name, ing.ingestor_id
+    )
+    ing.database.mark_ingest_unregistered.assert_called_once_with(
+        ing.table_name, ing.ingestor_id
+    )
     ing.database.delete_by_ingestor_id.assert_called_once_with(
         ing.table_name, ing.ingestor_id
     )
 
 
-def test_mark_registered_failure_never_fails_a_registered_run(caplog):
-    """The journal UPDATE failing AFTER successful registration must not fail
-    the run (the dataset exists!) nor trigger the #227 delete — raising here
-    would hand the retry a journal entry telling it to purge a registered
-    dataset's rows. Logged CRITICAL instead."""
+def test_journal_flip_failure_aborts_before_registration(caplog):
+    """If the pre-send journal flip itself fails, the summary call must NOT be
+    attempted (registration never happens) and the run's rows must be removed
+    by the #227 delete — the rows are not registered anywhere, so deleting
+    them is correct and safe, the opposite of the old post-send ordering that
+    could strand a registered dataset."""
     import logging
 
     ing = make_ingestor(records=[{"a": "1"}], label_column="a")
     ing.database.mark_ingest_registered.side_effect = Exception("journal down")
     with caplog.at_level(logging.CRITICAL):
-        _run_happy_ingest(ing)  # must NOT raise
-    ing.database.delete_by_ingestor_id.assert_not_called()
+        with patch.object(base_mod, "Session") as Sess, patch.object(
+            ing, "validate_data", return_value=True
+        ):
+            Sess.return_value.__enter__.return_value = MagicMock()
+            with pytest.raises(Exception):
+                ing.ingest("src", batch_size=10)
+    ing.api_client.send_ingest_summary.assert_not_called()
+    ing.database.delete_by_ingestor_id.assert_called_once_with(
+        ing.table_name, ing.ingestor_id
+    )
+
+
+def test_journal_reset_failure_never_masks_original_error(caplog):
+    """On the failure path, a mark_ingest_unregistered error must be logged
+    CRITICAL (redacted) and swallowed — the original ingestion error, not the
+    journal-reset error, is what propagates, and the #227 delete still runs."""
+    import logging
+
+    ing = make_ingestor(records=[{"a": "1"}], label_column="a")
+    ing.api_client.send_ingest_summary.side_effect = RuntimeError(
+        "backend rejected"
+    )
+    ing.database.mark_ingest_unregistered.side_effect = Exception("journal down")
+    with caplog.at_level(logging.CRITICAL):
+        with patch.object(base_mod, "Session") as Sess, patch.object(
+            ing, "validate_data", return_value=True
+        ):
+            Sess.return_value.__enter__.return_value = MagicMock()
+            with pytest.raises(RuntimeError, match="backend rejected"):
+                ing.ingest("src", batch_size=10)
+    ing.database.delete_by_ingestor_id.assert_called_once_with(
+        ing.table_name, ing.ingestor_id
+    )
     assert any(
-        "Failed to journal registration" in r.message for r in caplog.records
+        "reset the run journal to unregistered" in r.message
+        for r in caplog.records
     )
 
 

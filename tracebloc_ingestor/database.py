@@ -699,10 +699,13 @@ class Database:
     def mark_ingest_registered(self, table_name: str, ingestor_id: str) -> None:
         """Flip the run's journal entry to REGISTERED (backend#1028 item 2).
 
-        Called immediately after ``send_ingest_summary`` returns — the same
-        point that flips the #227 ``dataset_registered`` guard — so no future
-        reconcile pass can mistake this run's rows for orphans. Idempotent
-        (repeating the UPDATE is a no-op).
+        Called immediately BEFORE ``send_ingest_summary`` (not after): the
+        local flip and the remote registration can't be atomic, and writing
+        the journal first makes a crash in that window a recoverable duplicate
+        instead of a deletion of registered rows — see ``BaseIngestor.ingest``
+        and :meth:`mark_ingest_unregistered` (the failure-path undo). Once set,
+        no future reconcile pass can mistake this run's rows for orphans.
+        Idempotent (repeating the UPDATE is a no-op).
         """
         with self.engine.connect() as connection:
             self._ensure_runs_table(connection)
@@ -711,6 +714,32 @@ class Database:
                 text(
                     f"UPDATE `{self.RUNS_TABLE}` "
                     "SET registered = 1, registered_at = CURRENT_TIMESTAMP "
+                    "WHERE ingestor_id = :ingestor_id "
+                    "AND table_name = :table_name"
+                ).bindparams(ingestor_id=ingestor_id, table_name=table_name),
+            )
+            connection.commit()
+
+    def mark_ingest_unregistered(self, table_name: str, ingestor_id: str) -> None:
+        """Flip the run's journal entry back to NOT-registered (backend#1028
+        item 2).
+
+        The registration flip is written BEFORE ``send_ingest_summary`` so a
+        crash in that window degrades to a recoverable duplicate rather than a
+        deletion of registered rows (see ``BaseIngestor.ingest``). When the
+        summary call then FAILS, that optimistic flip must be undone so the
+        run's rows read as reclaimable again — otherwise a compensating-delete
+        failure would strand them as a ``registered = 1`` entry that no future
+        reconcile pass would ever clean. Idempotent (repeating is a no-op); the
+        caller invokes it best-effort on the failure path.
+        """
+        with self.engine.connect() as connection:
+            self._ensure_runs_table(connection)
+            _execute_with_retry(
+                connection,
+                text(
+                    f"UPDATE `{self.RUNS_TABLE}` "
+                    "SET registered = 0, registered_at = NULL "
                     "WHERE ingestor_id = :ingestor_id "
                     "AND table_name = :table_name"
                 ).bindparams(ingestor_id=ingestor_id, table_name=table_name),
