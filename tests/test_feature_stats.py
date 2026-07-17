@@ -9,6 +9,7 @@ features only (never the target/id/annotation), and surfaced in meta_data.
 
 from __future__ import annotations
 
+import logging
 from unittest.mock import MagicMock
 
 import pytest
@@ -160,6 +161,32 @@ def test_target_already_named_label_is_left_in_place(make_csv):
     stats = ing.feature_stats()
     assert set(stats) == {"feat", "label"}
     assert stats["label"]["count"] == 2
+
+
+def test_target_rekey_collision_with_feature_named_label_target_wins(
+    make_csv, caplog
+):
+    # A regression dataset whose target ("target") is re-keyed to the reserved
+    # "label" key, while a DIFFERENT numeric feature is literally named "label"
+    # (allowed — create_table excludes "label" from its reserved set). The target
+    # must own "label" (downstream reads feature_stats["label"] AS the target), so
+    # the feature's stats are dropped — but LOUDLY, not silently (bugbot medium).
+    path = make_csv({"target": [10, 20, 30], "label": [1, 2, 3]})
+    ing = make_csv_ingestor(
+        schema={"target": "FLOAT", "label": "FLOAT"},
+        label_column="target",
+        category=TaskCategory.TIME_SERIES_FORECASTING,
+    )
+    list(ing.read_data(str(path)))
+
+    with caplog.at_level(logging.WARNING):
+        stats = ing.feature_stats()
+
+    # The target's stats (10+20+30) take "label"; the feature's (1+2+3) are gone.
+    assert set(stats) == {"label"}
+    assert stats["label"]["sum"] == 60.0
+    assert stats["label"]["min"] == pytest.approx(10.0)
+    assert any("reserved" in r.getMessage() for r in caplog.records)
 
 
 def test_feature_stats_ignores_nulls(make_csv):

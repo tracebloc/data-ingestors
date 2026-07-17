@@ -573,9 +573,25 @@ class CSVIngestor(BaseIngestor):
             and self.category in REGRESSION_CLASS_CATEGORIES
             and resolved_target != _TARGET_COLUMN
         ):
-            # pop→assign standardizes the key; if a feature were literally named
-            # "label" it would collide, but "label" is the framework's own target
-            # column name, so a user feature can't legitimately claim it.
+            # pop→assign standardizes the target's key to "label". "label" is the
+            # framework's reserved target key — database.create_table maps the
+            # target onto the standard `label` column and the enriched schema
+            # flags THAT column role:"target", so downstream (e.g. the engine's
+            # scaler_y seeding) reads feature_stats["label"] AS the target. If a
+            # numeric feature is also literally named "label" (allowed — see the
+            # reserved-column exclusion in create_table), it already occupies the
+            # key; the target must still own it, but drop the feature's stats
+            # loudly rather than clobbering them silently (bugbot medium).
+            if _TARGET_COLUMN in stats:
+                logger.warning(
+                    "feature_stats: regression target %r is re-keyed to the "
+                    "reserved %r key, which is also a numeric feature column; "
+                    "the target's statistics take that key and the feature's are "
+                    "dropped. Rename the '%s' feature column to avoid the clash.",
+                    resolved_target,
+                    _TARGET_COLUMN,
+                    _TARGET_COLUMN,
+                )
             stats[_TARGET_COLUMN] = stats.pop(resolved_target)
         return stats
 
