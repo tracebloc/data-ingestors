@@ -66,6 +66,13 @@ def test_honors_csv_options_delimiter(tmp_path):
     assert result.metadata["rows_checked"] == 15
 
 
+def test_malformed_csv_options_rejected_at_construction():
+    # #376 bugbot: a bad dialect value must fail fast at construction (clear
+    # config error), not surface as a generic load failure mid-scan.
+    with pytest.raises(ValueError, match="csv_options"):
+        SequenceGroupValidator(csv_options={"sep": 3})
+
+
 def test_column_resolved_case_insensitively():
     # #340 rule: header spelling may differ in case/whitespace.
     df = _toy_df().rename(columns={"sequence_id": " Sequence_ID "})

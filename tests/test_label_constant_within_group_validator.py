@@ -51,6 +51,12 @@ def test_honors_csv_options_delimiter(tmp_path):
     ).validate(str(path)).is_valid
 
 
+def test_malformed_csv_options_rejected_at_construction():
+    # #376 bugbot: fail fast at construction on a bad dialect value.
+    with pytest.raises(ValueError, match="csv_options"):
+        LabelConstantWithinGroupValidator(csv_options={"quoting": "all"})
+
+
 def test_interleaved_sequences_pass():
     # Row order doesn't matter for constancy — only the per-sequence value set.
     df = _toy_df().sample(frac=1.0, random_state=7).reset_index(drop=True)

@@ -39,6 +39,45 @@ READ_DIALECT_KEYS = frozenset(
 )
 
 
+# Dialect keys whose value must be a string when present — the char / encoding
+# options (a subset of READ_DIALECT_KEYS). ``quoting`` is an int (csv.QUOTE_*),
+# checked separately; the boolean/flag keys (doublequote, skipinitialspace) are
+# left for pandas to coerce.
+_STR_DIALECT_KEYS = (
+    "sep",
+    "delimiter",
+    "quotechar",
+    "escapechar",
+    "encoding",
+    "encoding_errors",
+    "lineterminator",
+    "comment",
+    "engine",
+)
+
+
+def validate_csv_options(csv_options: Optional[Dict[str, Any]]) -> None:
+    """Fail fast on a malformed *csv_options* dialect value, raising
+    ``ValueError`` at construction rather than letting it surface as a generic
+    parse failure deep inside a validator's read (validate config at
+    construction, not mid-scan). Checks only the dialect keys the validators
+    forward to pandas (see :data:`READ_DIALECT_KEYS`)."""
+    opts = csv_options or {}
+    for key in _STR_DIALECT_KEYS:
+        val = opts.get(key)
+        if val is not None and not isinstance(val, str):
+            raise ValueError(
+                f"csv_options['{key}'] must be a string, got "
+                f"{type(val).__name__} — check the ingest config."
+            )
+    quoting = opts.get("quoting")
+    if quoting is not None and not isinstance(quoting, int):
+        raise ValueError(
+            f"csv_options['quoting'] must be an int (csv.QUOTE_*), got "
+            f"{type(quoting).__name__} — check the ingest config."
+        )
+
+
 def read_dialect_kwargs(csv_options: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     """pandas ``read_csv`` kwargs matching CSVIngestor's tokenizer for
     *csv_options*.

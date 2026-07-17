@@ -7,9 +7,12 @@ the manifest byte-identically to CSVIngestor — see
 
 from __future__ import annotations
 
+import pytest
+
 from tracebloc_ingestor.utils.csv_dialect import (
     READ_DIALECT_KEYS,
     read_dialect_kwargs,
+    validate_csv_options,
 )
 
 
@@ -61,3 +64,29 @@ def test_dialect_keys_are_tokenizing_only():
     # Guard the whitelist against accidental inclusion of restructuring keys.
     for restructuring in ("usecols", "nrows", "header", "names", "skiprows", "index_col"):
         assert restructuring not in READ_DIALECT_KEYS
+
+
+# validate_csv_options (#376) — fail fast at construction on malformed dialect.
+def test_validate_csv_options_accepts_valid_and_empty():
+    validate_csv_options(None)
+    validate_csv_options({})
+    validate_csv_options({"sep": ";", "encoding": "latin-1", "quoting": 3})
+
+
+@pytest.mark.parametrize(
+    "opts,bad_key",
+    [
+        ({"sep": 3}, "sep"),
+        ({"delimiter": b";"}, "delimiter"),
+        ({"quotechar": 1}, "quotechar"),
+        ({"encoding": 0}, "encoding"),
+    ],
+)
+def test_validate_csv_options_rejects_non_string_dialect(opts, bad_key):
+    with pytest.raises(ValueError, match=f"csv_options\\['{bad_key}'\\] must be a string"):
+        validate_csv_options(opts)
+
+
+def test_validate_csv_options_rejects_non_int_quoting():
+    with pytest.raises(ValueError, match="quoting.* must be an int"):
+        validate_csv_options({"quoting": "all"})

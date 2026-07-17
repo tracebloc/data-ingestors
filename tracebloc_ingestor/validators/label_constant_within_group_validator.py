@@ -16,7 +16,7 @@ from typing import Any, Optional
 
 from ..utils import redaction
 from ..utils.columns import resolve_column
-from ..utils.csv_dialect import read_dialect_kwargs
+from ..utils.csv_dialect import read_dialect_kwargs, validate_csv_options
 
 try:
     import pandas as pd
@@ -73,6 +73,9 @@ class LabelConstantWithinGroupValidator(BaseValidator):
         )
         self.label_column = label_column if label_column is not None else "label"
         self._csv_options = csv_options or {}
+        # Fail fast on a malformed dialect value at construction — same contract
+        # as MaskIdColumnValidator (bugbot #376).
+        validate_csv_options(self._csv_options)
 
     def validate(self, data: Any, **kwargs) -> ValidationResult:
         """Validate that the label is constant within each sequence.

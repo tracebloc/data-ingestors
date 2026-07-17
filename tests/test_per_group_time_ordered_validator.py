@@ -65,6 +65,12 @@ def test_honors_csv_options_delimiter(tmp_path):
     ).validate(str(path)).is_valid
 
 
+def test_malformed_csv_options_rejected_at_construction():
+    # #376 bugbot: fail fast at construction on a bad dialect value.
+    with pytest.raises(ValueError, match="csv_options"):
+        PerGroupTimeOrderedValidator(schema=TS_SCHEMA, csv_options={"sep": 3})
+
+
 def test_interleaved_sequences_pass_where_global_validator_would_fail():
     # T4: p1 08:00, p2 08:00, p1 09:00, ... is globally NON-monotonic but
     # perfectly ordered per sequence — the whole reason this validator exists.

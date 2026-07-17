@@ -22,7 +22,7 @@ import pandas as pd
 
 from ..utils import redaction
 from ..utils.columns import resolve_column
-from ..utils.csv_dialect import read_dialect_kwargs
+from ..utils.csv_dialect import read_dialect_kwargs, validate_csv_options
 
 from .base import BaseValidator, ValidationResult
 from .time_format_validator import parse_month_first_with_ambiguity_mask
@@ -85,6 +85,9 @@ class PerGroupTimeOrderedValidator(BaseValidator):
         # a non-comma or BOM manifest that ingests fine is falsely rejected —
         # or passes for the wrong reason — here (bugbot #371).
         self._csv_options = csv_options or {}
+        # Fail fast on a malformed dialect value at construction — same contract
+        # as MaskIdColumnValidator (bugbot #376).
+        validate_csv_options(self._csv_options)
 
     def _declared_base_type(self) -> Optional[str]:
         """The schema's declared base type for the time column, or None."""
