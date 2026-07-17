@@ -88,6 +88,8 @@ def test_resolver_rejects_malformed_values_with_warning(caplog):
 
 def _make_ingestor(**overrides):
     database = MagicMock(name="Database")
+    # #350: content_hash default ⇒ mock DB must return a real salt string.
+    database.get_or_create_table_salt.return_value = "0" * 64
     api_client = MagicMock(name="APIClient")
     kwargs = dict(
         database=database,
@@ -145,6 +147,8 @@ def _make_full_ingestor():
     test_time_series_classification (tabular control variant)."""
     db = MagicMock(name="Database")
     db.config = Config(TABLE_NAME="corr_toy")
+    # #350: content_hash default ⇒ mock DB must return a real salt string.
+    db.get_or_create_table_salt.return_value = "0" * 64
     db.create_table.return_value = MagicMock(name="table")
     db.insert_batch.side_effect = lambda table, batch: (
         list(range(len(batch))),

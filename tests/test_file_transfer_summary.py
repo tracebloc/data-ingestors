@@ -305,6 +305,8 @@ def test_ingest_counts_file_transfer_failures_separately(monkeypatch):
     mock_api.prepare_dataset.return_value = True
 
     mock_db = MagicMock()
+    # #350: content_hash default ⇒ mock DB must return a real salt string.
+    mock_db.get_or_create_table_salt.return_value = "0" * 64
     mock_db.create_table.return_value = MagicMock()
     mock_db.get_table_schema.return_value = {}
     mock_db.insert_batch.return_value = ([], [])

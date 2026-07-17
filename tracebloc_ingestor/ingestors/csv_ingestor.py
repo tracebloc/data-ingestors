@@ -167,7 +167,7 @@ class CSVIngestor(BaseIngestor):
         category: Optional[str] = None,
         data_format: Optional[str] = None,
         label_policy: str = label_policy_module.PASSTHROUGH,
-        data_id_strategy: str = "uuid",
+        data_id_strategy: str = "content_hash",
     ):
         """Initialize CSV Ingestor.
 

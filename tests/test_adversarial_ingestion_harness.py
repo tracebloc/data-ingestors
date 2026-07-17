@@ -73,6 +73,11 @@ def _ingestor(schema, **opts):
         schema=schema,
         category=opts.pop("category", TAB),
         intent=opts.pop("intent", "train"),
+        # #350: these tests call process_record() directly, bypassing ingest()
+        # (which is what fetches the content_hash salt). The id strategy is
+        # irrelevant to the CSV cast/parse behaviour under test here, so pin
+        # uuid to keep the record processor constructible without a salt.
+        data_id_strategy=opts.pop("data_id_strategy", "uuid"),
         **opts,
     )
 

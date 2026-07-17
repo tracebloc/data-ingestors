@@ -213,7 +213,7 @@ class ResolvedConfig:
 
     # ----- data_id -----
     unique_id_column: Optional[str] = None  # None ⇒ strategy below decides
-    data_id_strategy: str = "uuid"  # uuid | content_hash (column ⇒ unique_id_column)
+    data_id_strategy: str = "content_hash"  # content_hash (default, #350) | uuid (column ⇒ unique_id_column)
 
     # ----- Pass-through to ingestors -----
     annotation_column: Optional[str] = None
@@ -290,18 +290,23 @@ def resolve(config: Dict[str, Any]) -> ResolvedConfig:
         resolved.label_column = label["column"]
         resolved.label_policy = label.get("policy", "passthrough")
 
-    # 5. data_id — strategy: uuid (default, no source col leaves the cluster),
-    #    column (loud, opt-in, captured in unique_id_column for the
-    #    BaseIngestor warning we added in #43), or content_hash (#225:
-    #    deterministic salted hash — a Job retry re-claims its previous rows
-    #    via the data_id UNIQUE upsert instead of duplicating them; landed
-    #    dark, default stays uuid until a release of soak).
+    # 5. data_id — strategy: content_hash (default, #350: deterministic salted
+    #    hash — a Job retry re-claims its previous rows via the data_id UNIQUE
+    #    upsert instead of duplicating them; the salt never leaves the cluster),
+    #    column (loud, opt-in, captured in unique_id_column for the BaseIngestor
+    #    warning we added in #43), or uuid (fresh per-record id — no source col
+    #    leaves the cluster, but a retried run re-inserts every row). content_hash
+    #    landed dark in #225 and soaked opt-in before this flip.
+    #
+    #    ResolvedConfig defaults to content_hash, so an absent data_id key ⇒
+    #    content_hash. The explicit ``uuid`` branch below is the opt-out: without
+    #    it, ``strategy: uuid`` would fall through and silently stay content_hash.
     data_id = config.get("data_id") or {}
     if data_id.get("strategy") == "column":
         resolved.unique_id_column = data_id["column"]
-    elif data_id.get("strategy") == "content_hash":
-        resolved.data_id_strategy = "content_hash"
-    # else: leave defaults ⇒ UUID generation
+    elif data_id.get("strategy") == "uuid":
+        resolved.data_id_strategy = "uuid"
+    # else (content_hash, or absent): leave default ⇒ content_hash
 
     # 6. csv_options — merge customer overrides over defaults.
     csv_overrides = (config.get("spec") or {}).get("csv_options") or {}

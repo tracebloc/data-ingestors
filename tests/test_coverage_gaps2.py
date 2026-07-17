@@ -30,6 +30,8 @@ class FakeIngestor(BaseIngestor):
 
 def make_ingestor(records=None, **overrides):
     db = MagicMock()
+    # #350: content_hash default ⇒ mock DB must return a real salt string.
+    db.get_or_create_table_salt.return_value = "0" * 64
     db.create_table.return_value = MagicMock()
     db.insert_batch.return_value = ([1], [])
     db.get_table_schema.return_value = {"a": "INT"}
@@ -48,7 +50,11 @@ def make_ingestor(records=None, **overrides):
         category=None,
     )
     kwargs.update(overrides)
-    return FakeIngestor(records or [], **kwargs)
+    ing = FakeIngestor(records or [], **kwargs)
+    # #350: content_hash default — process_record() tests skip ingest() (the
+    # salt fetch), so pre-set the salt the record processor needs.
+    ing._table_salt = "0" * 64
+    return ing
 
 
 def test_map_unique_id_warns_on_missing_label_column():
@@ -166,6 +172,8 @@ def _csv_ingestor(schema=None, **ov):
     from tracebloc_ingestor.ingestors.csv_ingestor import CSVIngestor
 
     db = MagicMock()
+    # #350: content_hash default ⇒ mock DB must return a real salt string.
+    db.get_or_create_table_salt.return_value = "0" * 64
     db.create_table.return_value = MagicMock()
     db.insert_batch.return_value = ([1], [])
     db.get_table_schema.return_value = {}
@@ -218,6 +226,8 @@ def _json_ingestor(schema=None, **ov):
     from tracebloc_ingestor.ingestors.json_ingestor import JSONIngestor
 
     db = MagicMock()
+    # #350: content_hash default ⇒ mock DB must return a real salt string.
+    db.get_or_create_table_salt.return_value = "0" * 64
     db.create_table.return_value = MagicMock()
     db.insert_batch.return_value = ([1], [])
     db.get_table_schema.return_value = {}

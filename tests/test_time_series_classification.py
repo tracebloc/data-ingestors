@@ -88,6 +88,9 @@ def _make_ingestor(csv_path, **overrides):
     # Real Config so the config-reading validators (TableName, Duplicate)
     # behave: TABLE_NAME set; DEST_PATH (/data/shared/<table>) won't exist.
     db.config = Config(TABLE_NAME="tsc_toy")
+    # #350: content_hash is the default id strategy; the mock DB must return a
+    # real salt string (a MagicMock salt poisons the hash and drops every row).
+    db.get_or_create_table_salt.return_value = "0" * 64
     db.create_table.return_value = MagicMock(name="table")
     db.insert_batch.side_effect = lambda table, batch: (
         list(range(len(batch))),
