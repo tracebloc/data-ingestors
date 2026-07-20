@@ -36,7 +36,7 @@ Only metadata (schema, statistics, structure) syncs to the web app. Raw data sta
 | **Image** | [`image_classification`](templates/image_classification), [`object_detection`](templates/object_detection), [`keypoint_detection`](templates/keypoint_detection), [`semantic_segmentation`](templates/semantic_segmentation) |
 | **Text / NLP** | [`text_classification`](templates/text_classification), [`token_classification`](templates/token_classification), [`sentence_pair_classification`](templates/sentence_pair_classification), [`masked_language_modeling`](templates/masked_language_modeling), [`causal_language_modeling`](templates/causal_language_modeling), [`seq2seq`](templates/seq2seq), [`embeddings`](templates/embeddings) |
 | **Tabular** | [`tabular_classification`](templates/tabular_classification), [`tabular_regression`](templates/tabular_regression) |
-| **Time series** | [`time_series_forecasting`](templates/time_series_forecasting), [`time_to_event_prediction`](templates/time_to_event_prediction) |
+| **Time series** | [`time_series_forecasting`](templates/time_series_forecasting), [`time_series_classification`](templates/time_series_classification), [`time_to_event_prediction`](templates/time_to_event_prediction) |
 
 Each template ships a sample dataset and an [example `ingest.yaml`](examples/yaml/) you can copy as a starting point.
 
@@ -67,7 +67,7 @@ The chart **doesn't transport data into the cluster** — it points at data alre
 
 **3. Write your `ingest.yaml`.**
 
-The example below is for `image_classification`. **Other categories require different fields** — e.g. `tabular_classification` has no `images:` and instead needs a typed `schema:` block. Don't copy this one blindly; grab the matching file from [`examples/yaml/`](examples/yaml/) (one per category) and edit from there. Per-category sample data and READMEs live under [`templates/`](https://github.com/tracebloc/data-ingestors/tree/master/templates).
+The example below is for `image_classification`. **Other categories require different fields** — e.g. `tabular_classification` has no `images:` and instead needs a typed `schema:` block. `time_series_classification` additionally requires its `schema:` to declare the fixed `sequence_id` + `timestamp` columns (one label per sequence). Don't copy this one blindly; grab the matching file from [`examples/yaml/`](examples/yaml/) (one per category) and edit from there. Per-category sample data and READMEs live under [`templates/`](https://github.com/tracebloc/data-ingestors/tree/master/templates).
 
 ```yaml
 apiVersion: tracebloc.io/v1

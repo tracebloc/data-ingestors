@@ -29,6 +29,7 @@ import pandas as pd
 from .base import BaseValidator, ValidationResult
 from ..config import Config
 from ..utils.coercion import NA_SENTINELS
+from ..utils.csv_dialect import read_dialect_kwargs, validate_csv_options
 
 config = Config()
 logger = logging.getLogger(__name__)
@@ -42,53 +43,11 @@ logger.setLevel(config.LOG_LEVEL)
 # real ingest path always runs the declaration check.
 _SCHEMA_UNSET = object()
 
-# The ONLY csv_options forwarded to the validator's reads: the keys that control
-# how the manifest is TOKENIZED into columns + cells, so its parse matches
-# CSVIngestor's. A whitelist, not a blacklist — frame-RESTRUCTURING keys
-# (index_col, header, names, usecols, skiprows, nrows, ...) are excluded, because
-# the scan pins its own usecols/dtype/chunksize and forwarding a restructuring
-# key would collide with those (a swallowed error that fail-opens the gate) or
-# change which column mask_id is. New/unknown csv_options are dropped by default.
-_READ_DIALECT_KEYS = frozenset(
-    {
-        "sep",
-        "delimiter",
-        "quotechar",
-        "doublequote",
-        "escapechar",
-        "quoting",
-        "skipinitialspace",
-        "encoding",
-        "encoding_errors",
-        "lineterminator",
-        "comment",
-        "engine",
-    }
-)
-
 # Cap on how many offending row indices the empty-value scan keeps: only a few
 # are shown in the message (redaction.row_refs slices to 5) and the rest are a
 # scalar count, so bounding the sample keeps an all-empty giant manifest from
 # accumulating millions of ints — the OOM the chunked read exists to avoid.
 _EMPTY_ROWS_SAMPLE_CAP = 20
-
-# Cap on how many column names a message lists (headers OR schema keys), so a
-# very wide manifest/schema can't produce an unbounded error string; the full
-# list stays in metadata (mirrors how the other validators cap offender lists).
-_HEADER_SAMPLE_CAP = 20
-
-
-def _capped_join(names: Any) -> str:
-    """Comma-join ``names`` for an error message, capped at
-    :data:`_HEADER_SAMPLE_CAP` with a ``(+N more)`` suffix so a very wide
-    schema/header can't build an unbounded string. Callers keep the full list in
-    metadata. Returns ``"(none)"`` for an empty iterable."""
-    names = list(names)
-    shown = ", ".join(map(str, names[:_HEADER_SAMPLE_CAP]))
-    if len(names) > _HEADER_SAMPLE_CAP:
-        shown += f" (+{len(names) - _HEADER_SAMPLE_CAP} more)"
-    return shown or "(none)"
-
 
 class MaskIdColumnValidator(BaseValidator):
     """Reject a semantic-segmentation manifest that would NOT produce a
@@ -140,32 +99,10 @@ class MaskIdColumnValidator(BaseValidator):
     def _validate_csv_options(self) -> None:
         """Fail fast at construction on a malformed csv_options value, rather than
         deep inside the read where it surfaces as a generic mask-id failure
-        (validate config at construction, not mid-scan). Checks only the dialect
-        keys this validator forwards to pandas (see :data:`_READ_DIALECT_KEYS`)."""
-        str_keys = (
-            "sep",
-            "delimiter",
-            "quotechar",
-            "escapechar",
-            "encoding",
-            "encoding_errors",
-            "lineterminator",
-            "comment",
-            "engine",
-        )
-        for key in str_keys:
-            val = self._csv_options.get(key)
-            if val is not None and not isinstance(val, str):
-                raise ValueError(
-                    f"csv_options['{key}'] must be a string, got "
-                    f"{type(val).__name__} — check the ingest config."
-                )
-        quoting = self._csv_options.get("quoting")
-        if quoting is not None and not isinstance(quoting, int):
-            raise ValueError(
-                f"csv_options['quoting'] must be an int (csv.QUOTE_*), got "
-                f"{type(quoting).__name__} — check the ingest config."
-            )
+        (validate config at construction, not mid-scan). Delegates to the shared
+        :func:`validate_csv_options` so this validator and the grouped
+        time-series validators reject the same malformed dialect values."""
+        validate_csv_options(self._csv_options)
 
     def _read_kwargs(self) -> Dict[str, Any]:
         """The pandas read options needed to parse the manifest exactly as
@@ -173,18 +110,10 @@ class MaskIdColumnValidator(BaseValidator):
         quoting dialect (quotechar / escapechar / quoting / ...), so preflight and
         the write path resolve the same columns + values from the same bytes. A
         sep or quotechar mismatch would split fields differently and desync them.
+        Delegates to the shared :func:`read_dialect_kwargs` so this validator and
+        the grouped time-series validators can't drift on the dialect whitelist.
         """
-        # Lazy import: csv_ingestor -> base -> validators_mapping ->
-        # modalities.validators -> this module, so a top-level import would cycle.
-        from ..ingestors.csv_ingestor import _bom_safe_encoding
-
-        # Forward only the tokenizing dialect keys CSVIngestor honors (see
-        # _READ_DIALECT_KEYS) — never a frame-restructuring key.
-        opts = {k: v for k, v in self._csv_options.items() if k in _READ_DIALECT_KEYS}
-        opts["encoding"] = _bom_safe_encoding(opts.get("encoding"))
-        if "sep" not in opts and "delimiter" not in opts:
-            opts["sep"] = ","
-        return opts
+        return read_dialect_kwargs(self._csv_options)
 
     def validate(self, data: Any, **kwargs) -> ValidationResult:
         try:
@@ -284,7 +213,9 @@ class MaskIdColumnValidator(BaseValidator):
                 f"preflight. Rename the schema key to '{self.column}'. See "
                 f"templates/semantic_segmentation/."
             )
-        declared = _capped_join(self._schema.keys())
+        from ..utils import redaction
+
+        declared = redaction.column_preview(list(self._schema.keys()))
         return (
             f"Semantic segmentation requires '{self.column}' to be a DECLARED "
             f"schema column (e.g. schema={{'{self.column}': 'VARCHAR(255)'}}), but "
@@ -308,10 +239,12 @@ class MaskIdColumnValidator(BaseValidator):
                 f"header stores a column it can't read. Rename the CSV header to "
                 f"'{self.column}'. See templates/semantic_segmentation/."
             )
+        from ..utils import redaction
+
         return (
             f"Required column '{self.column}' not found in semantic-segmentation "
-            f"manifest CSV header (columns: {_capped_join(columns)}). The training "
-            f"client "
+            f"manifest CSV header (columns: {redaction.column_preview(columns)}). "
+            f"The training client "
             f"reads '{self.column}' to locate each mask file (backend#816) — "
             f"without it, every mask lookup raises FileNotFoundError at train "
             f"time. Add a '{self.column}' column mapping each row to its mask "

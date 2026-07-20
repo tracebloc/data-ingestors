@@ -1,12 +1,13 @@
 """Numeric Columns Validator Module.
 
-Validates that all columns (except timestamp) are numeric and non-null for time series forecasting.
-This includes both feature columns and the label column.
+Validates that all columns (except the excluded semantic columns — by default
+just ``timestamp``) are numeric for the time-series categories. This includes
+both feature columns and the label column.
 """
 
 import logging
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Iterable, Optional
 
 import pandas as pd
 from ..utils import redaction
@@ -20,19 +21,28 @@ logger.setLevel(config.LOG_LEVEL)
 
 
 class NumericColumnsValidator(BaseValidator):
-    """Validator for numeric columns in time series forecasting.
+    """Validator for numeric columns in the time-series categories.
 
-    Ensures that all columns except 'timestamp' are numeric and non-null.
-    This includes both feature columns and the label column.
+    Ensures that all schema columns except the excluded semantic columns are
+    numeric. This includes both feature columns and the label column.
+
+    ``excluded_columns`` defaults to ``{"timestamp"}`` (time_series_
+    forecasting's original hardcoded exclusion). time_series_classification
+    passes ``{"sequence_id", "timestamp"}`` — its ``sequence_id`` group key
+    is legitimately VARCHAR (backend#1054 WS1).
     """
 
     def __init__(
         self,
         name: str = "Numeric Columns Validator",
         schema: Optional[dict] = None,
+        excluded_columns: Optional[Iterable[str]] = None,
     ):
         super().__init__(name)
         self.schema = schema or {}
+        self.excluded_columns = frozenset(
+            c.lower() for c in (excluded_columns or {"timestamp"})
+        )
 
     def validate(self, data: Any, **kwargs) -> ValidationResult:
         """Validate that all schema columns (except timestamp) are numeric and contain no null values.
@@ -59,12 +69,13 @@ class NumericColumnsValidator(BaseValidator):
                     metadata={**metadata, "message": "No schema provided, skipping validation"},
                 )
 
-            # Exclude timestamp column from validation
-            excluded_columns = {"timestamp"}
-            # Only validate columns that are BOTH in schema AND in CSV (excluding timestamp)
+            # Exclude the semantic columns (timestamp; plus sequence_id for
+            # grouped categories) from validation. Case-insensitive, matching
+            # how the factories strip these columns elsewhere.
             columns_to_validate = [
-                col for col in df.columns 
-                if col in self.schema and col not in excluded_columns
+                col
+                for col in df.columns
+                if col in self.schema and col.lower() not in self.excluded_columns
             ]
 
             metadata["columns_in_schema"] = len(self.schema)
@@ -73,7 +84,7 @@ class NumericColumnsValidator(BaseValidator):
             if not columns_to_validate:
                 return self._create_result(
                     is_valid=True,
-                    metadata={**metadata, "message": "No schema columns to validate (only timestamp or non-existent columns)"},
+                    metadata={**metadata, "message": "No schema columns to validate (only excluded or non-existent columns)"},
                 )
 
             # NOTE on null handling (issue #195): the previous step rejected

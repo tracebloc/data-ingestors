@@ -164,6 +164,34 @@ CASES = [
         ),
         id="time_series_forecasting",
     ),
+    # time_series_classification: sequence-grouped (one label per
+    # sequence_id; fixed sequence_id/timestamp names — backend#1054). The
+    # bundled sample is 6 ICU stays × 3–7 hourly timesteps; the label counts
+    # the summary sends are per SEQUENCE (COUNT(DISTINCT sequence_id)), and
+    # a composite (sequence_id, timestamp) index is created —
+    # test_tsc_sequence_semantics below pins both against the real MySQL.
+    pytest.param(
+        _cfg(
+            table="e2e_tsc",
+            category="time_series_classification",
+            csv=str(
+                T
+                / "time_series_classification/time_series_classification_sample_in_csv_format.csv"
+            ),
+            schema={
+                "sequence_id": "VARCHAR(64)",
+                "timestamp": "TIMESTAMP",
+                "heart_rate": "FLOAT",
+                "resp_rate": "FLOAT",
+                "temperature": "FLOAT",
+                "spo2": "FLOAT",
+                "lactate": "FLOAT",
+                "label": "INT",
+            },
+            label="label",
+        ),
+        id="time_series_classification",
+    ),
     pytest.param(
         _cfg(
             table="e2e_kp",
@@ -298,3 +326,150 @@ def test_modality_ingests_its_template(cfg, tmp_path, monkeypatch):
     rc = run.main()
     assert rc == 0, f"ingest exited {rc} for {cfg['category']}"
     assert _rows(table) > 0, f"no rows ingested for {cfg['category']}"
+
+
+def test_tsc_sequence_semantics(tmp_path, monkeypatch):
+    """backend#1054 WS1 done-contract, against the real MySQL: a 3-patient
+    toy CSV (T=5/3/7, 2 classes) ingests to 15 ROWS while the label counts
+    the summary is built from are per SEQUENCE ({"0": 2, "1": 1}), and the
+    composite (sequence_id, timestamp) index exists on the table."""
+    table = "e2e_tsc_toy"
+    _drop(table)
+
+    rows = ["sequence_id,timestamp,heart_rate,label"]
+    for pid, T, label in (("p1", 5, "1"), ("p2", 3, "0"), ("p3", 7, "0")):
+        rows += [
+            f"{pid},2024-01-01 {8 + t:02d}:00:00,{70 + t}.0,{label}"
+            for t in range(T)
+        ]
+    csv_path = tmp_path / "toy.csv"
+    csv_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+    cfg = _cfg(
+        table=table,
+        category="time_series_classification",
+        csv=str(csv_path),
+        schema={
+            "sequence_id": "VARCHAR(64)",
+            "timestamp": "TIMESTAMP",
+            "heart_rate": "FLOAT",
+            "label": "INT",
+        },
+        label="label",
+    )
+    config_path = tmp_path / "ingest.yaml"
+    config_path.write_text(yaml.safe_dump(cfg))
+    monkeypatch.setenv("INGEST_CONFIG", str(config_path))
+
+    rc = run.main()
+    assert rc == 0, f"ingest exited {rc}"
+
+    # 15 rows stored (row unit) …
+    assert _rows(table) == 15
+
+    conn = _connect()
+    cur = conn.cursor()
+    # … but label counts are SEQUENCE-unit (Decision-3/T2): the same query
+    # get_label_sequence_counts runs for the summary payload.
+    cur.execute(
+        f"SELECT label, COUNT(DISTINCT sequence_id) FROM `{table}` GROUP BY label"
+    )
+    counts = {str(label): int(cnt) for label, cnt in cur.fetchall()}
+    assert counts == {"0": 2, "1": 1}
+    # Composite (sequence_id, timestamp) secondary index exists.
+    cur.execute(f"SHOW INDEX FROM `{table}`")
+    by_index = {}
+    for row in cur.fetchall():
+        # row: (Table, Non_unique, Key_name, Seq_in_index, Column_name, ...)
+        by_index.setdefault(row[2], []).append((row[3], row[4]))
+    composite = [
+        sorted(cols) for name, cols in by_index.items() if name.startswith("ix_")
+    ]
+    assert [(1, "sequence_id"), (2, "timestamp")] in composite, (
+        f"composite (sequence_id, timestamp) index missing; indexes: {by_index}"
+    )
+    cur.close()
+    conn.close()
+
+
+def test_hard_killed_prior_run_reclaimed_by_retry(tmp_path, monkeypatch):
+    """backend#1028 item 2, engine-level: a prior attempt that died HARD
+    (OOMKilled / SIGKILL — journaled as started, rows inserted, never
+    registered, #227 compensating delete bypassed) must not leak duplicates
+    into the retry. The real engine, re-ingesting the same CSV into the same
+    table, reclaims the dead run's rows on start and converges to the CSV's
+    row count."""
+    import uuid as _uuid
+
+    from tracebloc_ingestor.config import Config
+    from tracebloc_ingestor.database import Database
+
+    table = "e2e_orphan_reclaim"
+    _drop(table)
+
+    # Simulate the hard-killed attempt with the same calls the engine makes
+    # (create table → journal start → insert a batch), then "die": no
+    # registration, no cleanup. Feature columns must match the retry's
+    # cleaned schema or the stale-table guard would trip first.
+    dead = "dead-" + _uuid.uuid4().hex[:8]
+    db = Database(Config())
+    db.create_table(
+        table,
+        {"feature_00": "FLOAT", "feature_01": "FLOAT", "feature_02": "FLOAT"},
+    )
+    db.record_ingest_started(table, dead)
+    db.insert_batch(
+        table,
+        [
+            {
+                "data_id": f"orphan-{i}",
+                "ingestor_id": dead,
+                "data_intent": "train",
+                "label": "0",
+                "feature_00": float(i),
+                "feature_01": float(i),
+                "feature_02": float(i),
+            }
+            for i in range(3)
+        ],
+    )
+    assert _rows(table) == 3
+
+    # The retry: run the real engine on the bundled tabular template (8 data
+    # rows) into the same table.
+    cfg = _cfg(
+        table=table,
+        category="tabular_classification",
+        csv=str(
+            T / "tabular_classification/tabular_classification_sample_in_csv_format.csv"
+        ),
+        schema={
+            "feature_00": "FLOAT",
+            "feature_01": "FLOAT",
+            "feature_02": "FLOAT",
+            "label": "INT",
+        },
+        label="label",
+    )
+    config_path = tmp_path / "ingest.yaml"
+    config_path.write_text(yaml.safe_dump(cfg))
+    monkeypatch.setenv("INGEST_CONFIG", str(config_path))
+
+    rc = run.main()
+    assert rc == 0, f"retry ingest exited {rc}"
+
+    # Converged: the 8 CSV rows, not 8 + 3 — the dead run's rows are gone.
+    assert _rows(table) == 8
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute(
+        f"SELECT COUNT(*) FROM `{table}` WHERE ingestor_id = %s", (dead,)
+    )
+    assert cur.fetchone()[0] == 0
+    cur.close()
+    conn.close()
+    # …and the retry registered (mock backend), so its rows are protected: a
+    # THIRD attempt's reclaim pass finds nothing to remove.
+    probe = "probe-" + _uuid.uuid4().hex[:8]
+    assert db.reclaim_dead_run_rows(table, probe) == {}
+    assert _rows(table) == 8

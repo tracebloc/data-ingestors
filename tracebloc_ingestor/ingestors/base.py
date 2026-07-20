@@ -17,7 +17,9 @@ from ..utils.constants import (
     CYAN,
 )
 from ..utils import label_policy as label_policy_module
+from ..utils import redaction
 from ..utils.columns import resolve_column
+from ..utils.correlation import resolve_correlation_id
 from ..utils.validators_mapping import map_validators
 from ..file_transfer import map_file_transfer
 from ..text_profile import compute_text_profile
@@ -35,6 +37,7 @@ from .table_lock import TableLock
 from ..modalities.registry import (
     FILE_BEARING_CATEGORIES as _FILE_BEARING_CATEGORIES,
     NLP_CATEGORIES as _NLP_CATEGORIES,
+    REGISTRY as _MODALITY_REGISTRY,
     TABULAR_FAMILY_CATEGORIES as _TABULAR_FAMILY_CATEGORIES,
 )
 
@@ -121,6 +124,9 @@ class BaseIngestor(ABC):
 
     Attributes:
         ingestor_id: Unique identifier for this ingestor instance
+        correlation_id: End-to-end run id from the TRACEBLOC_INGEST_CORRELATION_ID
+            env var (the CLI's idempotency key, stamped by jobs-manager), or
+            None outside jobs-manager-spawned Jobs (backend#1028 item 3)
         database: Database instance for data storage
         engine: SQLAlchemy engine instance
         api_client: API client for sending data
@@ -195,6 +201,24 @@ class BaseIngestor(ABC):
         self.data_format = data_format
         self.file_options = file_options or {}
         self.label_policy = label_policy
+
+        # backend#1028 item 3: end-to-end correlation id. When spawned by
+        # jobs-manager, the Job env carries the CLI's idempotency key — the
+        # same string the Job name is derived from and the
+        # tracebloc.io/ingestion-run label holds. Kept ALONGSIDE the
+        # per-process ingestor_id (row scoping — label counts, the #227
+        # compensating delete — must stay per-process across Job retries);
+        # riding file_options puts it in the registration payload's
+        # meta_data, so the backend dataset row carries it too. None when
+        # the env is absent/invalid — behaviour is then exactly as before.
+        self.correlation_id = resolve_correlation_id()
+        if self.correlation_id:
+            self.file_options["correlation_id"] = self.correlation_id
+            logger.info(
+                "Correlation id %s (ingestor_id %s)",
+                self.correlation_id,
+                self.ingestor_id,
+            )
 
         # Default behavior is UUID-generated data_id (no source column leaves
         # the cluster). Opting into source-column mapping is allowed but loud:
@@ -322,6 +346,18 @@ class BaseIngestor(ABC):
             )
             self.label_column = resolved
         return True
+
+    @property
+    def _grouping(self):
+        """The category's sequence-grouping trait (``ModalitySpec.grouping``,
+        backend#1054 Decision-4), or ``None`` for per-row categories /
+        unknown categories. Read trait-style from the registry — never via a
+        category string comparison — so a future grouped category is a
+        registry entry, not a base.py edit. Gates the sequence-unit label
+        counts, the composite ``(group, time)`` index, and the post-insert
+        group-integrity pass."""
+        spec = _MODALITY_REGISTRY.get(self.category)
+        return spec.grouping if spec is not None else None
 
     @property
     def _table_lock(self) -> TableLock:
@@ -520,7 +556,49 @@ class BaseIngestor(ABC):
             )
 
         if self.table is None:
-            self.table = self.database.create_table(self.table_name, self._table_schema)
+            # Grouped categories get a composite (group, time) secondary
+            # index (backend#1054 WS1) so the engine's "fetch all rows of
+            # the sampled sequences, ordered" reads don't full-scan.
+            grouping = self._grouping
+            index_columns = (
+                [grouping.group_column, grouping.time_column]
+                if grouping is not None
+                else None
+            )
+            self.table = self.database.create_table(
+                self.table_name, self._table_schema, index_columns=index_columns
+            )
+
+        # Reconcile-on-start (backend#1028 item 2): a prior attempt that died
+        # HARD (OOMKilled / SIGKILL) never reached the #227 compensating
+        # delete in the except-branch below, so its rows are still in the
+        # table while its dataset was never registered — and this run (the
+        # k8s Job retry re-ingests the SAME source into the SAME table) would
+        # otherwise duplicate every one of them under fresh data_ids. Reclaim
+        # those orphans BEFORE processing: the run journal knows exactly
+        # which ingestor_ids started here and never registered. Runs under
+        # the table lock, like the rest of this method. Defensive try/except:
+        # a reconcile failure must never block an otherwise healthy ingest —
+        # the fallback is simply today's status quo (the orphans stay), and
+        # this run's own counts are unaffected because every summary query
+        # is scoped to its ingestor_id.
+        try:
+            self.database.reclaim_dead_run_rows(self.table_name, self.ingestor_id)
+        except Exception as reclaim_error:
+            logger.critical(
+                f"Orphan-row reconciliation failed for table "
+                f"{self.table_name!r}: {redaction.safe_db_error(reclaim_error)}. "
+                f"Continuing the ingest — rows left by a previous hard-killed "
+                f"run may remain in the table (backend#1028)."
+            )
+        # Journal this run as STARTED before its first row insert, so that if
+        # THIS process dies hard at any later point, the next attempt's
+        # reconcile pass can recognise (and reclaim) whatever rows it left
+        # behind. Deliberately NOT wrapped: if MySQL can't take this one-row
+        # insert, the batch inserts below would fail anyway — better to fail
+        # now, before any row lands, than to insert rows the journal never
+        # heard about.
+        self.database.record_ingest_started(self.table_name, self.ingestor_id)
 
         batch = []
         failed_records = []
@@ -659,11 +737,75 @@ class BaseIngestor(ABC):
                 session.commit()
                 pbar.close()
 
-                # Query accurate label counts from the DB (excludes any rows that
-                # failed insertion) and collect a small preview sample.
-                label_counts = self.database.get_label_counts(
-                    self.table_name, self.ingestor_id
-                )
+                # Post-insert group-integrity pass (backend#1054 WS1, T5).
+                # Row-drop-and-continue is correct per-row, but for grouped
+                # categories a dropped row means its SEQUENCE is now missing
+                # a timestep — training would read a truncated series as if
+                # complete. Collect the sequence ids touched by any dropped/
+                # failed record and remove those sequences' surviving rows,
+                # so a sequence is stored whole or not at all. The dropped
+                # rows stay in failed_records — the run still exits non-zero.
+                grouping = self._grouping
+                if grouping is not None and failed_records:
+                    # Failed-row dicts carry the RAW CSV header spellings, so
+                    # the fixed trait name must be resolved against each
+                    # record's actual keys with the shared #340 rule
+                    # (case-/whitespace-insensitive, resolve_column) — a
+                    # header drifting only in case or whitespace would
+                    # otherwise read None here, leave partial_ids empty, and
+                    # keep a truncated sequence's surviving rows in MySQL.
+                    partial_id_set = set()
+                    for failure in failed_records:
+                        record = failure.get("record")
+                        if not isinstance(record, dict):
+                            continue
+                        key = resolve_column(record.keys(), grouping.group_column)
+                        seq_id = record.get(key) if key is not None else None
+                        if seq_id is not None and str(seq_id).strip():
+                            partial_id_set.add(str(seq_id))
+                    partial_ids = sorted(partial_id_set)
+                    if partial_ids and stats["inserted_records"]:
+                        removed = self.database.delete_sequences(
+                            self.table_name,
+                            self.ingestor_id,
+                            partial_ids,
+                            group_column=grouping.group_column,
+                        )
+                        stats["inserted_records"] = max(
+                            stats["inserted_records"] - removed, 0
+                        )
+                        logger.warning(
+                            f"{YELLOW}Group-integrity pass (T5): dropped "
+                            f"row(s) left {len(partial_ids)} partial "
+                            f"sequence(s); removed their {removed} "
+                            f"already-inserted row(s) so no truncated "
+                            f"sequence is ever trained on.{RESET}"
+                        )
+
+                # Query accurate label counts from the DB (excludes any rows
+                # that failed insertion) and collect a small preview sample.
+                # The trait's ``count_unit`` selects the unit (review: #359 —
+                # this is its behavioral consumer): "sequences" counts one
+                # dataset item per sequence (backend#1054 Decision-3/T2); a
+                # future grouped category counting rows falls through to the
+                # standard row counts like every non-grouped category.
+                if grouping is not None and grouping.count_unit == "sequences":
+                    label_counts = self.database.get_label_sequence_counts(
+                        self.table_name,
+                        self.ingestor_id,
+                        group_column=grouping.group_column,
+                    )
+                    # number_of_sequences rides the meta_data channel (the
+                    # serializer is unchanged — counts only, no id-lists).
+                    # Labels are constant per sequence, so the per-label
+                    # sequence counts sum to the sequence total.
+                    self.file_options["number_of_sequences"] = sum(
+                        label_counts.values()
+                    )
+                else:
+                    label_counts = self.database.get_label_counts(
+                        self.table_name, self.ingestor_id
+                    )
 
                 if not stats["inserted_records"]:
                     logger.warning(
@@ -671,9 +813,15 @@ class BaseIngestor(ABC):
                         "skipping ingest summary."
                     )
                 elif not label_counts:
+                    counts_helper = (
+                        "get_label_sequence_counts"
+                        if grouping is not None
+                        and grouping.count_unit == "sequences"
+                        else "get_label_counts"
+                    )
                     raise RuntimeError(
                         f"Inserted {stats['inserted_records']} row(s) but "
-                        f"get_label_counts returned nothing for "
+                        f"{counts_helper} returned nothing for "
                         f"ingestor_id={self.ingestor_id!r}. "
                         "The dataset was not registered with the backend; "
                         "this run's rows will be removed by the "
@@ -693,6 +841,27 @@ class BaseIngestor(ABC):
                         text_profile = compute_text_profile(self.database.config)
                         if text_profile:
                             self.file_options["text_profile"] = text_profile
+
+                    # Flip the run journal to REGISTERED (backend#1028 item 2)
+                    # BEFORE the remote summary call, not after. The local flip
+                    # and the backend registration can't be made atomic, so
+                    # whichever runs SECOND owns the crash/failure window. With
+                    # the flip second (its previous position) a failed-and-
+                    # swallowed UPDATE — or a hard kill after send returned —
+                    # left the journal at registered=0 while the dataset WAS
+                    # registered, so the next ingest's reclaim pass deleted a
+                    # registered dataset's rows (silent, unrecoverable loss —
+                    # bugbot High). Flipping FIRST inverts the failure mode: a
+                    # crash between this commit and send completing just leaves
+                    # the dataset unregistered, and the k8s retry re-ingests
+                    # from source — a recoverable duplicate the 409-idempotent
+                    # resend and the #227 delete already tolerate — never a
+                    # deletion of registered rows. If send then FAILS, the
+                    # except-branch undoes this flip (mark_ingest_unregistered)
+                    # so reclaim can still recover the rows.
+                    self.database.mark_ingest_registered(
+                        self.table_name, self.ingestor_id
+                    )
 
                     self.api_client.send_ingest_summary(
                         table_name=self.table_name,
@@ -746,6 +915,28 @@ class BaseIngestor(ABC):
                     logger.warning(f"session.rollback() failed: {rollback_error}")
                 logger.error(f"Error during ingestion: {str(e)}")
                 if stats.get("inserted_records") and not dataset_registered:
+                    # The journal was flipped to REGISTERED just before the
+                    # summary call (see above). Since registration did NOT
+                    # complete, undo that optimistic flip FIRST — so if the
+                    # compensating delete below fails, a later reclaim pass
+                    # still sees registered=0 and can recover these rows
+                    # instead of stranding them as a phantom registered entry
+                    # (backend#1028). Best-effort: a reset failure must not
+                    # mask the original error or skip the delete.
+                    try:
+                        self.database.mark_ingest_unregistered(
+                            self.table_name, self.ingestor_id
+                        )
+                    except Exception as journal_reset_error:
+                        logger.critical(
+                            f"Failed to reset the run journal to unregistered "
+                            f"for ingestor_id={self.ingestor_id!r} in table "
+                            f"{self.table_name!r}: "
+                            f"{redaction.safe_db_error(journal_reset_error)}. "
+                            f"If the compensating delete also fails, these "
+                            f"rows may not be reclaimed automatically "
+                            f"(backend#1028)."
+                        )
                     try:
                         deleted = self.database.delete_by_ingestor_id(
                             self.table_name, self.ingestor_id
@@ -760,7 +951,8 @@ class BaseIngestor(ABC):
                         logger.critical(
                             f"Compensating delete FAILED for "
                             f"ingestor_id={self.ingestor_id!r} in table "
-                            f"{self.table_name!r}: {cleanup_error}. "
+                            f"{self.table_name!r}: "
+                            f"{redaction.safe_db_error(cleanup_error)}. "
                             f"{stats.get('inserted_records', 0)} unregistered "
                             "row(s) remain orphaned (#227)."
                         )

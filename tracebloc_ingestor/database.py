@@ -16,6 +16,8 @@ from sqlalchemy import (
     Boolean,
     Double,
     Numeric,
+    Index,
+    bindparam,
     inspect,
 
 )
@@ -211,13 +213,25 @@ class Database:
             f"{sorted(type_mapping.keys())}"
         )
 
-    def create_table(self, table_name: str, schema: Dict[str, str]):
+    def create_table(
+        self,
+        table_name: str,
+        schema: Dict[str, str],
+        index_columns: Optional[List[str]] = None,
+    ):
         """
         Creates a table if it doesn't exist, or returns existing table
 
         Args:
             table_name: Name of the table
             schema: Dictionary defining the table schema
+            index_columns: Optional list of schema columns to compose into a
+                secondary (non-unique) index. Used by the sequence-grouped
+                categories to create the composite ``(sequence_id,
+                timestamp)`` index (backend#1054 WS1) so the engine's grouped
+                "fetch all rows of the sampled sequences, ordered" reads
+                don't full-scan. Ignored when the table already exists
+                (reflected as-is). Columns must be part of ``schema``.
 
         Returns:
             SQLAlchemy Table object
@@ -225,12 +239,15 @@ class Database:
         Raises:
             ValueError: if a schema column collides with a reserved/internal
                 column (e.g. a user CSV with its own ``id``), which would
-                otherwise surface as a cryptic SQLAlchemy DuplicateColumnError.
+                otherwise surface as a cryptic SQLAlchemy DuplicateColumnError;
+                or if ``index_columns`` references a column absent from
+                ``schema``.
         """
-        if table_name == self.SALT_TABLE:
+        if table_name in (self.SALT_TABLE, self.RUNS_TABLE):
             raise ValueError(
-                f"{table_name!r} is reserved for the content-hash salt store "
-                "(#225) and cannot be used as a dataset table."
+                f"{table_name!r} is reserved for tracebloc ingest bookkeeping "
+                "(the content-hash salt store #225 / the run journal "
+                "backend#1028) and cannot be used as a dataset table."
             )
         # Fail fast on reserved-column collisions before any DB I/O. `label`
         # is intentionally excluded — it's the user-facing label column the
@@ -367,8 +384,27 @@ class Database:
             for column_name, mysql_type in schema.items()
         ]
 
+        # Optional composite secondary index over schema columns (#1054 WS1:
+        # (sequence_id, timestamp) for the grouped time-series reads). Fail
+        # fast on a column that isn't in the schema — MySQL would raise a raw
+        # 1072 at CREATE TABLE otherwise.
+        table_args = []
+        if index_columns:
+            missing = sorted(set(index_columns) - set(schema))
+            if missing:
+                raise ValueError(
+                    f"index_columns {missing} are not in the table schema; a "
+                    f"secondary index can only cover schema columns."
+                )
+            # MySQL caps identifier length at 64; index names are per-table,
+            # so truncation cannot collide across tables.
+            index_name = f"ix_{table_name}_{'_'.join(index_columns)}"[:64]
+            table_args.append(Index(index_name, *index_columns))
+
         # Combine standard and custom columns
-        table = Table(table_name, self.metadata, *(standard_columns + custom_columns))
+        table = Table(
+            table_name, self.metadata, *(standard_columns + custom_columns + table_args)
+        )
         self.tables[table_name] = table
 
         # Create table if it doesn't exist
@@ -597,6 +633,176 @@ class Database:
             )
         return row[0]
 
+    # ── Run journal: orphan-row reconciliation (backend#1028 item 2) ────────
+    #
+    # The #227 compensating delete removes a failed run's rows only when the
+    # failure is CAUGHT. A hard kill (OOMKilled / SIGKILL mid-ingest) never
+    # reaches that except-branch, so the dead run's rows stay in the table
+    # while its dataset was never registered — and the k8s Job retry then
+    # ingests the same source next to them under fresh data_ids, duplicating
+    # every row. "Registered" exists only in the central backend
+    # (send_ingest_summary), which exposes no lookup, so this cluster-local
+    # journal records each run's lifecycle in the same MySQL the rows land in:
+    #
+    #   record_ingest_started   — journaled before the run's first row insert
+    #   mark_ingest_registered  — right after send_ingest_summary returns
+    #   reclaim_dead_run_rows   — at the start of every ingest: delete rows
+    #                             whose ingestor_id was journaled as started
+    #                             but never registered (a dead prior attempt)
+    #
+    # Rows are reclaimed ONLY when the journal witnessed their run start and
+    # never saw it register. Rows that predate the journal (legacy ingests —
+    # registered or not) have no started-entry and are never touched, so
+    # shipping this cannot delete rows of any pre-existing dataset.
+
+    RUNS_TABLE = "tracebloc_ingest_runs"
+
+    def _ensure_runs_table(self, connection) -> None:
+        """Create the run-journal table if missing. Idempotent DDL, mirroring
+        the salt store's lazy creation (#225) — no migration step needed."""
+        _execute_with_retry(
+            connection,
+            text(
+                f"CREATE TABLE IF NOT EXISTS `{self.RUNS_TABLE}` ("
+                "  ingestor_id VARCHAR(64) NOT NULL PRIMARY KEY,"
+                "  table_name VARCHAR(64) NOT NULL,"
+                "  registered TINYINT(1) NOT NULL DEFAULT 0,"
+                "  started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,"
+                "  registered_at TIMESTAMP NULL DEFAULT NULL,"
+                "  KEY ix_tracebloc_ingest_runs_table (table_name)"
+                ")"
+            ),
+        )
+
+    def record_ingest_started(self, table_name: str, ingestor_id: str) -> None:
+        """Journal that *ingestor_id* is about to insert rows into
+        *table_name* (backend#1028 item 2).
+
+        Must be called before the run's first ``insert_batch`` so that a hard
+        kill at ANY later point leaves a started-but-unregistered journal
+        entry behind — the marker :meth:`reclaim_dead_run_rows` uses to
+        recognise the dead run's rows on the next attempt. ``INSERT IGNORE``
+        keeps it idempotent (re-entry with the same ingestor_id is a no-op).
+        """
+        with self.engine.connect() as connection:
+            self._ensure_runs_table(connection)
+            _execute_with_retry(
+                connection,
+                text(
+                    f"INSERT IGNORE INTO `{self.RUNS_TABLE}` "
+                    "(ingestor_id, table_name) "
+                    "VALUES (:ingestor_id, :table_name)"
+                ).bindparams(ingestor_id=ingestor_id, table_name=table_name),
+            )
+            connection.commit()
+
+    def mark_ingest_registered(self, table_name: str, ingestor_id: str) -> None:
+        """Flip the run's journal entry to REGISTERED (backend#1028 item 2).
+
+        Called immediately BEFORE ``send_ingest_summary`` (not after): the
+        local flip and the remote registration can't be atomic, and writing
+        the journal first makes a crash in that window a recoverable duplicate
+        instead of a deletion of registered rows — see ``BaseIngestor.ingest``
+        and :meth:`mark_ingest_unregistered` (the failure-path undo). Once set,
+        no future reconcile pass can mistake this run's rows for orphans.
+        Idempotent (repeating the UPDATE is a no-op).
+        """
+        with self.engine.connect() as connection:
+            self._ensure_runs_table(connection)
+            _execute_with_retry(
+                connection,
+                text(
+                    f"UPDATE `{self.RUNS_TABLE}` "
+                    "SET registered = 1, registered_at = CURRENT_TIMESTAMP "
+                    "WHERE ingestor_id = :ingestor_id "
+                    "AND table_name = :table_name"
+                ).bindparams(ingestor_id=ingestor_id, table_name=table_name),
+            )
+            connection.commit()
+
+    def mark_ingest_unregistered(self, table_name: str, ingestor_id: str) -> None:
+        """Flip the run's journal entry back to NOT-registered (backend#1028
+        item 2).
+
+        The registration flip is written BEFORE ``send_ingest_summary`` so a
+        crash in that window degrades to a recoverable duplicate rather than a
+        deletion of registered rows (see ``BaseIngestor.ingest``). When the
+        summary call then FAILS, that optimistic flip must be undone so the
+        run's rows read as reclaimable again — otherwise a compensating-delete
+        failure would strand them as a ``registered = 1`` entry that no future
+        reconcile pass would ever clean. Idempotent (repeating is a no-op); the
+        caller invokes it best-effort on the failure path.
+        """
+        with self.engine.connect() as connection:
+            self._ensure_runs_table(connection)
+            _execute_with_retry(
+                connection,
+                text(
+                    f"UPDATE `{self.RUNS_TABLE}` "
+                    "SET registered = 0, registered_at = NULL "
+                    "WHERE ingestor_id = :ingestor_id "
+                    "AND table_name = :table_name"
+                ).bindparams(ingestor_id=ingestor_id, table_name=table_name),
+            )
+            connection.commit()
+
+    def reclaim_dead_run_rows(
+        self, table_name: str, current_ingestor_id: str
+    ) -> Dict[str, int]:
+        """Reconcile-on-start (backend#1028 item 2): delete rows left in
+        *table_name* by prior attempts that died without registering.
+
+        A prior run's rows are orphans exactly when its ``ingestor_id``
+        (i) still owns rows in the table, (ii) was journaled as STARTED, and
+        (iii) was never journaled as REGISTERED — i.e. the run began
+        inserting and then died hard (OOMKilled / SIGKILL) before it could
+        register, bypassing the #227 compensating delete. Requiring the
+        started-entry means rows that predate the journal are NEVER touched,
+        and (iii) excludes every registered run, so no registered dataset's
+        rows can be deleted. ``current_ingestor_id`` is excluded so the pass
+        is idempotent and safe to re-run at any point of the current ingest.
+
+        Runs under the caller's table lock (``BaseIngestor.ingest``), so a
+        journaled-started run for this table cannot still be live. Reuses
+        :meth:`delete_by_ingestor_id` per dead run (transient-retry wrapped,
+        logs each count).
+
+        Returns:
+            ``{dead_ingestor_id: rows_deleted}`` — empty when there is
+            nothing to reclaim.
+        """
+        safe_table = table_name.replace("`", "``")
+        with self.engine.connect() as connection:
+            self._ensure_runs_table(connection)
+            rows = _execute_with_retry(
+                connection,
+                text(
+                    f"SELECT DISTINCT d.ingestor_id "
+                    f"FROM `{safe_table}` d "
+                    f"JOIN `{self.RUNS_TABLE}` r "
+                    f"ON r.ingestor_id = d.ingestor_id "
+                    f"WHERE r.table_name = :table_name "
+                    f"AND r.registered = 0 "
+                    f"AND r.ingestor_id != :current_ingestor_id"
+                ).bindparams(
+                    table_name=table_name,
+                    current_ingestor_id=current_ingestor_id,
+                ),
+            ).fetchall()
+        reclaimed: Dict[str, int] = {}
+        for (dead_id,) in rows:
+            reclaimed[dead_id] = self.delete_by_ingestor_id(table_name, dead_id)
+        if reclaimed:
+            logger.warning(
+                f"Reclaimed {sum(reclaimed.values())} orphan row(s) in "
+                f"`{table_name}` from {len(reclaimed)} dead unregistered "
+                f"run(s) {sorted(reclaimed)} — left by a previous attempt "
+                f"killed before it could register or clean up "
+                f"(backend#1028); this run now converges instead of "
+                f"duplicating them."
+            )
+        return reclaimed
+
     def get_label_counts(self, table_name: str, ingestor_id: str) -> Dict[str, int]:
         """
         Return ``{label: row_count}`` for every label inserted by *ingestor_id*.
@@ -627,6 +833,104 @@ class Database:
             key = label if label is not None else ""
             counts[key] = counts.get(key, 0) + cnt
         return counts
+
+    def get_label_sequence_counts(
+        self, table_name: str, ingestor_id: str, group_column: str = "sequence_id"
+    ) -> Dict[str, int]:
+        """
+        Return ``{label: sequence_count}`` for every label inserted by
+        *ingestor_id*, counting DISTINCT sequences rather than rows
+        (backend#1054 WS1, Decision-3/T2).
+
+        The sequence-grouped categories' sample unit is one SEQUENCE (many
+        timestep rows sharing a ``sequence_id``), so the summary payload —
+        which feeds ``data_per_class``, the sub-dataset arithmetic and the
+        leaderboard normalizers downstream — must count sequences. Using the
+        row-unit :meth:`get_label_counts` here would inflate every count by
+        ~mean(T)×. The label is constant within a sequence (validated
+        pre-ingest), so grouping by label cannot split a sequence across two
+        labels.
+
+        Args:
+            table_name: Name of the table to query
+            ingestor_id: UUID of the current ingest run
+            group_column: The sequence group column (default ``sequence_id``,
+                from the category's ``ModalitySpec.grouping`` trait)
+
+        Returns:
+            Dict mapping label string to number of distinct sequences
+        """
+        safe_group = group_column.replace("`", "``")
+        with self.engine.connect() as conn:
+            rows = conn.execute(
+                text(
+                    f"SELECT label, COUNT(DISTINCT `{safe_group}`) AS cnt "
+                    f"FROM `{table_name.replace('`', '``')}` "
+                    f"WHERE ingestor_id = :ingestor_id "
+                    f"GROUP BY label"
+                ),
+                {"ingestor_id": ingestor_id},
+            ).fetchall()
+        counts: Dict[str, int] = {}
+        for label, cnt in rows:
+            key = label if label is not None else ""
+            counts[key] = counts.get(key, 0) + cnt
+        return counts
+
+    def delete_sequences(
+        self,
+        table_name: str,
+        ingestor_id: str,
+        sequence_ids: List[str],
+        group_column: str = "sequence_id",
+    ) -> int:
+        """
+        Group-integrity compensating delete (backend#1054 WS1, T5): remove
+        every row of the given sequences inserted by this ingest run.
+
+        The ingest loop drops individual failed rows and continues — correct
+        for per-row categories, but for sequence-grouped data it silently
+        persists sequences with MISSING TIMESTEPS: the training side would
+        read a truncated vital-signs series as if it were complete. The
+        post-insert group-integrity pass in ``ingestors/base.py`` collects
+        the sequence ids touched by any dropped/failed row and removes those
+        sequences' surviving rows here, so a sequence is stored either whole
+        or not at all. Scoped to ``ingestor_id`` like the #227 compensating
+        delete, so other runs' rows are never touched.
+
+        Args:
+            table_name: Name of the table to clean
+            ingestor_id: UUID of the current ingest run
+            sequence_ids: The sequence ids whose rows must be removed
+            group_column: The sequence group column (default ``sequence_id``)
+
+        Returns:
+            Number of rows removed
+        """
+        if not sequence_ids:
+            return 0
+        safe_group = group_column.replace("`", "``")
+        stmt = text(
+            f"DELETE FROM `{table_name.replace('`', '``')}` "
+            f"WHERE ingestor_id = :ingestor_id "
+            f"AND `{safe_group}` IN :sequence_ids"
+        ).bindparams(
+            # expanding=True turns the IN into per-value binds — required for
+            # a list parameter with SQLAlchemy text().
+            bindparam("sequence_ids", value=list(sequence_ids), expanding=True),
+            ingestor_id=ingestor_id,
+        )
+        with self.engine.connect() as connection:
+            result = _execute_with_retry(connection, stmt)
+            connection.commit()
+        deleted = result.rowcount if result is not None else 0
+        logger.warning(
+            f"Group-integrity pass removed {deleted} row(s) across "
+            f"{len(sequence_ids)} partial sequence(s) for "
+            f"ingestor_id={ingestor_id!r} from `{table_name}` (T5: a "
+            f"sequence is stored whole or not at all)."
+        )
+        return deleted
 
     def delete_by_ingestor_id(self, table_name: str, ingestor_id: str) -> int:
         """
