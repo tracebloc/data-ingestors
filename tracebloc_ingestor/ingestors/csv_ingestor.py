@@ -234,6 +234,12 @@ class CSVIngestor(BaseIngestor):
         # cast pass (_validate_csv) and emitted on the global-metadata channel
         # for federated/global normalization (data-ingestors#360, backend#1037).
         # Additive aggregates only — no raw values leave the client.
+        #
+        # NOTE: metadata_backfill.build_dataset_metadata reuses this ingestor by
+        # injecting SQL-computed accumulators into `_feature_stats_acc` /
+        # `_categorical_acc` and calling `_schema_payload` / `_collect_run_metadata`
+        # to reproduce this shape — keep those names/shapes stable, or update the
+        # backfill alongside a rename.
         self._feature_stats_acc: Dict[str, Dict[str, Any]] = {}
         # Row-id and annotation columns are never features — a data_id would
         # pollute normalization. The label column is excluded for CLASSIFICATION
