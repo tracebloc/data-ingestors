@@ -225,3 +225,24 @@ def test_build_dataset_metadata_classification_excludes_label_from_stats():
     assert "label" not in fs  # class label is not a feature
     assert set(fs) == {"feat"}
     assert out["schema"]["label"]["role"] == "target"
+
+
+def test_build_dataset_metadata_manifest_category_emits_no_alignment_stats():
+    # Same gate as the live cast pass (#385, bugbot High on #383): for a
+    # manifest-style category the table's cells are bookkeeping, not features
+    # — a keypoint Visibility TEXT column must not ship as vocab. The SQL
+    # scans are skipped entirely and the payload matches a fresh ingest.
+    engine = create_engine("sqlite://")
+    with engine.begin() as c:
+        c.execute(text("CREATE TABLE t (id INTEGER, width REAL, Visibility TEXT)"))
+        c.execute(
+            text("INSERT INTO t (id, width, Visibility) VALUES (1, 640.0, '[1,1]')")
+        )
+    schema = {"id": "BIGINT", "width": "FLOAT", "Visibility": "TEXT"}
+    db = _FakeDB(engine, schema)
+
+    out = mb.build_dataset_metadata(db, "t", category="keypoint_detection")
+
+    # Enriched schema still ships; no alignment stats are fabricated.
+    assert out["schema"]["width"]["dtype"] == "float"
+    assert out["meta_data"] == {}

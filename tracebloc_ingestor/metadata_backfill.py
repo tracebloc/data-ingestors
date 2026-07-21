@@ -135,12 +135,20 @@ def build_dataset_metadata(
         file_options=dict(file_options or {}),
     )
 
-    table = Table(table_name, MetaData(), autoload_with=database.engine)
-    with database.engine.connect() as conn:
-        ingestor._feature_stats_acc = _numeric_feature_stats(
-            conn, table, schema, category
-        )
-        ingestor._categorical_acc = _categorical_counts(conn, table, schema)
+    # Same gate as the live cast pass (#385): alignment stats describe cell
+    # values as FEATURES, which is only true for tabular-family categories.
+    # Injecting the SQL-built accumulators directly would bypass that
+    # accumulation-time gate and ship a manifest table's TEXT cell values as
+    # vocab (bugbot High on #383). Honor the ingestor's own flag — derived
+    # from the category in __init__ — and skip the table scans entirely,
+    # mirroring what a fresh ingest of the same table would emit.
+    if ingestor._emit_alignment_stats:
+        table = Table(table_name, MetaData(), autoload_with=database.engine)
+        with database.engine.connect() as conn:
+            ingestor._feature_stats_acc = _numeric_feature_stats(
+                conn, table, schema, category
+            )
+            ingestor._categorical_acc = _categorical_counts(conn, table, schema)
 
     enriched_schema = ingestor._schema_payload(schema)
     run_meta = ingestor._collect_run_metadata()
