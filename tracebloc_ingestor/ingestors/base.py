@@ -249,6 +249,10 @@ class BaseIngestor(ABC):
         self.intent = intent
         self.annotation_column = annotation_column
         self.category = category
+        # #372: the actual header spelling of the file-pointer column, resolved
+        # once per run to the canonical ``filename`` key (see
+        # ``_resolve_filename_key``). None until the first record that carries it.
+        self._filename_source_key: Optional[str] = None
         self.data_format = data_format
         self.file_options = file_options or {}
         self.label_policy = label_policy
@@ -412,6 +416,54 @@ class BaseIngestor(ABC):
             )
             self.label_column = resolved
         return True
+
+    def _resolve_filename_key(self, record: Dict[str, Any]) -> None:
+        """Remap the record's file-pointer column to the canonical ``filename`` key (#372).
+
+        The filename column is validated case-/whitespace-insensitively
+        (``IngestableRecordsValidator._resolve_filename_column`` via the shared
+        ``resolve_column`` rule), but the transfer read path pulls it out of each
+        record by the exact literal key — ``record.get("filename")`` in
+        ``file_transfer`` / ``modalities.transfer``, and ``RecordProcessor`` copies
+        it forward the same way. So a header like ``Filename`` / ``FileName`` /
+        ``" filename "`` passes preflight and then reads ``None`` for every row:
+        every file transfer fails ("No filename found in record", exit 9) AFTER
+        the upload. This is the #340 class already fixed for the label column,
+        still open for ``filename``.
+
+        Unlike the label column — whose configured NAME is pinned once on the
+        ingestor (``_resolve_label_column``) and read back via that name — the
+        filename read target is the fixed literal ``"filename"`` used everywhere
+        in transfer. So the fix normalises the RECORD instead: the source column
+        is resolved once (cached on ``self._filename_source_key``) using the SAME
+        ``resolve_column`` rule the validators use, then copied onto the canonical
+        ``filename`` key of every record so the read path and the validators agree.
+
+        Scoped to file-bearing categories — a tabular dataset may legitimately
+        carry an unrelated ``FileName`` data column that must NOT be hijacked as a
+        file pointer. No-ops when the record already carries a literal
+        ``filename`` key (the common lowercase case) or when nothing resolves:
+        an ``image_id``-only manifest is a genuinely different column, not a case
+        variant (cli#371 territory), and is left to fail at transfer as the
+        contract intends. Sparse JSON whose leading object omits the column is
+        retried on later records, mirroring ``_resolve_label_column``.
+        """
+        if self.category not in _FILE_BEARING_CATEGORIES:
+            return
+        if "filename" in record:
+            return
+        source = self._filename_source_key
+        if source is None:
+            source = resolve_column(record.keys(), "filename")
+            if source is None:
+                return
+            self._filename_source_key = source
+            logger.info(
+                f"Resolved filename column {source!r} to canonical 'filename' "
+                f"(case/whitespace-insensitive match)."
+            )
+        if source in record:
+            record["filename"] = record[source]
 
     @property
     def _grouping(self):
@@ -886,8 +938,19 @@ class BaseIngestor(ABC):
                 pbar = tqdm(total=total, desc="Ingesting records", unit="records")
 
                 _label_resolved = False
+                self._filename_source_key = None
                 for record in self.read_data(source):
                     stats["total_records"] += 0 if total else 1
+
+                    # #372: remap the file-pointer column to the canonical
+                    # ``filename`` key before the record is processed or
+                    # transferred. The validators matched the filename column
+                    # case-/whitespace-insensitively, so a header like ``Filename``
+                    # passed preflight; without this the transfer read path
+                    # (exact key ``record.get("filename")``) would then read None
+                    # for every row and fail after upload. No-op for the common
+                    # lowercase header and for non-file-bearing categories.
+                    self._resolve_filename_key(record)
 
                     # #340: pin the label column to the actual header spelling
                     # before it is processed. The validators matched the label
