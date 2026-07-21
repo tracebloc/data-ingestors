@@ -440,10 +440,19 @@ def map_file_transfer(
             record.pop(key, None)
 
 
-# The isolated, tracebloc-created staging subtree the CLI stage pod writes to
-# (SharedRoot/.tracebloc-staging/<table>; tracebloc/cli teardown.py). It is the
-# ONLY location reclaim_source will delete — a hidden, tracebloc-owned dir that
-# is provably a throwaway copy, never a customer's own data.
+# The isolated, tracebloc-created staging subtree the CLI stage pod writes to:
+# SharedRoot/.tracebloc-staging/<table>/ (tracebloc/cli internal/push/teardown.go
+# + data_ingest_cluster.go). reclaim_source deletes ONLY that per-table dir — a
+# hidden, tracebloc-owned throwaway copy, never a customer's own data.
+#
+# CROSS-REPO CONTRACT: this name — and the per-table layout the gate below
+# expects (SRC_PATH == SharedRoot/.tracebloc-staging/<TABLE_NAME>, which the CLI
+# realises by staging images: under .../<table>/images/) — is shared with the
+# CLI and nothing here pins it. If the CLI's staging layout changes, this must
+# change in lockstep or reclaim silently no-ops and the #346 ~2x-disk leak
+# returns on a green ingest. Mitigation until a shared constant / cross-repo
+# integration check exists (PR #381 review): the gate WARNs when a source lands
+# under this tree but not at the expected per-table path, so drift is loud.
 STAGING_DIRNAME = ".tracebloc-staging"
 
 
@@ -565,19 +574,39 @@ def _reclaim_source(cfg: Config) -> bool:
     staging_root = os.path.normpath(os.path.join(storage_real, STAGING_DIRNAME))
     table = (cfg.TABLE_NAME or "").strip()
     expected = os.path.normpath(os.path.join(staging_root, table))
-    if (
-        not table
-        or src_real != expected
-        or expected == staging_root
-        or not _is_within(expected, staging_root)
+    if not (
+        table
+        and src_real == expected
+        and expected != staging_root
+        and _is_within(expected, staging_root)
     ):
-        logger.info(
-            f"{YELLOW}Not reclaiming staged source {src_real}: it is not this "
-            f"table's own {STAGING_DIRNAME}/{table or '<table>'} dir under "
-            f"{storage_real} (a helm user dir, another table's staging, the "
-            f"storage root, or a symlink resolving elsewhere). Leaving it in "
-            f"place (#346).{RESET}"
-        )
+        # Didn't resolve to THIS table's staging dir — skip. Two very different
+        # reasons, logged at very different volumes:
+        #   - src IS under .tracebloc-staging but not this table's dir: a
+        #     tracebloc-staged copy we could NOT bind to this table — a CLI
+        #     staging-layout drift (the contract is cross-repo + unpinned, see
+        #     STAGING_DIRNAME) or a cross-table SRC_PATH. Silently no-oping here
+        #     would let the #346 ~2x-disk leak return on a GREEN ingest, so WARN.
+        #   - src is OUTSIDE .tracebloc-staging (a helm user-data dir, the
+        #     storage root, a symlink resolving away): we deliberately never
+        #     touch it — info is enough.
+        if _is_within(src_real, staging_root):
+            logger.warning(
+                f"{YELLOW}Staged source {src_real} is under {staging_root} but is "
+                f"not this table's expected dir {expected} — NOT reclaiming, so "
+                f"the ~2x-disk staging copy (#346) may persist even though the "
+                f"ingest succeeded. If this is the CLI-staged path, its staging "
+                f"layout (SharedRoot/{STAGING_DIRNAME}/<TABLE_NAME>/) has drifted "
+                f"from what reclaim expects; otherwise SRC_PATH is pointed at "
+                f"another table.{RESET}"
+            )
+        else:
+            logger.info(
+                f"{YELLOW}Not reclaiming staged source {src_real}: it is not under "
+                f"this table's {STAGING_DIRNAME}/{table or '<table>'} staging dir "
+                f"(e.g. a user-mounted dataset dir in the helm layout, or the "
+                f"storage root) — left in place (#346).{RESET}"
+            )
         return False
 
     # Backstop: never delete the freshly-written table dir or anything that

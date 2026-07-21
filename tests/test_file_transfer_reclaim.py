@@ -301,3 +301,54 @@ def test_logging_failure_never_fails_the_ingest(tmp_path, monkeypatch):
     cfg = _cfg(other, storage, table="tbl")  # mismatch → gate logs .info → boom
     assert file_transfer.reclaim_source(cfg) is False  # must NOT raise
     assert other.exists()
+
+
+# ---------------------------------------------------------------------------
+# observability (Asad review, PR #381): the gate silently couples us to the
+# CLI staging layout. A source that lands UNDER .tracebloc-staging but not at
+# this table's dir (a CLI layout drift, or a cross-table SRC) must WARN, so the
+# #346 leak can't return invisibly on a green ingest. A source OUTSIDE the tree
+# (a helm user dir) is a deliberate skip and stays quiet.
+# ---------------------------------------------------------------------------
+
+
+def _count_logs(monkeypatch):
+    calls = {"warning": 0, "info": 0}
+    monkeypatch.setattr(
+        file_transfer.logger,
+        "warning",
+        lambda *a, **k: calls.__setitem__("warning", calls["warning"] + 1),
+    )
+    monkeypatch.setattr(
+        file_transfer.logger,
+        "info",
+        lambda *a, **k: calls.__setitem__("info", calls["info"] + 1),
+    )
+    return calls
+
+
+def test_warns_loudly_on_staging_layout_drift(tmp_path, monkeypatch):
+    # Deeper than the expected .tracebloc-staging/<table> (as if the CLI staged
+    # images under .../<table>/data/images/) → under the tree but unbindable.
+    storage = tmp_path / "shared"
+    drifted = storage / ".tracebloc-staging" / "tbl" / "nested"
+    drifted.mkdir(parents=True)
+    _seed(drifted, "images")
+    calls = _count_logs(monkeypatch)
+    cfg = _cfg(drifted, storage, table="tbl")  # expected .../tbl, got .../tbl/nested
+    assert file_transfer.reclaim_source(cfg) is False
+    assert drifted.exists()
+    assert calls["warning"] == 1 and calls["info"] == 0  # loud, not silent
+
+
+def test_user_dir_skip_stays_quiet(tmp_path, monkeypatch):
+    # A helm user-data dir OUTSIDE .tracebloc-staging is a deliberate skip — no
+    # false-alarm warning every ingest.
+    storage = tmp_path / "shared"
+    userdir = storage / "cats-dogs"
+    userdir.mkdir(parents=True)
+    _seed(userdir, "images")
+    calls = _count_logs(monkeypatch)
+    cfg = _cfg(userdir, storage, table="cats_dogs_train")
+    assert file_transfer.reclaim_source(cfg) is False
+    assert calls["info"] == 1 and calls["warning"] == 0  # deliberate, quiet
