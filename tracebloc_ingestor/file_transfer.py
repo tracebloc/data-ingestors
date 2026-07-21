@@ -22,6 +22,7 @@ from tracebloc_ingestor import Config
 from tracebloc_ingestor.utils.constants import (
     GREEN,
     RED,
+    YELLOW,
     RESET,
     RETRY_MAX_ATTEMPTS,
     RETRY_WAIT_MAX,
@@ -479,3 +480,190 @@ def map_file_transfer(
     finally:
         for key in lent:
             record.pop(key, None)
+
+
+# The isolated, tracebloc-created staging subtree the CLI stage pod writes to:
+# SharedRoot/.tracebloc-staging/<table>/ (tracebloc/cli internal/push/teardown.go
+# + data_ingest_cluster.go). reclaim_source deletes ONLY that per-table dir — a
+# hidden, tracebloc-owned throwaway copy, never a customer's own data.
+#
+# CROSS-REPO CONTRACT: this name — and the per-table layout the gate below
+# expects (SRC_PATH == SharedRoot/.tracebloc-staging/<TABLE_NAME>, which the CLI
+# realises by staging images: under .../<table>/images/) — is shared with the
+# CLI and nothing here pins it. If the CLI's staging layout changes, this must
+# change in lockstep or reclaim silently no-ops and the #346 ~2x-disk leak
+# returns on a green ingest. Mitigation until a shared constant / cross-repo
+# integration check exists (PR #381 review): the gate WARNs when a source lands
+# under this tree but not at the expected per-table path, so drift is loud.
+STAGING_DIRNAME = ".tracebloc-staging"
+
+
+def _is_within(child: str, parent: str) -> bool:
+    """True if ``child`` is ``parent`` or a path inside it.
+
+    Compares fully resolved (symlinks followed) absolute paths COMPONENT-WISE
+    via ``os.path.commonpath`` — never a raw ``startswith`` string prefix. That
+    dodges two traps a string compare falls into: a ``parent`` of ``/`` becoming
+    a ``//`` prefix that matches nothing, and ``/data/shared-2`` looking
+    "within" ``/data/shared``.
+    """
+    child = os.path.realpath(child)
+    parent = os.path.realpath(parent)
+    try:
+        return os.path.commonpath([child, parent]) == parent
+    except ValueError:
+        # Mixed absolute/relative, or (on Windows) different drives — not within.
+        return False
+
+
+def reclaim_source(cfg: Optional[Config] = None) -> bool:
+    """Delete the staged ``SRC_PATH`` tree after a VERIFIED, clean load (#346).
+
+    Every ``*_transfer`` above **copies** a file-bearing dataset's staged
+    sidecars from ``SRC_PATH/<subdir>/`` into the final table dir ``DEST_PATH``
+    (see ``_copy_file_with_retry``) but historically never removed the staging
+    copy — so each ingest left two copies of the data on the shared PVC (~2x
+    disk for image / detection / segmentation datasets). This reclaims the
+    staging tree, replacing the CLI's extra ``rm -rf`` pod (tracebloc/cli#167).
+
+    The caller MUST invoke this only once the load is fully durable (DB rows
+    committed + dataset registered with the backend) AND clean (no failed
+    records). On a partial/failed load the source is deliberately kept so the
+    operator can retry or inspect it — mirroring the compensating-delete branch
+    in ``BaseIngestor._ingest_with_lock``, which leaves staged files in place.
+
+    SAFETY — reclaim is OPT-IN, not blocklist. We delete a directory only when
+    we can PROVE it is a throwaway copy tracebloc itself staged FOR THIS TABLE:
+    the resolved ``SRC_PATH`` must equal EXACTLY
+    ``STORAGE_PATH/.tracebloc-staging/<TABLE_NAME>`` — the per-table dir the CLI
+    stage pod writes. Binding to ``cfg.TABLE_NAME`` (not merely "somewhere under
+    ``.tracebloc-staging``") means a stray or symlinked ``SRC_PATH`` cannot reach
+    a SIBLING dataset's staging. Every other layout is left untouched — no worse
+    than the pre-#346 status quo — because it is not provably ours to delete:
+
+      - unset / empty ``SRC_PATH`` or ``TABLE_NAME`` (tabular etc. stage nothing);
+      - ``SRC_PATH`` is not an existing directory — nothing to reclaim;
+      - a customer's OWN mounted dataset dir in the helm layout, where
+        ``_resolve_config`` derives ``SRC_PATH`` as the parent of ``images:``
+        (e.g. ``/data/shared/cats-dogs``, a SIBLING of the table dir) — deleting
+        that would destroy the user's data;
+      - another table's ``.tracebloc-staging/<other>`` dir, the shared-PVC root,
+        ``/``, or anything that resolves outside this table's staging dir.
+
+    Paths are resolved with ``os.path.realpath`` before every check AND before
+    the delete, so a symlinked ``SRC_PATH`` (PVC mounts are symlinks) cannot
+    slip a non-staging target past the gate, and ``rmtree`` acts on the real
+    directory. A final backstop still refuses if the resolved source overlaps
+    the table dir at all.
+
+    Best-effort: ANY error — deriving the guards or the delete itself — is
+    logged and swallowed (returns False). The load has already succeeded when
+    this is called, so a leftover staging copy (the pre-#346 status quo) must
+    never turn a green ingest red.
+
+    Returns ``True`` iff the staging tree was removed.
+    """
+    cfg = cfg or config
+    # Best-effort wrapper: reclaim runs AFTER the load is durable + registered
+    # (see _ingest_with_lock), so NOTHING here — realpath, isdir, the guards,
+    # rmtree, even a logging failure — may turn a green ingest red (Bugbot #381).
+    # Any error is swallowed and the leftover staging copy (the pre-#346 status
+    # quo) is left for manual cleanup.
+    try:
+        return _reclaim_source(cfg)
+    except Exception as e:
+        try:
+            logger.warning(
+                f"{YELLOW}Could not reclaim staged source (SRC_PATH="
+                f"{cfg.SRC_PATH!r}): {e}. The load succeeded; the leftover "
+                f"staging copy is the pre-#346 status quo and can be removed "
+                f"manually.{RESET}"
+            )
+        except Exception:
+            pass  # a broken logger must not fail a green ingest either
+        return False
+
+
+def _reclaim_source(cfg: Config) -> bool:
+    """The guarded reclaim decision + delete (contract: see ``reclaim_source``).
+
+    Split out so ``reclaim_source`` can wrap the WHOLE thing in one best-effort
+    guard — a raise anywhere here (a bad ``realpath`` / ``isdir``, an overlap
+    check, a logging failure, or ``rmtree``) must never propagate to the ingest.
+    """
+    src = cfg.SRC_PATH
+    if not src:
+        return False
+
+    # Resolve symlinks up front: every guard below — and the delete itself —
+    # must act on the REAL target, so a symlinked SRC_PATH can't bypass them.
+    src_real = os.path.realpath(src)
+    dest_real = os.path.realpath(cfg.DEST_PATH)
+    storage_real = os.path.realpath(cfg.STORAGE_PATH)
+
+    if not os.path.isdir(src_real):
+        return False
+
+    # Opt-in gate: reclaim ONLY THIS table's own staging dir — exactly
+    # STORAGE_PATH/.tracebloc-staging/<TABLE_NAME>, what the CLI stage pod writes.
+    # Binding to cfg.TABLE_NAME (not merely "somewhere under .tracebloc-staging")
+    # stops a stray SRC_PATH — another dataset's staging, or a <table> symlink
+    # that realpaths into the tree — from rmtree'ing a sibling's data on the
+    # shared PVC (Bugbot #381). `expected` is the literal per-table path (NOT
+    # realpath'd), so a `<table>` that is itself a symlink elsewhere fails the
+    # equality against the fully-resolved src and is left alone. A blank table
+    # name, or one that escapes the staging subtree, skips.
+    staging_root = os.path.normpath(os.path.join(storage_real, STAGING_DIRNAME))
+    table = (cfg.TABLE_NAME or "").strip()
+    expected = os.path.normpath(os.path.join(staging_root, table))
+    if not (
+        table
+        and src_real == expected
+        and expected != staging_root
+        and _is_within(expected, staging_root)
+    ):
+        # Didn't resolve to THIS table's staging dir — skip. Two very different
+        # reasons, logged at very different volumes:
+        #   - src IS under .tracebloc-staging but not this table's dir: a
+        #     tracebloc-staged copy we could NOT bind to this table — a CLI
+        #     staging-layout drift (the contract is cross-repo + unpinned, see
+        #     STAGING_DIRNAME) or a cross-table SRC_PATH. Silently no-oping here
+        #     would let the #346 ~2x-disk leak return on a GREEN ingest, so WARN.
+        #   - src is OUTSIDE .tracebloc-staging (a helm user-data dir, the
+        #     storage root, a symlink resolving away): we deliberately never
+        #     touch it — info is enough.
+        if _is_within(src_real, staging_root):
+            logger.warning(
+                f"{YELLOW}Staged source {src_real} is under {staging_root} but is "
+                f"not this table's expected dir {expected} — NOT reclaiming, so "
+                f"the ~2x-disk staging copy (#346) may persist even though the "
+                f"ingest succeeded. If this is the CLI-staged path, its staging "
+                f"layout (SharedRoot/{STAGING_DIRNAME}/<TABLE_NAME>/) has drifted "
+                f"from what reclaim expects; otherwise SRC_PATH is pointed at "
+                f"another table.{RESET}"
+            )
+        else:
+            logger.info(
+                f"{YELLOW}Not reclaiming staged source {src_real}: it is not under "
+                f"this table's {STAGING_DIRNAME}/{table or '<table>'} staging dir "
+                f"(e.g. a user-mounted dataset dir in the helm layout, or the "
+                f"storage root) — left in place (#346).{RESET}"
+            )
+        return False
+
+    # Backstop: never delete the freshly-written table dir or anything that
+    # overlaps it, even if the staging root were somehow mis-derived.
+    if _is_within(src_real, dest_real) or _is_within(dest_real, src_real):
+        logger.warning(
+            f"{YELLOW}Not reclaiming staged source {src_real}: it overlaps the "
+            f"table dir {dest_real}; refusing to risk the freshly-written table "
+            f"(#346).{RESET}"
+        )
+        return False
+
+    shutil.rmtree(src_real)
+    logger.info(
+        f"{GREEN}Reclaimed staged source {src_real} after a verified, clean "
+        f"load — no duplicate copy left on the PVC (#346).{RESET}"
+    )
+    return True

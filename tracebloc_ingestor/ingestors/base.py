@@ -25,7 +25,7 @@ from ..utils import redaction
 from ..utils.columns import resolve_column
 from ..utils.correlation import resolve_correlation_id
 from ..utils.validators_mapping import map_validators
-from ..file_transfer import map_file_transfer
+from ..file_transfer import map_file_transfer, reclaim_source
 from ..text_profile import compute_text_profile
 from ..schema_inference import canonical_dtype
 from ..reporting import ConsoleRenderer
@@ -1291,6 +1291,21 @@ class BaseIngestor(ABC):
                             "row(s) remain orphaned (#227)."
                         )
                 raise e
+
+        # Reclaim the staged source tree now that the load is fully verified
+        # (rows committed + dataset registered above) AND clean (no failed
+        # records). The per-record copies in ``map_file_transfer`` leave a
+        # second copy of every file-bearing dataset on the shared PVC; without
+        # this each ingest ~doubled PVC usage (#346). Gated on a CLEAN success
+        # so a partial/failed run keeps its source for retry/inspection —
+        # matching the compensating-delete branch above, which deliberately
+        # leaves staged files in place ("overwritten on re-run"). Still inside
+        # the table lock (released in ``ingest``'s finally), so it can't race a
+        # concurrent ingest of the same table. ``reclaim_source`` is fully
+        # guarded + best-effort: it never deletes a dir that contains the table
+        # dir and never fails an already-successful load.
+        if dataset_registered and not failed_records:
+            reclaim_source(self.database.config)
 
         return failed_records
 
