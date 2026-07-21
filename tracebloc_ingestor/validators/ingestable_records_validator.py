@@ -190,7 +190,9 @@ class IngestableRecordsValidator(BaseValidator):
         src_root = (self._config or config).SRC_PATH
         subdir = os.path.join(src_root, self.file_subdir)
 
-        filename_col = self._exact_filename_column(self._read_header(path))
+        filename_col = self._exact_filename_column(
+            self._read_header(path), trim=True
+        )
         checked = 0
         try:
             chunks = pd.read_csv(
@@ -256,21 +258,28 @@ class IngestableRecordsValidator(BaseValidator):
         except Exception:  # noqa: BLE001 — header probe is best-effort
             return []
 
-    def _exact_filename_column(self, header: list) -> Optional[str]:
-        """The header naming each file, matched EXACTLY — whitespace-trimmed but
-        case-SENSITIVE (#372).
+    def _exact_filename_column(self, header: list, *, trim: bool) -> Optional[str]:
+        """The header/key naming each file, matched case-SENSITIVELY (#372).
 
         The cluster reads each file with a case-sensitive
-        ``record.get("filename")`` at transfer, over a record whose keys are the
-        CSV header after pandas strips surrounding whitespace
-        (``chunk.columns.str.strip()``). So ``filename`` and ``" filename "``
-        resolve, but ``Filename`` / ``FILENAME`` do NOT — matching what the
-        transfer will actually find, and the CLI's ``imageFileColIndex``
-        (cli#373). Returns the raw header (un-stripped) so callers can index the
-        frame with it; ``None`` when no exact column is present.
+        ``record.get("filename")`` at transfer. What surrounding whitespace it
+        tolerates depends on the source, so the match must too:
+
+        - **CSV** (``trim=True``): pandas strips header whitespace on read
+          (``chunk.columns.str.strip()``), so the record key is already trimmed
+          — ``filename`` and ``" filename "`` both resolve at transfer, and must
+          resolve here. Matches the CLI's ``imageFileColIndex`` (cli#373).
+        - **JSON** (``trim=False``): keys are NEVER stripped, so ``" filename "``
+          stays padded and ``record.get("filename")`` misses it — it is doomed at
+          transfer and must be rejected here. Only a byte-exact ``filename`` key
+          resolves.
+
+        Returns the raw header (un-stripped) so callers can index the frame with
+        it; ``None`` when no exact match is present.
         """
         for col in header:
-            if str(col).strip() == self.filename_column:
+            candidate = str(col).strip() if trim else str(col)
+            if candidate == self.filename_column:
                 return col
         return None
 
@@ -289,36 +298,51 @@ class IngestableRecordsValidator(BaseValidator):
         ingestor's own preflight agree with its transfer read for every client,
         and mirrors the CLI's up-front ``CheckImageFilenameColumn`` (cli#373).
         """
-        return self._filename_column_result(self._read_header(path))
+        return self._filename_column_result(self._read_header(path), trim=True)
 
-    def _filename_column_result(self, header: list) -> ValidationResult:
+    def _filename_column_result(
+        self, header: list, *, trim: bool
+    ) -> ValidationResult:
         """Accept iff ``header`` (CSV columns or JSON record keys) carries an
-        EXACT lowercase ``filename``; else reject with a targeted message
-        (case-variant vs missing). Shared by the CSV and JSON paths so the
-        contract and its user-facing message live in ONE place."""
-        if self._exact_filename_column(header) is not None:
+        EXACT ``filename``; else reject with a targeted message (case/whitespace
+        variant vs missing). Shared by the CSV and JSON paths so the contract and
+        its user-facing message live in ONE place.
+
+        ``trim`` selects the source's whitespace rule (see
+        :meth:`_exact_filename_column`): CSV tolerates surrounding whitespace,
+        JSON does not. The message's noun (``column`` vs ``key``) follows it.
+        """
+        if self._exact_filename_column(header, trim=trim) is not None:
             return self._create_result(is_valid=True, metadata={"checked": True})
 
-        # Cap the column list in the MESSAGE (redaction.column_preview, as #372
-        # did for mask_id_validator) but keep the FULL header in metadata so
+        unit = "column" if trim else "key"
+        # Cap the list in the MESSAGE (redaction.column_preview, as #372 did for
+        # mask_id_validator) but keep the FULL header in metadata so
         # CLI/programmatic consumers don't lose it — the learned Bugbot rule
         # ("cap the list, keep the full set in metadata").
         full_columns = [str(c) for c in header]
         cols = redaction.column_preview(header) if header else "<none>"
-        # A case variant (``Filename``) still resolves case-insensitively — give
-        # a targeted "rename to lowercase" hint rather than "no column at all".
+        # A near-miss (case variant ``Filename``, or for JSON a padded key)
+        # resolves case-/whitespace-insensitively — give a targeted "rename it"
+        # hint rather than "no column at all".
         variant = self._match_column(header, self.filename_column)
         if variant is not None:
-            variant = str(variant).strip()
+            variant = str(variant) if not trim else str(variant).strip()
+            requirement = (
+                f"must be lowercase '{self.filename_column}'"
+                if trim
+                else f"must be exactly '{self.filename_column}' (case- and "
+                f"whitespace-sensitive — JSON keys are read verbatim)"
+            )
             return self._create_result(
                 is_valid=False,
                 errors=[
-                    f"Column {variant!r} must be lowercase "
-                    f"'{self.filename_column}': the cluster reads each file with "
-                    f"a case-sensitive record.get('{self.filename_column}') at "
-                    f"transfer, so {variant!r} would upload, then fail with 'No "
-                    f"filename found in record'. Rename it to "
-                    f"'{self.filename_column}' and re-run."
+                    f"{unit.capitalize()} {variant!r} {requirement}: the cluster "
+                    f"reads each file with a case-sensitive "
+                    f"record.get('{self.filename_column}') at transfer, so "
+                    f"{variant!r} would upload, then fail with 'No filename found "
+                    f"in record'. Rename it to '{self.filename_column}' and "
+                    f"re-run."
                 ],
                 metadata={
                     "reason": "filename_column_case_variant",
@@ -328,10 +352,10 @@ class IngestableRecordsValidator(BaseValidator):
         return self._create_result(
             is_valid=False,
             errors=[
-                f"No '{self.filename_column}' column in the manifest (columns: "
+                f"No '{self.filename_column}' {unit} in the manifest ({unit}s: "
                 f"{cols}) — file-bearing tasks match each row to its file by "
-                f"that column, and the cluster drops every row without it ('No "
-                f"filename found in record'). Rename your file column to "
+                f"that {unit}, and the cluster drops every row without it ('No "
+                f"filename found in record'). Rename your file {unit} to "
                 f"'{self.filename_column}' and re-run."
             ],
             metadata={"reason": "filename_column_missing", "columns": full_columns},
@@ -351,47 +375,48 @@ class IngestableRecordsValidator(BaseValidator):
         keys = self._read_json_keys(path)
         if keys is None:
             return self._create_result(is_valid=True, metadata={"checked": False})
-        return self._filename_column_result(keys)
+        return self._filename_column_result(keys, trim=False)
 
     def _read_json_keys(self, path: Path) -> Optional[List[str]]:
-        """The manifest's record keys — the first record's keys, mirroring the
-        single header a CSV carries. An array is streamed via ``ijson`` (first
-        item only); a single object is loaded directly. Returns ``None`` when the
-        file can't be parsed (best-effort probe; other validators own JSON
-        validity) and ``[]`` for an empty array / non-object record.
+        """The UNION of keys across the manifest's records, in first-seen order.
+
+        JSON records may be sparse — a leading object can omit ``filename`` while
+        later ones carry it (the transfer reads each row independently, so those
+        later rows ingest). Inspecting only the first record would false-reject
+        such a manifest, so the array is streamed via ``ijson`` and keys are
+        unioned; the scan short-circuits as soon as a record carries the exact
+        ``filename`` key (the common valid case costs one record). Mirrors the
+        retry semantics of ``BaseIngestor._resolve_label_column`` (#340).
+
+        Returns ``None`` when the file can't be parsed (best-effort probe; the
+        JSON-structure validators own validity) and ``[]`` for an empty array /
+        non-object records.
         """
+        # Lazy import: json_ingestor -> base -> validators_mapping ->
+        # modalities.validators -> the validators -> this module, so a top-level
+        # import would cycle. Reuse the ingestor's shape probe rather than a
+        # second copy that could drift (Bugbot #384).
+        from ..ingestors.json_ingestor import _peek_json_shape
+
         try:
-            shape = self._json_shape(path)
-            if shape == "array":
-                with open(path, "rb") as f:
-                    for item in ijson.items(f, "item"):
-                        return list(item.keys()) if isinstance(item, dict) else []
-                return []
+            shape = _peek_json_shape(path)
             if shape == "object":
                 with open(path, "r", encoding="utf-8") as f:
                     obj = json.load(f)
                 return list(obj.keys()) if isinstance(obj, dict) else []
+            if shape == "array":
+                seen: Dict[str, None] = {}
+                with open(path, "rb") as f:
+                    for item in ijson.items(f, "item"):
+                        if not isinstance(item, dict):
+                            continue
+                        for k in item.keys():
+                            seen.setdefault(k, None)
+                        # Exact key present in this record -> the union already
+                        # contains it and the result is settled; stop scanning.
+                        if self.filename_column in item:
+                            break
+                return list(seen)
             return None
         except Exception:  # noqa: BLE001 — key probe is best-effort
             return None
-
-    @staticmethod
-    def _json_shape(path: Path) -> Optional[str]:
-        """``"array"`` / ``"object"`` from the first non-whitespace byte, or
-        ``None`` for neither (malformed — left to the JSON validators)."""
-        with open(path, "rb") as f:
-            buf = b""
-            while True:
-                chunk = f.read(1024)
-                if not chunk:
-                    return None
-                buf += chunk
-                stripped = buf.lstrip()
-                if stripped:
-                    if stripped[:1] == b"[":
-                        return "array"
-                    if stripped[:1] == b"{":
-                        return "object"
-                    return None
-                if len(buf) > 65536:
-                    return None

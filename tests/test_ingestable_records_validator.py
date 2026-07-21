@@ -257,12 +257,38 @@ def test_json_file_bearing_with_exact_filename_passes(tmp_path):
 
 def test_json_file_bearing_case_variant_filename_is_rejected(tmp_path):
     # The cluster reads case-sensitive record.get("filename") for JSON too, so a
-    # `Filename` key would upload then fail late — reject up front.
+    # `Filename` key would upload then fail late — reject up front. JSON keys are
+    # matched verbatim, so the hint says "exactly" (not "lowercase" like CSV).
     path = _write_json(tmp_path, [{"Filename": "a.txt", "label": "x"}])
     result = IngestableRecordsValidator(file_subdir="sequences").validate(str(path))
     assert not result.is_valid
-    assert "must be lowercase 'filename'" in result.errors[0]
+    assert "must be exactly 'filename'" in result.errors[0]
+    assert "'Filename'" in result.errors[0]
     assert result.metadata["reason"] == "filename_column_case_variant"
+
+
+def test_json_padded_filename_key_is_rejected(tmp_path):
+    # Bugbot #384: unlike CSV (pandas strips headers), JSON keys are NOT
+    # stripped, so a padded `" filename "` key fails the cluster's
+    # record.get("filename") at transfer — must be rejected up front, not
+    # accepted as the CSV whitespace-lenient path does.
+    path = _write_json(tmp_path, [{" filename ": "a.txt", "label": "x"}])
+    result = IngestableRecordsValidator(file_subdir="sequences").validate(str(path))
+    assert not result.is_valid
+    assert "must be exactly 'filename'" in result.errors[0]
+    assert result.metadata["reason"] == "filename_column_case_variant"
+
+
+def test_json_sparse_first_record_missing_filename_still_passes(tmp_path):
+    # Bugbot #384: a leading object may omit `filename` while later records carry
+    # it (the transfer reads each row independently, so those rows ingest).
+    # Preflight must union keys across records, not judge on the first alone.
+    path = _write_json(
+        tmp_path,
+        [{"label": "x"}, {"filename": "a.txt", "label": "y"}],
+    )
+    result = IngestableRecordsValidator(file_subdir="sequences").validate(str(path))
+    assert result.is_valid, result.errors
 
 
 def test_json_file_bearing_missing_filename_is_rejected(tmp_path):
