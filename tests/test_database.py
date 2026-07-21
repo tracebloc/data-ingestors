@@ -780,17 +780,73 @@ def _executed_sql(conn):
 
 
 def test_record_ingest_started_journals_idempotently(db, mock_engine_factory):
-    """Journaling a run's start must lazily create the journal table and use
-    INSERT IGNORE (idempotent re-entry), then commit — mirroring the salt
-    store's lazy-creation pattern (#225)."""
+    """Journaling a run's start must lazily create the journal table (with the
+    task column) and use INSERT IGNORE (idempotent re-entry), then commit —
+    mirroring the salt store's lazy-creation pattern (#225)."""
     _, _, conn = mock_engine_factory
     db.record_ingest_started("tbl", "run-a")
     sql = _executed_sql(conn)
-    assert any(
-        "CREATE TABLE IF NOT EXISTS `tracebloc_ingest_runs`" in s for s in sql
+    create = next(
+        s for s in sql if "CREATE TABLE IF NOT EXISTS `tracebloc_ingest_runs`" in s
     )
+    assert "task VARCHAR(64)" in create
     assert any("INSERT IGNORE INTO `tracebloc_ingest_runs`" in s for s in sql)
     conn.commit.assert_called()
+
+
+def test_record_ingest_started_persists_task(db, mock_engine_factory):
+    """The run's task (ingest category) is written into the journal so a
+    cluster-local reader can report it without a backend round-trip."""
+    _, _, conn = mock_engine_factory
+    db.record_ingest_started("tbl", "run-a", "image_classification")
+    insert = next(
+        c.args[0]
+        for c in conn.execute.call_args_list
+        if "INSERT IGNORE INTO `tracebloc_ingest_runs`" in str(c.args[0])
+    )
+    assert "task" in str(insert)
+    assert insert.compile().params == {
+        "ingestor_id": "run-a",
+        "table_name": "tbl",
+        "task": "image_classification",
+    }
+
+
+def test_record_ingest_started_task_defaults_null(db, mock_engine_factory):
+    """An older caller that omits the task still journals the run (task NULL),
+    so registration/reclaim keep working across the rollout."""
+    _, _, conn = mock_engine_factory
+    db.record_ingest_started("tbl", "run-a")
+    insert = next(
+        c.args[0]
+        for c in conn.execute.call_args_list
+        if "INSERT IGNORE INTO `tracebloc_ingest_runs`" in str(c.args[0])
+    )
+    assert insert.compile().params["task"] is None
+
+
+def test_ensure_runs_table_adds_task_column_when_missing(db, mock_engine_factory):
+    """A runs table created before the task column existed is migrated in
+    place: information_schema reports it absent, so an ALTER adds it."""
+    _, _, conn = mock_engine_factory
+    conn.execute.return_value.scalar.return_value = 0  # column absent
+    db.record_ingest_started("tbl", "run-a", "tabular_classification")
+    sql = _executed_sql(conn)
+    assert any(
+        "ALTER TABLE `tracebloc_ingest_runs`" in s and "ADD COLUMN task" in s
+        for s in sql
+    )
+
+
+def test_ensure_runs_table_skips_alter_when_task_column_present(
+    db, mock_engine_factory
+):
+    """When the column already exists, no ALTER runs (the common steady-state
+    path — a bare check, no DDL)."""
+    _, _, conn = mock_engine_factory
+    conn.execute.return_value.scalar.return_value = 1  # column present
+    db.record_ingest_started("tbl", "run-a", "tabular_classification")
+    assert not any("ADD COLUMN task" in s for s in _executed_sql(conn))
 
 
 def test_mark_ingest_registered_flips_journal_flag(db, mock_engine_factory):

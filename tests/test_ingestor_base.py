@@ -1653,7 +1653,7 @@ def test_reconcile_and_start_journal_run_before_first_insert():
         ing.table_name, ing.ingestor_id
     )
     ing.database.record_ingest_started.assert_called_once_with(
-        ing.table_name, ing.ingestor_id
+        ing.table_name, ing.ingestor_id, ing.category
     )
     names = [name for name, _, _ in ing.database.mock_calls]
     assert names.index("create_table") < names.index("reclaim_dead_run_rows")

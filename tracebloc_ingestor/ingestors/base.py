@@ -907,7 +907,9 @@ class BaseIngestor(ABC):
         # insert, the batch inserts below would fail anyway — better to fail
         # now, before any row lands, than to insert rows the journal never
         # heard about.
-        self.database.record_ingest_started(self.table_name, self.ingestor_id)
+        self.database.record_ingest_started(
+            self.table_name, self.ingestor_id, self.category
+        )
 
         batch = []
         failed_records = []
