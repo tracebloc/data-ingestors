@@ -27,11 +27,13 @@ Two distinct ways a CSV manifest yields zero records, both caught here:
    mirrors the CLI's ``CheckImageFilenameColumn`` (cli#373).
 """
 
+import json
 import logging
 import os
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
+import ijson
 import pandas as pd
 
 from ..config import Config
@@ -94,33 +96,49 @@ class IngestableRecordsValidator(BaseValidator):
 
     def validate(self, data: Any, **kwargs) -> ValidationResult:
         try:
-            # Only CSV manifests are checked here. Non-CSV inputs (e.g. JSON)
-            # are covered by their own validators; a non-path input is a direct
-            # caller we don't second-guess.
-            if not isinstance(data, (str, Path)) or Path(data).suffix.lower() != ".csv":
+            # A non-path input is a direct caller we don't second-guess.
+            if not isinstance(data, (str, Path)):
                 return self._create_result(is_valid=True, metadata={"checked": False})
 
             path = Path(data)
+            suffix = path.suffix.lower()
 
-            # 1) Header-only / empty CSV -> zero data rows.
-            row_result = self._check_has_rows(path)
-            if not row_result.is_valid:
-                return row_result
+            if suffix == ".csv":
+                # 1) Header-only / empty CSV -> zero data rows.
+                row_result = self._check_has_rows(path)
+                if not row_result.is_valid:
+                    return row_result
 
-            # 2) File-bearing: enforce the filename-column contract, then the
-            #    all-referenced-files-missing check.
-            if self.file_subdir:
-                # 2a) No EXACT lowercase `filename` column -> doomed at the
-                #     cluster's case-sensitive transfer read; reject up front
-                #     (#372) rather than let it fail late after upload.
-                col_result = self._check_filename_column(path)
-                if not col_result.is_valid:
-                    return col_result
-                # 2b) Column present but every referenced file missing -> zero
-                #     ingestable records.
-                return self._check_referenced_files(path)
+                # 2) File-bearing: enforce the filename-column contract, then the
+                #    all-referenced-files-missing check.
+                if self.file_subdir:
+                    # 2a) No EXACT lowercase `filename` column -> doomed at the
+                    #     cluster's case-sensitive transfer read; reject up front
+                    #     (#372) rather than let it fail late after upload.
+                    col_result = self._check_filename_column(path)
+                    if not col_result.is_valid:
+                        return col_result
+                    # 2b) Column present but every referenced file missing -> zero
+                    #     ingestable records.
+                    return self._check_referenced_files(path)
 
-            return self._create_result(is_valid=True, metadata={"checked": True})
+                return self._create_result(is_valid=True, metadata={"checked": True})
+
+            if suffix == ".json":
+                # A file-bearing JSON manifest is read at transfer with the SAME
+                # case-sensitive record.get("filename") as CSV (cli#373), so it
+                # gets the same exact-`filename` contract up front — else a
+                # `Filename` / padded key passes preflight and fails late after
+                # upload (exit 9). This is the JSON half of the #372 check that
+                # would otherwise be lost with _resolve_filename_key gone
+                # (review #384). Non-file-bearing JSON has nothing to enforce.
+                if self.file_subdir:
+                    return self._check_filename_key_json(path)
+                # Non-file-bearing JSON has no filename contract to enforce here.
+                return self._create_result(is_valid=True, metadata={"checked": False})
+
+            # Other inputs are covered by their own validators.
+            return self._create_result(is_valid=True, metadata={"checked": False})
 
         except Exception as e:  # noqa: BLE001 — mirror sibling validators
             logger.error(f"Error during ingestable-records validation: {str(e)}")
@@ -271,7 +289,13 @@ class IngestableRecordsValidator(BaseValidator):
         ingestor's own preflight agree with its transfer read for every client,
         and mirrors the CLI's up-front ``CheckImageFilenameColumn`` (cli#373).
         """
-        header = self._read_header(path)
+        return self._filename_column_result(self._read_header(path))
+
+    def _filename_column_result(self, header: list) -> ValidationResult:
+        """Accept iff ``header`` (CSV columns or JSON record keys) carries an
+        EXACT lowercase ``filename``; else reject with a targeted message
+        (case-variant vs missing). Shared by the CSV and JSON paths so the
+        contract and its user-facing message live in ONE place."""
         if self._exact_filename_column(header) is not None:
             return self._create_result(is_valid=True, metadata={"checked": True})
 
@@ -312,3 +336,62 @@ class IngestableRecordsValidator(BaseValidator):
             ],
             metadata={"reason": "filename_column_missing", "columns": full_columns},
         )
+
+    def _check_filename_key_json(self, path: Path) -> ValidationResult:
+        """Reject a file-bearing JSON manifest whose records carry no EXACT
+        lowercase ``filename`` key, before any upload — the JSON analogue of
+        :meth:`_check_filename_column` (#372 / review #384).
+
+        The cluster's transfer read is the same case-sensitive
+        ``record.get("filename")`` for JSON as for CSV, so ``Filename`` / padded
+        keys fail late (exit 9); reject at preflight instead. Only the record
+        keys are needed. A malformed / unreadable manifest is left to the
+        JSON-structure validators — we skip rather than false-reject.
+        """
+        keys = self._read_json_keys(path)
+        if keys is None:
+            return self._create_result(is_valid=True, metadata={"checked": False})
+        return self._filename_column_result(keys)
+
+    def _read_json_keys(self, path: Path) -> Optional[List[str]]:
+        """The manifest's record keys — the first record's keys, mirroring the
+        single header a CSV carries. An array is streamed via ``ijson`` (first
+        item only); a single object is loaded directly. Returns ``None`` when the
+        file can't be parsed (best-effort probe; other validators own JSON
+        validity) and ``[]`` for an empty array / non-object record.
+        """
+        try:
+            shape = self._json_shape(path)
+            if shape == "array":
+                with open(path, "rb") as f:
+                    for item in ijson.items(f, "item"):
+                        return list(item.keys()) if isinstance(item, dict) else []
+                return []
+            if shape == "object":
+                with open(path, "r", encoding="utf-8") as f:
+                    obj = json.load(f)
+                return list(obj.keys()) if isinstance(obj, dict) else []
+            return None
+        except Exception:  # noqa: BLE001 — key probe is best-effort
+            return None
+
+    @staticmethod
+    def _json_shape(path: Path) -> Optional[str]:
+        """``"array"`` / ``"object"`` from the first non-whitespace byte, or
+        ``None`` for neither (malformed — left to the JSON validators)."""
+        with open(path, "rb") as f:
+            buf = b""
+            while True:
+                chunk = f.read(1024)
+                if not chunk:
+                    return None
+                buf += chunk
+                stripped = buf.lstrip()
+                if stripped:
+                    if stripped[:1] == b"[":
+                        return "array"
+                    if stripped[:1] == b"{":
+                        return "object"
+                    return None
+                if len(buf) > 65536:
+                    return None

@@ -8,6 +8,8 @@ with a misleading "rows already in the database" message.
 
 from __future__ import annotations
 
+import json
+
 import pandas as pd
 import pytest
 
@@ -18,6 +20,12 @@ from tracebloc_ingestor.validators.ingestable_records_validator import (
 
 def _write(path, text):
     path.write_text(text, encoding="utf-8")
+    return path
+
+
+def _write_json(tmp_path, obj, name="manifest.json"):
+    path = tmp_path / name
+    path.write_text(json.dumps(obj), encoding="utf-8")
     return path
 
 
@@ -233,3 +241,56 @@ def test_absolute_or_traversal_path_is_not_counted_as_found(
     result = IngestableRecordsValidator(file_subdir="sequences").validate(str(path))
     assert not result.is_valid
     assert "No referenced data files" in result.errors[0]
+
+
+# --- JSON manifests: same exact-`filename` contract as CSV (#384 / #3) --------
+# Removing BaseIngestor._resolve_filename_key dropped the ingest-time case/
+# whitespace remap; the preflight now enforces the exact key for JSON too, so a
+# case-variant no longer passes preflight and fails late cluster-side (exit 9).
+
+
+def test_json_file_bearing_with_exact_filename_passes(tmp_path):
+    path = _write_json(tmp_path, [{"filename": "a.txt", "label": "x"}])
+    result = IngestableRecordsValidator(file_subdir="sequences").validate(str(path))
+    assert result.is_valid
+
+
+def test_json_file_bearing_case_variant_filename_is_rejected(tmp_path):
+    # The cluster reads case-sensitive record.get("filename") for JSON too, so a
+    # `Filename` key would upload then fail late — reject up front.
+    path = _write_json(tmp_path, [{"Filename": "a.txt", "label": "x"}])
+    result = IngestableRecordsValidator(file_subdir="sequences").validate(str(path))
+    assert not result.is_valid
+    assert "must be lowercase 'filename'" in result.errors[0]
+    assert result.metadata["reason"] == "filename_column_case_variant"
+
+
+def test_json_file_bearing_missing_filename_is_rejected(tmp_path):
+    path = _write_json(tmp_path, [{"image_id": "a", "label": "x"}])
+    result = IngestableRecordsValidator(file_subdir="sequences").validate(str(path))
+    assert not result.is_valid
+    assert result.metadata["reason"] == "filename_column_missing"
+
+
+def test_json_single_object_form_is_checked(tmp_path):
+    # Object form (not an array) is read via json.load; its keys are checked.
+    path = _write_json(tmp_path, {"Filename": "a.txt"})
+    result = IngestableRecordsValidator(file_subdir="sequences").validate(str(path))
+    assert not result.is_valid
+    assert result.metadata["reason"] == "filename_column_case_variant"
+
+
+def test_json_non_file_bearing_passes(tmp_path):
+    # No file_subdir → no filename contract to enforce.
+    path = _write_json(tmp_path, [{"anything": 1}])
+    result = IngestableRecordsValidator(file_subdir=None).validate(str(path))
+    assert result.is_valid
+
+
+def test_malformed_json_is_skipped_not_rejected(tmp_path):
+    # A parse error is the JSON-structure validators' concern — the filename
+    # preflight must skip (not false-reject) when it can't read the keys.
+    path = _write(tmp_path / "bad.json", "{ this is not valid json")
+    result = IngestableRecordsValidator(file_subdir="sequences").validate(str(path))
+    assert result.is_valid
+    assert result.metadata.get("checked") is False
