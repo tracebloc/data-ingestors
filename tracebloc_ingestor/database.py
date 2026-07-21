@@ -710,6 +710,18 @@ class Database:
                 )
             )
         except DBAPIError:
+            # SQLAlchemy leaves the connection in a pending-rollback state
+            # after the failed ALTER, so the re-check below would raise
+            # PendingRollbackError instead of running — the same #219 failure
+            # mode _execute_with_retry guards against. Reset the transactional
+            # state first; then re-check. A lost race (a concurrent ingestor
+            # added the column) is swallowed; any other ALTER failure re-raises.
+            try:
+                connection.rollback()
+            except Exception as rb_exc:
+                # A rollback on a truly dead connection may itself fail; let
+                # the re-check (or the re-raise) surface the real problem.
+                logger.debug(f"connection.rollback() failed after ALTER: {rb_exc}")
             if not self._runs_has_task_column(connection):
                 raise
 

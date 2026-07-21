@@ -849,6 +849,71 @@ def test_ensure_runs_table_skips_alter_when_task_column_present(
     assert not any("ADD COLUMN task" in s for s in _executed_sql(conn))
 
 
+def test_ensure_runs_table_swallows_lost_alter_race(db, mock_engine_factory):
+    """A concurrent ingestor can add the column between our absence check and
+    our own ALTER, so the ALTER fails duplicate-column. The handler must roll
+    back the (now pending-rollback) connection BEFORE re-checking — else the
+    re-check hits PendingRollbackError (#219) — then swallow the race once the
+    column is confirmed present."""
+    from sqlalchemy.exc import DBAPIError
+
+    _, _, conn = mock_engine_factory
+    events = []
+    conn.rollback.side_effect = lambda *a, **k: events.append("rollback")
+    altered = {"attempted": False}
+
+    def execute_side_effect(stmt, *a, **k):
+        sql = str(stmt)
+        events.append(sql)
+        if "ADD COLUMN task" in sql:
+            altered["attempted"] = True
+            raise DBAPIError(sql, {}, Exception("Duplicate column name 'task'"))
+        result = MagicMock()
+        if "information_schema.columns" in sql:
+            # Absent on the pre-ALTER check; present on the re-check (the
+            # racing ingestor's ALTER has landed). Our ALTER attempt is the
+            # ordering marker between the two.
+            result.scalar.return_value = 1 if altered["attempted"] else 0
+        return result
+
+    conn.execute.side_effect = execute_side_effect
+    # Must NOT raise: the lost race is swallowed once the column is present.
+    db.record_ingest_started("tbl", "run-a", "tabular_classification")
+
+    # A rollback ran between the failed ALTER and the re-check.
+    alter_idx = next(i for i, e in enumerate(events) if "ADD COLUMN task" in e)
+    recheck_idx = next(
+        i
+        for i, e in enumerate(events)
+        if i > alter_idx and "information_schema.columns" in e
+    )
+    assert "rollback" in events[alter_idx:recheck_idx]
+
+
+def test_ensure_runs_table_reraises_non_race_alter_failure(db, mock_engine_factory):
+    """When the ALTER fails and the column is STILL absent afterwards (a genuine
+    DDL failure, not a lost race), the error propagates rather than being
+    silently swallowed."""
+    from sqlalchemy.exc import DBAPIError
+
+    _, _, conn = mock_engine_factory
+    conn.rollback.side_effect = lambda *a, **k: None
+
+    def execute_side_effect(stmt, *a, **k):
+        sql = str(stmt)
+        if "ADD COLUMN task" in sql:
+            raise DBAPIError(sql, {}, Exception("some other DDL error"))
+        result = MagicMock()
+        if "information_schema.columns" in sql:
+            result.scalar.return_value = 0  # still absent -> not a race
+        return result
+
+    conn.execute.side_effect = execute_side_effect
+    with pytest.raises(DBAPIError):
+        db.record_ingest_started("tbl", "run-a", "tabular_classification")
+    conn.rollback.assert_called()
+
+
 def test_mark_ingest_registered_flips_journal_flag(db, mock_engine_factory):
     """Marking registration must UPDATE the run's journal row to
     registered=1, scoped to this (ingestor_id, table_name)."""
