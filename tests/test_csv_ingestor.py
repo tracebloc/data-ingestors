@@ -13,6 +13,8 @@ from tracebloc_ingestor.utils.constants import TaskCategory
 
 def make_csv_ingestor(schema=None, **overrides):
     db = MagicMock()
+    # #350: content_hash default ⇒ mock DB must return a real salt string.
+    db.get_or_create_table_salt.return_value = "0" * 64
     db.create_table.return_value = MagicMock()
     api = MagicMock()
     kwargs = dict(

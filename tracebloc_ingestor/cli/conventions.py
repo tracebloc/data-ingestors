@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, FrozenSet, List, Optional
 
 from ..modalities.registry import spec_for
-from ..utils.constants import TaskCategory
+from ..utils.constants import TaskCategory, canonical_color_mode
 
 # ---------------------------------------------------------------------------
 # Category groupings — used both here and by the entrypoint when deciding
@@ -213,7 +213,7 @@ class ResolvedConfig:
 
     # ----- data_id -----
     unique_id_column: Optional[str] = None  # None ⇒ strategy below decides
-    data_id_strategy: str = "uuid"  # uuid | content_hash (column ⇒ unique_id_column)
+    data_id_strategy: str = "content_hash"  # content_hash (default, #350) | uuid (column ⇒ unique_id_column)
 
     # ----- Pass-through to ingestors -----
     annotation_column: Optional[str] = None
@@ -290,18 +290,36 @@ def resolve(config: Dict[str, Any]) -> ResolvedConfig:
         resolved.label_column = label["column"]
         resolved.label_policy = label.get("policy", "passthrough")
 
-    # 5. data_id — strategy: uuid (default, no source col leaves the cluster),
-    #    column (loud, opt-in, captured in unique_id_column for the
-    #    BaseIngestor warning we added in #43), or content_hash (#225:
-    #    deterministic salted hash — a Job retry re-claims its previous rows
-    #    via the data_id UNIQUE upsert instead of duplicating them; landed
-    #    dark, default stays uuid until a release of soak).
+    # 5. data_id — strategy: content_hash (default, #350: deterministic salted
+    #    hash — a Job retry re-claims its previous rows via the data_id UNIQUE
+    #    upsert instead of duplicating them; the salt never leaves the cluster),
+    #    column (loud, opt-in, captured in unique_id_column for the BaseIngestor
+    #    warning we added in #43), or uuid (fresh per-record id — no source col
+    #    leaves the cluster, but a retried run re-inserts every row). content_hash
+    #    landed dark in #225 and soaked opt-in before this flip.
+    #
+    #    ResolvedConfig defaults to content_hash, so an absent data_id key ⇒
+    #    content_hash. The explicit ``uuid`` branch below is the opt-out: without
+    #    it, ``strategy: uuid`` would fall through and silently stay content_hash.
     data_id = config.get("data_id") or {}
-    if data_id.get("strategy") == "column":
+    strategy = data_id.get("strategy")
+    if strategy == "column":
         resolved.unique_id_column = data_id["column"]
-    elif data_id.get("strategy") == "content_hash":
-        resolved.data_id_strategy = "content_hash"
-    # else: leave defaults ⇒ UUID generation
+    elif strategy == "uuid":
+        resolved.data_id_strategy = "uuid"
+    elif strategy is None and category == TaskCategory.OBJECT_DETECTION:
+        # Object-detection manifests list one row PER OBJECT, so duplicate
+        # (filename, label) rows are the norm — the bundled VisDrone sample
+        # has three identical `car` rows for one image. Those rows hash to
+        # the SAME content digest and the data_id UNIQUE upsert would keep a
+        # single stored row, silently under-counting objects (bugbot High on
+        # #383). Absent an explicit choice, objdet therefore keeps
+        # fresh-per-row UUIDs; an explicit `strategy: content_hash` is
+        # honored (and #227 cleans up retry duplicates either way). Restoring
+        # retry idempotency for objdet needs a row-ordinal-salted hash — a
+        # follow-up, not a default.
+        resolved.data_id_strategy = "uuid"
+    # else (content_hash, or absent): leave default ⇒ content_hash
 
     # 6. csv_options — merge customer overrides over defaults.
     csv_overrides = (config.get("spec") or {}).get("csv_options") or {}
@@ -334,6 +352,84 @@ def resolve(config: Dict[str, Any]) -> ResolvedConfig:
         and "number_of_keypoints" not in spec_file_options
     ):
         resolved.file_options["number_of_keypoints"] = config["number_of_keypoints"]
+
+    # 7c. Bridge the vision alignment facts the user declares (di#360): the
+    #     dataset's `color_mode` (RGB/grayscale only — the values the combine-time
+    #     contract accepts; channels are derived from it downstream) and optional
+    #     `bit_depth`. Same precedence as target_size (spec > top-level). Validated
+    #     here so a bad value fails at config time, not after ingest.
+    if "color_mode" in config and "color_mode" not in spec_file_options:
+        canonical = canonical_color_mode(config["color_mode"])
+        if canonical is None:
+            raise ValueError(
+                f"Invalid color_mode {config['color_mode']!r}; supported values "
+                f"are 'RGB' and 'grayscale'."
+            )
+        resolved.file_options["color_mode"] = canonical
+    if "bit_depth" in config and "bit_depth" not in spec_file_options:
+        bit_depth = config["bit_depth"]
+        if bit_depth not in (8, 16):
+            raise ValueError(
+                f"Invalid bit_depth {bit_depth!r}; supported values are 8 and 16."
+            )
+        resolved.file_options["bit_depth"] = bit_depth
+
+    # 7d. Uploader-declared per-column descriptors (`unit`, `ordinal`) — the
+    #     alignment facts that CAN'T be inferred from the data (di#360). Carried
+    #     on file_options so BaseIngestor merges them into the enriched schema
+    #     descriptors, where the backend's combine-time checks read them (a USD
+    #     vs EUR `unit` mismatch is a silent federated-data hazard). Same
+    #     spec.file_options-wins precedence as the bridges above.
+    if "columns" in config and "column_descriptors" not in spec_file_options:
+        resolved.file_options["column_descriptors"] = config["columns"]
+
+    # 7e. Text alignment facts the uploader declares (di#360): the dataset
+    #     `language` and the text `normalization` applied. Emitted for text
+    #     categories; carried on file_options for BaseIngestor to attach. Passed
+    #     through as-is (any string) — the contract accepts any string.
+    if "language" in config and "language" not in spec_file_options:
+        resolved.file_options["language"] = config["language"]
+    if "normalization" in config and "normalization" not in spec_file_options:
+        resolved.file_options["normalization"] = config["normalization"]
+
+    # 7f. Survival (time-to-event) alignment facts (di#360): the duration
+    #     `time_unit` and the `event_indicator` encoding. Validated here so a bad
+    #     value fails at config time, not silently after ingest. Same
+    #     spec.file_options-wins precedence as the bridges above.
+    if "time_unit" in config and "time_unit" not in spec_file_options:
+        time_unit = config["time_unit"]
+        if time_unit not in ("days", "weeks", "months", "years"):
+            raise ValueError(
+                f"Invalid time_unit {time_unit!r}; supported values are "
+                f"'days', 'weeks', 'months', 'years'."
+            )
+        resolved.file_options["time_unit"] = time_unit
+    if "event_indicator" in config and "event_indicator" not in spec_file_options:
+        ev = config["event_indicator"]
+        if (
+            not isinstance(ev, dict)
+            or isinstance(ev.get("event"), bool)
+            or isinstance(ev.get("censored"), bool)
+            or not isinstance(ev.get("event"), int)
+            or not isinstance(ev.get("censored"), int)
+        ):
+            raise ValueError(
+                "Invalid event_indicator; expected an object "
+                "{event: <int>, censored: <int>}."
+            )
+        resolved.file_options["event_indicator"] = {
+            "event": int(ev["event"]),
+            "censored": int(ev["censored"]),
+        }
+
+    # 7g. Embeddings: the uploader-declared `positive_definition` — what counts
+    #     as a positive pair (di#360). Any string; passed through for the
+    #     embeddings category. Same spec.file_options-wins precedence.
+    if (
+        "positive_definition" in config
+        and "positive_definition" not in spec_file_options
+    ):
+        resolved.file_options["positive_definition"] = config["positive_definition"]
 
     # 8. annotation_column — keypoint_detection's existing template uses
     #    column "Annotation" (the keypoint coords carried in the CSV). The

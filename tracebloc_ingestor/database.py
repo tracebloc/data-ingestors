@@ -658,7 +658,8 @@ class Database:
     RUNS_TABLE = "tracebloc_ingest_runs"
 
     def _ensure_runs_table(self, connection) -> None:
-        """Create the run-journal table if missing. Idempotent DDL, mirroring
+        """Create the run-journal table if missing, then add the ``task``
+        column to a table created before it existed. Idempotent DDL, mirroring
         the salt store's lazy creation (#225) — no migration step needed."""
         _execute_with_retry(
             connection,
@@ -667,16 +668,74 @@ class Database:
                 "  ingestor_id VARCHAR(64) NOT NULL PRIMARY KEY,"
                 "  table_name VARCHAR(64) NOT NULL,"
                 "  registered TINYINT(1) NOT NULL DEFAULT 0,"
+                "  task VARCHAR(64) NULL,"
                 "  started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,"
                 "  registered_at TIMESTAMP NULL DEFAULT NULL,"
                 "  KEY ix_tracebloc_ingest_runs_table (table_name)"
                 ")"
             ),
         )
+        self._ensure_runs_task_column(connection)
 
-    def record_ingest_started(self, table_name: str, ingestor_id: str) -> None:
+    def _runs_has_task_column(self, connection) -> bool:
+        """Whether the runs table already carries the ``task`` column."""
+        return bool(
+            _execute_with_retry(
+                connection,
+                text(
+                    "SELECT COUNT(*) FROM information_schema.columns "
+                    "WHERE table_schema = DATABASE() "
+                    "AND table_name = :t AND column_name = 'task'"
+                ).bindparams(t=self.RUNS_TABLE),
+            ).scalar()
+        )
+
+    def _ensure_runs_task_column(self, connection) -> None:
+        """Add ``task`` to a runs table created before the column existed
+        (clusters that journalled runs under the pre-task schema). MySQL has no
+        portable ``ADD COLUMN IF NOT EXISTS``, so check information_schema first
+        and ALTER only when it's missing; a concurrent ingestor winning the race
+        surfaces as a duplicate-column error, which is re-checked and swallowed.
+        New tables already carry the column, so this is a no-op there."""
+        if self._runs_has_task_column(connection):
+            return
+        try:
+            # Not via _execute_with_retry: a duplicate-column failure is
+            # deterministic, so retrying it would only burn the backoff before
+            # the re-check below handles the race.
+            connection.execute(
+                text(
+                    f"ALTER TABLE `{self.RUNS_TABLE}` "
+                    "ADD COLUMN task VARCHAR(64) NULL"
+                )
+            )
+        except DBAPIError:
+            # SQLAlchemy leaves the connection in a pending-rollback state
+            # after the failed ALTER, so the re-check below would raise
+            # PendingRollbackError instead of running — the same #219 failure
+            # mode _execute_with_retry guards against. Reset the transactional
+            # state first; then re-check. A lost race (a concurrent ingestor
+            # added the column) is swallowed; any other ALTER failure re-raises.
+            try:
+                connection.rollback()
+            except Exception as rb_exc:
+                # A rollback on a truly dead connection may itself fail; let
+                # the re-check (or the re-raise) surface the real problem.
+                logger.debug(f"connection.rollback() failed after ALTER: {rb_exc}")
+            if not self._runs_has_task_column(connection):
+                raise
+
+    def record_ingest_started(
+        self, table_name: str, ingestor_id: str, task: Optional[str] = None
+    ) -> None:
         """Journal that *ingestor_id* is about to insert rows into
-        *table_name* (backend#1028 item 2).
+        *table_name* (backend#1028 item 2), tagging the run with its *task*
+        (the ingest category, e.g. ``image_classification``).
+
+        The task is otherwise known only to the backend; recording it here lets
+        a cluster-local reader (``tb data list``) report each dataset's real
+        task instead of inferring it. ``task`` is optional so an older caller
+        keeps working (the run is journalled with a NULL task).
 
         Must be called before the run's first ``insert_batch`` so that a hard
         kill at ANY later point leaves a started-but-unregistered journal
@@ -690,9 +749,9 @@ class Database:
                 connection,
                 text(
                     f"INSERT IGNORE INTO `{self.RUNS_TABLE}` "
-                    "(ingestor_id, table_name) "
-                    "VALUES (:ingestor_id, :table_name)"
-                ).bindparams(ingestor_id=ingestor_id, table_name=table_name),
+                    "(ingestor_id, table_name, task) "
+                    "VALUES (:ingestor_id, :table_name, :task)"
+                ).bindparams(ingestor_id=ingestor_id, table_name=table_name, task=task),
             )
             connection.commit()
 

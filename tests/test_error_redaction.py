@@ -100,6 +100,8 @@ def _rp(unique_id_column=None):
         unique_id_column=unique_id_column,
         label_policy=label_policy_module.PASSTHROUGH,
         ingestor_id="run-1",
+        # #350: content_hash is now the default strategy and needs a salt.
+        table_salt="0" * 64,
     )
 
 

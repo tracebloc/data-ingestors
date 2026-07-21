@@ -137,6 +137,81 @@
       "description": "Column → SQL type map (e.g. {'age': 'INT', 'name': 'VARCHAR(255)'}). Required for tabular and time-series categories."
     },
 
+    "columns": {
+      "type": "object",
+      "description": "Optional per-column alignment descriptors that cannot be inferred from the data. Keyed by column name; every field is optional. Used at dataset-combination time to keep merged datasets consistent.",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "unit": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Physical unit of the column's values (e.g. 'years', 'USD'). Combining columns whose declared units disagree is flagged, so an income-in-USD dataset isn't silently merged with income-in-EUR."
+          },
+          "ordinal": {
+            "type": "array",
+            "items": { "type": "string" },
+            "minItems": 1,
+            "description": "Category values in order (low → high) for an ordinal column, so the ordering is preserved consistently across merged datasets."
+          }
+        }
+      }
+    },
+
+    "color_mode": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Image color-mode alignment fact (di#360). 'RGB' or 'grayscale'; common spellings are accepted case-insensitively (e.g. 'rgb', 'greyscale', 'gray'). Image categories only. Channels are derived from it downstream; a cross-dataset mismatch is reconciled at combine time."
+    },
+
+    "bit_depth": {
+      "type": "integer",
+      "enum": [8, 16],
+      "description": "Image bit-depth alignment fact (di#360): 8 or 16. Image categories only."
+    },
+
+    "language": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Dataset language alignment fact (di#360), e.g. 'en'. Text/NLP categories. A shared federated model needs one language, so a mismatch across merged datasets is flagged."
+    },
+
+    "normalization": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Text normalization applied to the dataset (di#360), e.g. 'lowercase'. Text/NLP categories. Surfaced so merged datasets can be reconciled."
+    },
+
+    "time_unit": {
+      "type": "string",
+      "enum": ["days", "weeks", "months", "years"],
+      "description": "Survival duration unit for time_to_event_prediction (di#360). BLOCK-guarded on mismatch at combine time, so days aren't silently compared against months."
+    },
+
+    "event_indicator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event", "censored"],
+      "properties": {
+        "event": {
+          "type": "integer",
+          "description": "The value that encodes an observed event."
+        },
+        "censored": {
+          "type": "integer",
+          "description": "The value that encodes a censored (not-yet-observed) case."
+        }
+      },
+      "description": "Survival event/censoring encoding for time_to_event_prediction (di#360). BLOCK-guarded on mismatch so a flipped event-vs-censored convention across merged datasets is caught."
+    },
+
+    "positive_definition": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Embeddings alignment fact (di#360): what defines a positive pair. Embeddings category only."
+    },
+
     "time_column": {
       "type": "string",
       "minLength": 1,
@@ -165,8 +240,8 @@
         "strategy": {
           "type": "string",
           "enum": ["uuid", "column", "content_hash"],
-          "default": "uuid",
-          "description": "How `data_id` is generated. `uuid` (default) generates a fresh UUID per record — no source column leaves the cluster, but a retried run re-inserts every row under new ids. `column` maps a source column's value, which is louder (logged warning) and only safe when the column doesn't carry PII. `content_hash` derives a deterministic id from the record's content (features + label + source filename), salted with a random per-table value that never leaves the cluster — a retried run re-claims its previous rows instead of duplicating them. Note: genuinely identical source rows therefore collapse into one stored row (content-level dedup)."
+          "default": "content_hash",
+          "description": "How `data_id` is generated. `content_hash` (default) derives a deterministic id from the record's content (features + label + source filename), salted with a random per-table value that never leaves the cluster — a retried run re-claims its previous rows instead of duplicating them. Note: genuinely identical source rows therefore collapse into one stored row (content-level dedup). `uuid` generates a fresh UUID per record — no source column leaves the cluster, but a retried run re-inserts every row under new ids. `column` maps a source column's value, which is louder (logged warning) and only safe when the column doesn't carry PII."
         },
         "column": {
           "type": "string",

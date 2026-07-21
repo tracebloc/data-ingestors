@@ -6,6 +6,8 @@ SQLAlchemy Session is patched out so no real engine is touched.
 
 from __future__ import annotations
 
+import logging
+import uuid
 from typing import Any, Dict, Generator, List
 from unittest.mock import MagicMock, patch
 
@@ -31,6 +33,10 @@ class FakeIngestor(BaseIngestor):
 
 def make_ingestor(records=None, **overrides):
     db = MagicMock(name="Database")
+    # #350: content_hash is the default id strategy, so a real DB always
+    # returns a salt string from get_or_create_table_salt — the mock must too,
+    # else the auto-Mock poisons the SHA-256 hash and every record is dropped.
+    db.get_or_create_table_salt.return_value = "0" * 64
     db.create_table.return_value = MagicMock(name="table")
     db.insert_batch.return_value = ([1, 2], [])  # ids, db_failures
     db.get_table_schema.return_value = {"a": "INT"}
@@ -48,7 +54,13 @@ def make_ingestor(records=None, **overrides):
         category=None,
     )
     kwargs.update(overrides)
-    return FakeIngestor(records or [], **kwargs)
+    ing = FakeIngestor(records or [], **kwargs)
+    # #350: content_hash is the default id strategy. Tests that call
+    # process_record() directly skip ingest() (which is what fetches the
+    # salt), so pre-set it here — otherwise the record processor raises for
+    # the salt-less content_hash default.
+    ing._table_salt = "0" * 64
+    return ing
 
 
 # ---------------------------------------------------------------------------
@@ -163,12 +175,29 @@ def test_init_does_not_reorder_non_tabular_schema():
 
 
 def test_process_record_generates_uuid_data_id():
-    ing = make_ingestor(category=None, label_column="a")
+    # #350: uuid is now an explicit opt-out (content_hash is the default), so
+    # pin it here to keep exercising the fresh-per-record UUID path.
+    ing = make_ingestor(category=None, label_column="a", data_id_strategy="uuid")
     rec = ing.process_record({"a": "cat", "filename": "x", "extension": ".jpg"})
     assert rec["label"] == "cat"
     assert rec["data_intent"] == "train"
-    assert rec["data_id"]  # uuid string
+    assert uuid.UUID(rec["data_id"])  # a valid uuid string
     assert rec["ingestor_id"] == ing.ingestor_id
+
+
+def test_process_record_generates_content_hash_data_id_by_default():
+    # #350: with no strategy specified, process_record derives a deterministic
+    # salted content hash (64-hex SHA-256) — the same record re-processed under
+    # the same salt reproduces the id, so a retried Job re-claims its rows.
+    ing = make_ingestor(category=None, label_column="a")
+    rec = ing.process_record({"a": "cat", "filename": "x", "extension": ".jpg"})
+    data_id = rec["data_id"]
+    assert len(data_id) == 64 and all(c in "0123456789abcdef" for c in data_id)
+    # deterministic: a fresh ingestor with the same salt reproduces the id
+    again = make_ingestor(category=None, label_column="a")
+    assert again.process_record(
+        {"a": "cat", "filename": "x", "extension": ".jpg"}
+    )["data_id"] == data_id
 
 
 def test_process_record_uses_unique_id_column():
@@ -1534,7 +1563,7 @@ def test_reconcile_and_start_journal_run_before_first_insert():
         ing.table_name, ing.ingestor_id
     )
     ing.database.record_ingest_started.assert_called_once_with(
-        ing.table_name, ing.ingestor_id
+        ing.table_name, ing.ingestor_id, ing.category
     )
     names = [name for name, _, _ in ing.database.mock_calls]
     assert names.index("create_table") < names.index("reclaim_dead_run_rows")
@@ -1670,3 +1699,26 @@ def test_zero_record_run_journals_start_but_not_registered():
     _run_happy_ingest(ing)
     ing.database.record_ingest_started.assert_called_once()
     ing.database.mark_ingest_registered.assert_not_called()
+
+
+def test_objdet_content_hash_constructor_warns(caplog):
+    # The YAML resolver defaults object_detection to uuid, but the direct-
+    # constructor path (templates, custom scripts) can't distinguish an
+    # explicit content_hash from the signature default — so the constructor
+    # warns loudly about the duplicate-row collapse instead of overriding
+    # (bugbot High on #383).
+    # Local import: develop's copy of this file has no module-level
+    # TaskCategory import, so the PR merge-ref loses it — the test must be
+    # self-contained (same convention as every other test here).
+    from tracebloc_ingestor.utils.constants import TaskCategory
+
+    with caplog.at_level(logging.WARNING):
+        make_ingestor(category=TaskCategory.OBJECT_DETECTION)
+    assert any("collapse" in r.getMessage() for r in caplog.records)
+
+    caplog.clear()
+    with caplog.at_level(logging.WARNING):
+        make_ingestor(
+            category=TaskCategory.OBJECT_DETECTION, data_id_strategy="uuid"
+        )
+    assert not any("collapse" in r.getMessage() for r in caplog.records)

@@ -109,9 +109,11 @@ def _TestIngestor(label_column, label_policy_value, intent="train"):
         intent=intent,
         label_column=label_column,
         annotation_column=None,
-        unique_id_column=None,  # → UUID generation
+        unique_id_column=None,  # → content_hash generation (#350 default)
         label_policy=label_policy_value,
         ingestor_id="test",
+        # #350: content_hash is the default strategy and needs a salt.
+        table_salt="0" * 64,
     )
 
 

@@ -101,6 +101,12 @@ CASES = [
             images=str(T / "image_classification/data/images"),
             label="label",
             spec={"file_options": {"extension": ".jpeg", "target_size": [256, 256]}},
+            # #350: this fixture is 6 unique (filename,label) rows repeated 96×
+            # (576 rows). Under the new content_hash default those collapse to 6
+            # stored rows (content-level dedup, working as designed). This
+            # harness pins the row-per-source-row golden, so opt into uuid here;
+            # content_hash dedup/retry is covered by test_database_e2e.py.
+            data_id={"strategy": "uuid"},
         ),
         sidecars=[str(T / "image_classification/data/images")],
         roundtrip_col=None,
@@ -206,6 +212,10 @@ CASES = [
             annotations=str(T / "object_detection/data/annotations"),
             label="image_label",
             target_size=[1920, 1080],
+            # #350: fixture is 10 unique rows repeated to 128; pin uuid so the
+            # row-per-source-row golden holds (content_hash would dedup to 10).
+            # See the image_classification note above.
+            data_id={"strategy": "uuid"},
         ),
         sidecars=[
             str(T / "object_detection/data/images"),

@@ -64,6 +64,43 @@ def test_find_src_missing(dirs):
     assert path is None and fname == "ghost.jpg"
 
 
+def test_find_src_force_extension_swaps_real_extension(dirs):
+    """force_extension: an extension-bearing value (the image name) is swapped
+    to the sidecar's fixed extension — ``cat.jpg`` -> ``cat.xml`` — instead of
+    keeping ``.jpg``. This is the object_detection annotation contract."""
+    src, _ = dirs
+    _seed(src, "annotations", "cat.xml", b"<a/>")
+    path, fname = file_transfer._find_src(
+        "annotations", "cat.jpg", ".xml", force_extension=True
+    )
+    assert path is not None and fname == "cat.xml"
+
+
+def test_find_src_force_extension_bare_stem(dirs):
+    """force_extension: a bare stem still appends the sidecar extension, so the
+    bare-stem manifest form keeps resolving to ``cat.xml``."""
+    src, _ = dirs
+    _seed(src, "annotations", "cat.xml", b"<a/>")
+    path, fname = file_transfer._find_src(
+        "annotations", "cat", ".xml", force_extension=True
+    )
+    assert path is not None and fname == "cat.xml"
+
+
+def test_find_src_force_extension_keeps_non_extension_dot(dirs):
+    """force_extension only strips a RECOGNISED trailing extension. ``image.001``
+    has none, so the whole value is kept and the annotation is
+    ``image.001.xml`` — never ``image.xml``. This agrees with the on-disk image
+    ``image.001.jpg``, whose ``Path.stem`` (``image.001``) is the key File
+    Pairing compares on."""
+    src, _ = dirs
+    _seed(src, "annotations", "image.001.xml", b"<a/>")
+    path, fname = file_transfer._find_src(
+        "annotations", "image.001", ".xml", force_extension=True
+    )
+    assert path is not None and fname == "image.001.xml"
+
+
 def test_find_mask_src_tries_extensions(dirs):
     src, _ = dirs
     _seed(src, "masks", "m1.png")
@@ -133,6 +170,17 @@ def test_annotation_transfer_success(dirs):
     assert (dest / "img.xml").exists()
 
 
+def test_annotation_transfer_resolves_stem_from_extension_bearing_filename(dirs):
+    """Standalone annotation_transfer (src_path unresolved) must derive the
+    annotation from the image stem: a record ``filename`` of ``img.jpg`` still
+    copies ``img.xml``, not the non-existent ``img.jpg`` under annotations/."""
+    src, dest = dirs
+    _seed(src, "annotations", "img.xml", b"<x/>")
+    rec = file_transfer.annotation_transfer({"filename": "img.jpg"}, {}, ".xml")
+    assert rec is not None
+    assert (dest / "img.xml").exists()
+
+
 def test_mask_transfer_success(dirs):
     src, dest = dirs
     s = _seed(src, "masks", "m.png")
@@ -181,6 +229,47 @@ def test_map_object_detection_missing_filename_returns_none(dirs):
         TaskCategory.OBJECT_DETECTION, {}, {"extension": ".jpg"}
     )
     assert rec is None
+
+
+def test_map_object_detection_extension_bearing_filename(dirs):
+    """Regression: a manifest ``filename`` carrying the image extension
+    (``x.jpg`` — the objdet-ok parity fixture format, and the documented
+    "with or without extension" form) stages BOTH the image and its
+    ``<stem>.xml`` annotation.
+
+    Before the fix the annotation lookup kept ``.jpg`` and searched
+    ``annotations/x.jpg`` (never present), so every record was skipped and the
+    Job exited 9 with 0 ingested — even though every validator, including File
+    Pairing (which pairs by on-disk stem), had passed."""
+    src, dest = dirs
+    _seed(src, "images", "x.jpg")
+    _seed(src, "annotations", "x.xml", b"<a/>")
+    rec = file_transfer.map_file_transfer(
+        TaskCategory.OBJECT_DETECTION, {"filename": "x.jpg"}, {"extension": ".jpg"}
+    )
+    assert rec is not None
+    assert (dest / "x.jpg").exists()
+    assert (dest / "x.xml").exists()
+    # The stored record must be identical to the bare-stem form: filename is
+    # the stem, extension the image extension — no ".jpg" leaks into the DB row.
+    assert rec["filename"] == "x"
+    assert rec["extension"] == ".jpg"
+
+
+def test_map_object_detection_extension_bearing_filename_jpeg(dirs):
+    """The extension swap covers every recognised image extension, not just
+    ``.jpg``: ``photo.jpeg`` stages ``photo.jpeg`` + ``photo.xml``."""
+    src, dest = dirs
+    _seed(src, "images", "photo.jpeg")
+    _seed(src, "annotations", "photo.xml", b"<a/>")
+    rec = file_transfer.map_file_transfer(
+        TaskCategory.OBJECT_DETECTION,
+        {"filename": "photo.jpeg"},
+        {"extension": ".jpeg"},
+    )
+    assert rec is not None
+    assert (dest / "photo.jpeg").exists()
+    assert (dest / "photo.xml").exists()
 
 
 def test_map_semantic_segmentation_success(dirs):

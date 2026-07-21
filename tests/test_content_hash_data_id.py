@@ -127,9 +127,10 @@ def _cfg(strategy=None):
     return cfg
 
 
-def test_resolve_default_is_uuid():
+def test_resolve_default_is_content_hash():
+    # #350: content_hash is now the default when no data_id block is present.
     r = resolve(_cfg())
-    assert r.data_id_strategy == "uuid"
+    assert r.data_id_strategy == "content_hash"
     assert r.unique_id_column is None
 
 
@@ -139,10 +140,19 @@ def test_resolve_content_hash():
     assert r.unique_id_column is None
 
 
+def test_resolve_uuid_is_explicit_opt_out():
+    # #350: after the default flipped, strategy=uuid must still opt back in.
+    r = resolve(_cfg("uuid"))
+    assert r.data_id_strategy == "uuid"
+    assert r.unique_id_column is None
+
+
 def test_resolve_column_still_sets_unique_id_column():
     r = resolve(_cfg("column"))
     assert r.unique_id_column == "feature"
-    assert r.data_id_strategy == "uuid"  # column path, not hash
+    # column path maps unique_id_column and leaves data_id_strategy at its
+    # default; unique_id_column wins over the strategy in RecordProcessor.
+    assert r.data_id_strategy == "content_hash"
 
 
 # ── schema acceptance ────────────────────────────────────────────────────────
@@ -204,7 +214,7 @@ def test_build_ingestor_threads_strategy_through_both_subclasses(source_key, str
         cfg.pop("csv")
         cfg["json"] = "/data/shared/d.json"
     ing = _build(cfg)
-    expected = strategy or "uuid"
+    expected = strategy or "content_hash"  # #350: default flipped to content_hash
     assert ing.data_id_strategy == expected
     # salt is deferred to ingest(); never fetched at construction
     ing.database.get_or_create_table_salt.assert_not_called()

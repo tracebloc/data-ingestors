@@ -51,7 +51,7 @@ class RecordProcessor:
         unique_id_column: Optional[str],
         label_policy: Any,
         ingestor_id: str,
-        data_id_strategy: str = "uuid",
+        data_id_strategy: str = "content_hash",
         table_salt: Optional[str] = None,
     ):
         self.schema = schema

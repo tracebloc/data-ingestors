@@ -53,6 +53,11 @@ def map_validators(
         IngestableRecordsValidator(
             file_subdir=spec.file_subdir,
             extension=options.get("extension", FileExtension.TXT),
+            # Thread the run's dialect so the manifest reads (header probe,
+            # referenced-files scan) tokenize like the ingest write path —
+            # else a non-comma / BOM manifest false-rejects the exact-filename
+            # check (#372/#376). Mirrors the grouped validators.
+            csv_options=options.get("csv_options"),
         )
     ]
     # Thread the spec's grouping trait into the factory options so the

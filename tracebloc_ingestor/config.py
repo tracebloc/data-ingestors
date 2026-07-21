@@ -42,13 +42,19 @@ class Config:
         "BACKEND_TOKEN", "CLIENT_USERNAME", "CLIENT_PASSWORD",
         "SRC_PATH", "LABEL_FILE", "TABLE_NAME", "TITLE",
         "LOG_LEVEL",
+        "CATEGORICAL_MIN_COUNT",
+        "EMIT_ENRICHED_SCHEMA",
     })
+
+    # Env values (case-insensitive) that read as boolean true; anything else
+    # (including unset) is false.
+    _TRUE_STRINGS = frozenset({"1", "true", "yes", "on"})
 
     # Numeric fields whose properties unconditionally coerce via ``int(...)``.
     # ``Config(FIELD=None)`` works for nullable fields (BACKEND_TOKEN etc.)
     # but is nonsensical here — reject at construction with a clear message
     # rather than letting ``int(None)`` blow up later at property access.
-    _NUMERIC_FIELDS = frozenset({"DB_PORT", "BATCH_SIZE"})
+    _NUMERIC_FIELDS = frozenset({"DB_PORT", "BATCH_SIZE", "CATEGORICAL_MIN_COUNT"})
 
     def __init__(self, **overrides: Any) -> None:
         unknown = set(overrides) - self._ENV_FIELDS
@@ -126,6 +132,23 @@ class Config:
         raw = ov if ov is not _MISSING else os.environ.get("BATCH_SIZE", "4000")
         return self._as_int("BATCH_SIZE", "BATCH_SIZE", raw)
 
+    @property
+    def CATEGORICAL_MIN_COUNT(self) -> int:
+        """Minimum occurrence count for a categorical value to be emitted in the
+        alignment vocab (data-ingestors#360). Values seen fewer than this many
+        times are suppressed — a re-identification guard for rare categories
+        (a value present for a single record).
+
+        Defaults to **1** (keep every observed value — no suppression), because
+        raising it drops rare values from the union vocab, which the edge must
+        then handle as out-of-vocabulary at encode time; that trade needs the
+        backend privacy sign-off + engine OOV handling (backend#1079/#1053). Set
+        it above 1 in the deployment once those are in place.
+        """
+        ov = self._override("CATEGORICAL_MIN_COUNT")
+        raw = ov if ov is not _MISSING else os.environ.get("CATEGORICAL_MIN_COUNT", "1")
+        return self._as_int("CATEGORICAL_MIN_COUNT", "CATEGORICAL_MIN_COUNT", raw)
+
     # ===== API =====
     @property
     def EDGE_ENV(self) -> str:
@@ -191,6 +214,28 @@ class Config:
         if ov is not _MISSING:
             return ov if isinstance(ov, int) else LogLevel.get_level_code(ov)
         return LogLevel.get_level_code(os.environ.get("LOG_LEVEL", "WARNING"))
+
+    @property
+    def EMIT_ENRICHED_SCHEMA(self) -> bool:
+        """Whether to emit the per-column *enriched* ``schema`` on the global-
+        metadata channel — ``{col: {dtype, role, …}}`` — instead of the legacy
+        flat ``{col: SQL_type}`` map (data-ingestors#360 slice 1b).
+
+        Defaults to **on**: the paired backend (backend#1037 — its
+        ``_canonical_schema`` preserves the enriched shape and ``_column_dtype``
+        reads both) and edge (tracebloc-engine#460 — reads ``role`` from the
+        schema to identify the prediction target) now depend on it. Set the
+        ``EMIT_ENRICHED_SCHEMA`` env var / override to a falsey value ("0",
+        "false", …) to force the legacy flat map back for a deployment whose
+        backend predates the cutover. ``feature_stats`` is unaffected (additive).
+        """
+        ov = self._override("EMIT_ENRICHED_SCHEMA")
+        if ov is not _MISSING:
+            return ov if isinstance(ov, bool) else str(ov).strip().lower() in self._TRUE_STRINGS
+        env = os.environ.get("EMIT_ENRICHED_SCHEMA")
+        if env is not None and env.strip() != "":
+            return env.strip().lower() in self._TRUE_STRINGS
+        return True
 
     def validate(self) -> None:
         """Fail fast on missing backend authentication.
