@@ -440,16 +440,40 @@ def map_file_transfer(
             record.pop(key, None)
 
 
+# The isolated, tracebloc-created staging subtree the CLI stage pod writes to
+# (SharedRoot/.tracebloc-staging/<table>; tracebloc/cli teardown.py). It is the
+# ONLY location reclaim_source will delete — a hidden, tracebloc-owned dir that
+# is provably a throwaway copy, never a customer's own data.
+STAGING_DIRNAME = ".tracebloc-staging"
+
+
+def _is_within(child: str, parent: str) -> bool:
+    """True if ``child`` is ``parent`` or a path inside it.
+
+    Compares fully resolved (symlinks followed) absolute paths COMPONENT-WISE
+    via ``os.path.commonpath`` — never a raw ``startswith`` string prefix. That
+    dodges two traps a string compare falls into: a ``parent`` of ``/`` becoming
+    a ``//`` prefix that matches nothing, and ``/data/shared-2`` looking
+    "within" ``/data/shared``.
+    """
+    child = os.path.realpath(child)
+    parent = os.path.realpath(parent)
+    try:
+        return os.path.commonpath([child, parent]) == parent
+    except ValueError:
+        # Mixed absolute/relative, or (on Windows) different drives — not within.
+        return False
+
+
 def reclaim_source(cfg: Optional[Config] = None) -> bool:
     """Delete the staged ``SRC_PATH`` tree after a VERIFIED, clean load (#346).
 
     Every ``*_transfer`` above **copies** a file-bearing dataset's staged
-    sidecars from ``SRC_PATH/<subdir>/`` into the final table dir
-    ``DEST_PATH`` (see ``_copy_file_with_retry``) but historically never
-    removed the staging copy — so each ingest left two copies of the data on
-    the shared PVC (~2x disk for image / detection / segmentation datasets).
-    This reclaims the staging tree, replacing the CLI's extra ``rm -rf`` pod
-    (tracebloc/cli#167) and closing the leak for the helm-driven path too.
+    sidecars from ``SRC_PATH/<subdir>/`` into the final table dir ``DEST_PATH``
+    (see ``_copy_file_with_retry``) but historically never removed the staging
+    copy — so each ingest left two copies of the data on the shared PVC (~2x
+    disk for image / detection / segmentation datasets). This reclaims the
+    staging tree, replacing the CLI's extra ``rm -rf`` pod (tracebloc/cli#167).
 
     The caller MUST invoke this only once the load is fully durable (DB rows
     committed + dataset registered with the backend) AND clean (no failed
@@ -457,20 +481,26 @@ def reclaim_source(cfg: Optional[Config] = None) -> bool:
     operator can retry or inspect it — mirroring the compensating-delete branch
     in ``BaseIngestor._ingest_with_lock``, which leaves staged files in place.
 
-    SAFETY — the delete is a no-op (returns ``False``) unless ``SRC_PATH`` is a
-    real, standalone staging directory that provably does NOT contain the table
-    just written:
+    SAFETY — reclaim is OPT-IN, not blocklist. We delete a directory only when
+    we can PROVE it is a throwaway copy tracebloc itself staged: the resolved
+    ``SRC_PATH`` must live strictly inside ``STORAGE_PATH/.tracebloc-staging``
+    (``SharedRoot/.tracebloc-staging/<table>`` — what the CLI stage pod writes).
+    Every other layout is left untouched — no worse than the pre-#346 status
+    quo — because it is not provably ours to delete:
 
-      - unset / empty ``SRC_PATH`` (tabular etc. stage nothing) — skip;
+      - unset / empty ``SRC_PATH`` (tabular etc. stage nothing);
       - ``SRC_PATH`` is not an existing directory — nothing to reclaim;
-      - ``SRC_PATH`` == ``STORAGE_PATH`` (the shared-PVC root) — never delete it;
-      - ``SRC_PATH`` == ``DEST_PATH``, or ``DEST_PATH`` lives INSIDE ``SRC_PATH``
-        — deleting SRC would take the freshly-written table (and, for a shared
-        root, every other tenant's data) with it. This is the helm-direct
-        layout where data was staged straight into the shared root rather than
-        an isolated ``.tracebloc-staging/<table>`` dir; leaving it untouched is
-        strictly no worse than the pre-#346 status quo;
-      - ``SRC_PATH`` lives inside ``DEST_PATH`` — degenerate, skip.
+      - a customer's OWN mounted dataset dir in the helm layout, where
+        ``_resolve_config`` derives ``SRC_PATH`` as the parent of ``images:``
+        (e.g. ``/data/shared/cats-dogs``, a SIBLING of the table dir) — deleting
+        that would destroy the user's data;
+      - the shared-PVC root, ``/``, or anything that resolves outside staging.
+
+    Paths are resolved with ``os.path.realpath`` before every check AND before
+    the delete, so a symlinked ``SRC_PATH`` (PVC mounts are symlinks) cannot
+    slip a non-staging target past the gate, and ``rmtree`` acts on the real
+    directory. A final backstop still refuses if the resolved source overlaps
+    the table dir at all.
 
     Best-effort: a filesystem error while removing the tree is logged and
     swallowed — the load already succeeded, so a leftover staging copy (the
@@ -483,39 +513,47 @@ def reclaim_source(cfg: Optional[Config] = None) -> bool:
     if not src:
         return False
 
-    src_abs = os.path.abspath(src)
-    dest_abs = os.path.abspath(cfg.DEST_PATH)
-    storage_abs = os.path.abspath(cfg.STORAGE_PATH)
+    # Resolve symlinks up front: every guard below — and the delete itself —
+    # must act on the REAL target, so a symlinked SRC_PATH can't bypass them.
+    src_real = os.path.realpath(src)
+    dest_real = os.path.realpath(cfg.DEST_PATH)
+    storage_real = os.path.realpath(cfg.STORAGE_PATH)
 
-    if not os.path.isdir(src_abs):
+    if not os.path.isdir(src_real):
         return False
-    if src_abs == storage_abs:
-        logger.warning(
-            f"{YELLOW}Not reclaiming staged source {src_abs}: it is the shared "
-            f"storage root (STORAGE_PATH) — refusing to delete it (#346).{RESET}"
+
+    # Opt-in gate: reclaim ONLY an isolated SharedRoot/.tracebloc-staging/<table>
+    # dir (strictly inside the staging subtree — not the staging root itself).
+    staging_root = os.path.join(storage_real, STAGING_DIRNAME)
+    if src_real == staging_root or not _is_within(src_real, staging_root):
+        logger.info(
+            f"{YELLOW}Not reclaiming staged source {src_real}: it is not an "
+            f"isolated {STAGING_DIRNAME}/<table> dir under {storage_real} — e.g. "
+            f"a user-mounted dataset dir (helm layout), the storage root, or a "
+            f"symlink resolving outside staging. Leaving it in place (#346).{RESET}"
         )
         return False
-    if src_abs == dest_abs or dest_abs.startswith(src_abs + os.sep):
+
+    # Backstop: never delete the freshly-written table dir or anything that
+    # overlaps it, even if the staging root were somehow mis-derived.
+    if _is_within(src_real, dest_real) or _is_within(dest_real, src_real):
         logger.warning(
-            f"{YELLOW}Not reclaiming staged source {src_abs}: the table dir "
-            f"{dest_abs} lives inside it, so removing SRC would delete the "
-            f"freshly-written table. Data was staged into the storage root "
-            f"rather than an isolated staging dir; skipping reclaim (#346).{RESET}"
+            f"{YELLOW}Not reclaiming staged source {src_real}: it overlaps the "
+            f"table dir {dest_real}; refusing to risk the freshly-written table "
+            f"(#346).{RESET}"
         )
-        return False
-    if src_abs.startswith(dest_abs + os.sep):
         return False
 
     try:
-        shutil.rmtree(src_abs)
+        shutil.rmtree(src_real)
         logger.info(
-            f"{GREEN}Reclaimed staged source {src_abs} after a verified, clean "
+            f"{GREEN}Reclaimed staged source {src_real} after a verified, clean "
             f"load — no duplicate copy left on the PVC (#346).{RESET}"
         )
         return True
     except OSError as e:
         logger.warning(
-            f"{YELLOW}Could not reclaim staged source {src_abs}: {e}. The load "
+            f"{YELLOW}Could not reclaim staged source {src_real}: {e}. The load "
             f"succeeded; the leftover staging copy is the pre-#346 status quo "
             f"and can be removed manually.{RESET}"
         )

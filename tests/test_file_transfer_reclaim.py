@@ -150,3 +150,67 @@ def test_default_cfg_falls_back_to_module_config(tmp_path, monkeypatch):
     monkeypatch.setattr(file_transfer.config, "STORAGE_PATH", str(storage))
     assert file_transfer.reclaim_source() is True
     assert not src.exists()
+
+
+# ---------------------------------------------------------------------------
+# guards added for the Bugbot review (PR #381): sibling user dir, symlink
+# escape, and a root SRC_PATH — none of which the original blocklist caught.
+# ---------------------------------------------------------------------------
+
+
+def test_refuses_sibling_user_dataset_dir(tmp_path):
+    # Helm layout: _resolve_config sets SRC_PATH to the parent of images:, e.g.
+    # /data/shared/cats-dogs — a SIBLING of the table dir, and the user's OWN
+    # data. It is not an isolated .tracebloc-staging dir, so reclaim must leave
+    # it alone (the original guards deleted it on a clean load — the #381 bug).
+    storage = tmp_path / "shared"
+    src = storage / "cats-dogs"  # user's mounted dataset dir
+    dest = storage / "cats_dogs_train"  # the table dir (sibling)
+    src.mkdir(parents=True)
+    dest.mkdir(parents=True)
+    _seed(src, "images")
+    cfg = _cfg(src, storage, table="cats_dogs_train")
+    assert file_transfer.reclaim_source(cfg) is False
+    assert src.exists() and (src / "images" / "cat.jpg").exists()
+
+
+def test_refuses_symlinked_src_resolving_outside_staging(tmp_path):
+    # A SRC_PATH whose path looks like a staging dir but is a SYMLINK to the
+    # user's data must not be reclaimed: guards resolve symlinks (realpath) so
+    # the real target is judged, not the innocent-looking link path.
+    storage = tmp_path / "shared"
+    user_data = storage / "cats-dogs"
+    user_data.mkdir(parents=True)
+    _seed(user_data, "images")
+    staging = storage / ".tracebloc-staging"
+    staging.mkdir(parents=True)
+    link = staging / "tbl"  # path is under .tracebloc-staging …
+    os.symlink(user_data, link)  # … but resolves to the user's data
+    cfg = _cfg(link, storage)
+    assert file_transfer.reclaim_source(cfg) is False
+    assert user_data.exists() and (user_data / "images" / "cat.jpg").exists()
+
+
+def test_refuses_root_src(tmp_path):
+    # A truthy SRC_PATH of "/" must never reach rmtree: it is outside the
+    # staging subtree, so the opt-in gate skips it (a string-prefix guard
+    # mishandled the "//" root case — the #381 medium finding).
+    storage = tmp_path / "shared"
+    storage.mkdir()
+    cfg = _cfg("/", storage)
+    assert file_transfer.reclaim_source(cfg) is False
+
+
+def test_reclaims_through_symlinked_storage_mount(tmp_path):
+    # Realistic PVC: STORAGE_PATH is a symlink to the real mount. A legit
+    # staging dir under it must STILL be reclaimed (realpath resolves both
+    # sides consistently) — the symlink handling must not over-skip.
+    real_storage = tmp_path / "real-shared"
+    real_src = real_storage / ".tracebloc-staging" / "tbl"
+    real_src.mkdir(parents=True)
+    _seed(real_src, "images")
+    storage_link = tmp_path / "shared"  # symlink -> real-shared
+    os.symlink(real_storage, storage_link)
+    cfg = _cfg(storage_link / ".tracebloc-staging" / "tbl", storage_link)
+    assert file_transfer.reclaim_source(cfg) is True
+    assert not real_src.exists()
