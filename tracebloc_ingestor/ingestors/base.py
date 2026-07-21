@@ -15,6 +15,10 @@ from ..utils.constants import (
     RED,
     YELLOW,
     CYAN,
+    DataFormat,
+    TaskCategory,
+    COLOR_MODE_CHANNELS,
+    canonical_color_mode,
 )
 from ..utils import label_policy as label_policy_module
 from ..utils import redaction
@@ -23,6 +27,7 @@ from ..utils.correlation import resolve_correlation_id
 from ..utils.validators_mapping import map_validators
 from ..file_transfer import map_file_transfer
 from ..text_profile import compute_text_profile
+from ..schema_inference import canonical_dtype
 from ..reporting import ConsoleRenderer
 from . import preflight
 from .batch_writer import BatchWriter
@@ -46,6 +51,48 @@ from ..modalities.registry import (
 logger = logging.getLogger(__name__)
 
 __all__ = ["BaseIngestor", "IngestionSummary"]
+
+# Image bit depths the combine-time contract accepts (mirrors the check in
+# cli.conventions.resolve). Values outside this set must not reach the emitted
+# attributes even when bit_depth bypasses resolve() via spec.file_options.
+_SUPPORTED_BIT_DEPTHS = (8, 16)
+
+# The framework's standard prediction-target column. The user's declared
+# label_column is mapped onto it (database.create_table creates a fixed
+# ``label`` column), so this — not the original CSV name — is the target key in
+# the physical-table schema emitted to the backend.
+_TARGET_COLUMN = "label"
+
+# Post-normalization value encodings the ingested (physical) table uses, stated
+# per column in the enriched schema so combine-time alignment can confirm they
+# agree (backend#1037's WARN checks) — di#360. The ingestor maps every
+# recognized NA token to SQL NULL and stores booleans as MySQL 1/0, so these are
+# uniform across every dataset it produces; a dataset ingested under a different
+# convention would surface as a mismatch.
+_NULL_ENCODING = "null"
+_BOOL_ENCODING = "1/0"
+
+# Text alignment facts (encoding/language/normalization) apply to the text
+# categories only — the NLP modalities minus embeddings, whose per-category fact
+# is the embedding-specific ``positive_definition`` instead. Mirrors the
+# backend contract's ``_TEXT`` group; the contract rejects a text fact declared
+# on the embeddings category, so scoping here keeps ingest from being rejected.
+_TEXT_CATEGORIES = _NLP_CATEGORIES - {TaskCategory.EMBEDDINGS}
+
+# Survival (time-to-event) duration units the combine-time contract accepts.
+_TIME_UNITS = ("days", "weeks", "months", "years")
+
+
+def _valid_event_indicator(v: Any) -> bool:
+    """A survival ``event_indicator`` is ``{event: int, censored: int}`` — the
+    contract's shape (backend#1037). bool is rejected (it's an int subclass)."""
+    return (
+        isinstance(v, dict)
+        and not isinstance(v.get("event"), bool)
+        and not isinstance(v.get("censored"), bool)
+        and isinstance(v.get("event"), int)
+        and isinstance(v.get("censored"), int)
+    )
 
 
 def _rows_state_clause(inserted_records: int) -> str:
@@ -238,14 +285,29 @@ class BaseIngestor(ABC):
             )
 
         # Remove label_column, annotation_column, and unique_id_column from schema
-        # These are handled separately and should not be ingested as regular columns
+        # These are handled separately and should not be ingested as regular columns.
+        # Resolve each against the schema keys case-/whitespace-insensitively (the
+        # #340 rule) rather than by exact key: label_column isn't pinned to the real
+        # header until _resolve_label_column runs mid-ingest, so a manifest
+        # ``label.column: Price`` (or ``" price "``) against a header ``price`` would
+        # otherwise miss here and leave the target's SOURCE column in the physical
+        # table. It would then reflect back into the enriched schema, and its
+        # uploader unit/ordinal descriptor would attach to that feature-named column
+        # instead of the framework ``label`` column that carries role:"target" — so
+        # the backend's combine-time target descriptor checks would miss the declared
+        # unit/ordinal (bugbot medium). The same exact-vs-resolved gap applied to the
+        # annotation / unique_id columns.
         table_schema = schema.copy()
-        if self.label_column and self.label_column in table_schema:
-            del table_schema[self.label_column]
-        if self.annotation_column and self.annotation_column in table_schema:
-            del table_schema[self.annotation_column]
-        if self.unique_id_column and self.unique_id_column in table_schema:
-            del table_schema[self.unique_id_column]
+        for _special in (
+            self.label_column,
+            self.annotation_column,
+            self.unique_id_column,
+        ):
+            if not _special:
+                continue
+            _physical = resolve_column(table_schema.keys(), _special)
+            if _physical:
+                del table_schema[_physical]
 
         # Canonical feature-column ordering (#763, mode A). Tabular-family
         # trainers read features positionally and the averaging service sums
@@ -476,6 +538,197 @@ class BaseIngestor(ABC):
     def read_data(self, source: Any) -> Generator[Dict[str, Any], None, None]:
         """Read data from the input source"""
         pass
+
+    def _collect_run_metadata(self) -> Dict[str, Any]:
+        """Data-derived metadata to merge onto the global-metadata channel after
+        a successful ingest, computed from what the run already scanned.
+
+        The base emits nothing; subclasses override to contribute (e.g.
+        ``CSVIngestor`` returns ``{"attributes": {"feature_stats": …}}``, #360).
+        Kept as a hook so the base engine stays format-agnostic rather than
+        branching on category the way the ``text_profile`` injection does.
+
+        The returned dict is applied by ``_apply_run_metadata``: its
+        ``attributes`` key (a shared per-dataset namespace — feature_stats today,
+        text/image facts in later #360 slices) is merged *into* any existing
+        ``attributes`` rather than replacing it; other keys ``.update`` normally.
+        """
+        return self._scalar_attribute_metadata()
+
+    def _scalar_attribute_metadata(self) -> Dict[str, Any]:
+        """Data-format-derived scalar attributes for combine-time alignment
+        (di#360). Format-agnostic so any ingestor (CSV or JSON manifest)
+        contributes them — image/text datasets are manifest-based and inherit
+        this base hook. Subclasses that override ``_collect_run_metadata`` (e.g.
+        ``CSVIngestor``) must fold this in via ``super()``.
+
+        - **Image:** ``resolution`` from the run's uniform ``target_size`` (the
+          resolution validator enforces every image to it, so no image read is
+          needed here), emitted as ``[height, width]`` (``target_size`` is
+          ``[width, height]``); ``color_mode`` + derived ``channels`` and
+          ``bit_depth`` from ``file_options`` when the user supplies them for the
+          vision run (RGB/grayscale only — the values the contract accepts). Not
+          auto-detected: PIL modes like RGBA/CMYK aren't in the contract enum.
+        - **Text:** ``encoding`` is ``"utf-8"`` (text is staged/validated as
+          UTF-8, the canonical value); ``language`` and ``normalization`` are
+          uploader-declared when present. Text categories only (not embeddings,
+          which the contract scopes to its own ``positive_definition``).
+        - **Survival (time-to-event):** uploader-declared ``time_unit`` and
+          ``event_indicator`` (``{event, censored}``), re-checked against the
+          contract's accepted shapes before emission.
+        - **Embeddings:** uploader-declared ``positive_definition`` (what counts
+          as a positive pair) — the embeddings-specific alignment fact.
+        """
+        attributes: Dict[str, Any] = {}
+
+        if self.data_format == DataFormat.IMAGE:
+            target = self.file_options.get("target_size")
+            if isinstance(target, (list, tuple)) and len(target) == 2:
+                width, height = int(target[0]), int(target[1])
+                attributes["resolution"] = [height, width]
+
+            # color_mode is user-provided in file_options for vision use cases;
+            # emit only the canonical RGB/grayscale values and derive channels.
+            color_mode = canonical_color_mode(self.file_options.get("color_mode"))
+            if color_mode:
+                attributes["color_mode"] = color_mode
+                attributes["channels"] = COLOR_MODE_CHANNELS[color_mode]
+
+            # Only the contract-accepted depths (8/16) — mirrors color_mode's
+            # canonicalisation. conventions.resolve() rejects other values, but a
+            # bit_depth set directly in spec.file_options or a modality spec
+            # bypasses that gate, so re-check here before it reaches the contract.
+            bit_depth = self.file_options.get("bit_depth")
+            if (
+                isinstance(bit_depth, int)
+                and not isinstance(bit_depth, bool)
+                and bit_depth in _SUPPORTED_BIT_DEPTHS
+            ):
+                attributes["bit_depth"] = bit_depth
+
+        if self.category in _TEXT_CATEGORIES:
+            # encoding is the canonical UTF-8 (text is staged/validated as UTF-8).
+            attributes["encoding"] = "utf-8"
+            # language + text normalization are uploader-declared alignment facts
+            # (bridged into file_options by conventions.resolve); they drive the
+            # edge's cross-client text handling and the backend's BLOCK check on
+            # a language mismatch, so emit them when declared.
+            language = self.file_options.get("language")
+            if isinstance(language, str) and language.strip():
+                attributes["language"] = language.strip()
+            normalization = self.file_options.get("normalization")
+            if isinstance(normalization, str) and normalization.strip():
+                attributes["normalization"] = normalization.strip()
+
+        if self.category == TaskCategory.TIME_TO_EVENT_PREDICTION:
+            # Survival alignment facts, uploader-declared (di#360): the duration
+            # unit and the event/censoring encoding. Both are BLOCK-guarded on
+            # mismatch by the backend, so a merge silently flipping event vs
+            # censored — or comparing days against months — is caught. Re-checked
+            # against the contract's shape here (a value set directly in
+            # spec.file_options bypasses conventions.resolve's validation).
+            time_unit = self.file_options.get("time_unit")
+            if time_unit in _TIME_UNITS:
+                attributes["time_unit"] = time_unit
+            event_indicator = self.file_options.get("event_indicator")
+            if _valid_event_indicator(event_indicator):
+                attributes["event_indicator"] = {
+                    "event": int(event_indicator["event"]),
+                    "censored": int(event_indicator["censored"]),
+                }
+
+        if self.category == TaskCategory.EMBEDDINGS:
+            # The embeddings-specific alignment fact (uploader-declared): what
+            # defines a positive pair. Its own contract field, distinct from the
+            # text facts above (which the contract does not allow on embeddings).
+            positive_definition = self.file_options.get("positive_definition")
+            if isinstance(positive_definition, str) and positive_definition.strip():
+                attributes["positive_definition"] = positive_definition.strip()
+
+        return {"attributes": attributes} if attributes else {}
+
+    def _apply_run_metadata(self) -> None:
+        """Merge ``_collect_run_metadata()`` into ``file_options`` just before the
+        payload ships. Split out from ``_ingest`` so the merge — in particular the
+        shallow-merge of the shared ``attributes`` namespace — is unit-testable
+        without a full ingest run."""
+        run_meta = self._collect_run_metadata()
+        attributes = run_meta.pop("attributes", None)
+        if attributes:
+            self.file_options.setdefault("attributes", {}).update(attributes)
+        self.file_options.update(run_meta)
+
+    def _schema_payload(self, schema_dict: Dict[str, str]) -> Dict[str, Any]:
+        """The ``schema`` value shipped on the global-metadata channel.
+
+        Default — the legacy flat ``{col: SQL_type}`` map, unchanged, which the
+        current backend consumes.
+
+        Enriched (``EMIT_ENRICHED_SCHEMA`` — data-ingestors#360 slice 1b, gated
+        for the backend#1037 cutover) — ``{col: {"dtype": <canonical>}}`` with the
+        framework ``label`` column carrying ``role: "target"`` for supervised
+        tasks. That lets combine-time alignment identify the prediction target
+        from the contract (backend#1037's ``role``-based check) rather than
+        inferring it. ``dtype`` is the CANONICAL logical type
+        (``schema_inference.canonical_dtype``), not the raw storage type, so a
+        merged dataset compares column types by logical family — ``VARCHAR(255)``
+        vs ``VARCHAR(100)`` (or ``INT`` vs ``BIGINT``) no longer read as a
+        divergence. Physical-table shape otherwise: keys are exactly what
+        ``get_table_schema`` reflected, so ``label`` is the target key — the same
+        key ``feature_stats`` re-keys the regression-class target under, so schema
+        ``role: "target"`` and the target's stats line up on one column name.
+        """
+        if not self.database.config.EMIT_ENRICHED_SCHEMA:
+            return schema_dict
+        enriched: Dict[str, Any] = {
+            col: {"dtype": canonical_dtype(sql_type)}
+            for col, sql_type in schema_dict.items()
+        }
+        # Value encodings of the ingested data: missing is SQL NULL for every
+        # column; booleans are stored MySQL 1/0. Uniform by construction, stated
+        # per column so #1037 can verify cross-dataset consistency.
+        for desc in enriched.values():
+            desc["null_encoding"] = _NULL_ENCODING
+            if desc["dtype"] == "bool":
+                desc["bool_encoding"] = _BOOL_ENCODING
+        # ``label`` is the standard column the user's label_column is mapped onto
+        # (database.create_table). It's always present, but is only a prediction
+        # target for SUPERVISED tasks — self-supervised runs (no label_column)
+        # must not claim one.
+        if self.label_column and _TARGET_COLUMN in enriched:
+            enriched[_TARGET_COLUMN]["role"] = "target"
+
+        # Merge uploader-declared per-column descriptors that CAN'T be inferred
+        # from the data — ``unit`` and ``ordinal`` (di#360). These activate the
+        # backend's combine-time descriptor checks (e.g. a ``unit`` mismatch —
+        # merging a USD column with an EUR one — is otherwise silent). Declared
+        # by CSV column name; entries for a column absent from the schema (or the
+        # target, which the physical schema keys as ``label``) are ignored.
+        declared = self.file_options.get("column_descriptors") or {}
+        for col, desc in declared.items():
+            if not isinstance(desc, dict):
+                continue
+            # Resolve the declared name to a physical column FIRST (the #340
+            # resolve_column rule, case-/whitespace-insensitive). A descriptor for
+            # the target is keyed by its CSV source name (e.g. "demand_mw"), which
+            # isn't a physical column (the schema keys the target as ``label``), so
+            # only THEN map it to ``label``. Resolving physically first means a
+            # real feature that merely case-matches the label's source name is
+            # routed to itself, not misrouted onto the target.
+            target = resolve_column(enriched.keys(), col)
+            if (
+                not target
+                and self.label_column
+                and resolve_column([col], self.label_column)
+            ):
+                target = _TARGET_COLUMN if _TARGET_COLUMN in enriched else None
+            if not target:
+                continue
+            if desc.get("unit") is not None:
+                enriched[target]["unit"] = desc["unit"]
+            if desc.get("ordinal") is not None:
+                enriched[target]["ordinal"] = desc["ordinal"]
+        return enriched
 
     def _count_records(self, source: Any) -> Optional[int]:
         """
@@ -846,6 +1099,13 @@ class BaseIngestor(ABC):
                         if text_profile:
                             self.file_options["text_profile"] = text_profile
 
+                    # Per-ingestor data-derived metadata computed during the run
+                    # (e.g. the CSV ingestor's numeric feature_stats under
+                    # attributes.feature_stats, #360). Merged onto the global-
+                    # metadata channel here, alongside text_profile, so it is
+                    # part of the payload the flip-then-send below ships.
+                    self._apply_run_metadata()
+
                     # Flip the run journal to REGISTERED (backend#1028 item 2)
                     # BEFORE the remote summary call, not after. The local flip
                     # and the backend registration can't be made atomic, so
@@ -875,9 +1135,16 @@ class BaseIngestor(ABC):
                         data_format=self.data_format,
                         data_intent=self.intent,
                         category=self.category,
-                        schema=schema_dict,
+                        schema=self._schema_payload(schema_dict),
                         samples=samples,
-                        meta_data=self.file_options,
+                        # The internal, label-stripped ``schema`` copy in
+                        # file_options is a validator artifact; the canonical
+                        # schema ships as the top-level ``schema`` arg above
+                        # (enriched, target-bearing). Drop the duplicate so a
+                        # single, unambiguous schema is on the wire (G8, #360).
+                        meta_data={
+                            k: v for k, v in self.file_options.items() if k != "schema"
+                        },
                     )
                     dataset_registered = True
                     stats["api_sent_records"] = stats["inserted_records"]

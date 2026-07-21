@@ -2,6 +2,8 @@
 Constants used throughout the application.
 """
 
+from typing import Optional
+
 # API Constants
 API_TIMEOUT = 1500
 
@@ -123,6 +125,31 @@ class DataFormat:
         Check if a given format is valid.
         """
         return format in cls.get_all_formats()
+
+
+# Canonical vision color modes for the combine-time attributes contract
+# (di#360). Deliberately RGB/grayscale only — the values the backend G4a
+# contract and the edge preprocessor both accept — and user-provided via
+# file_options for vision use cases (not auto-detected, which would surface PIL
+# modes like RGBA/CMYK the contract rejects). ``channels`` derives from the mode.
+COLOR_MODE_CHANNELS: dict = {"RGB": 3, "grayscale": 1}
+_COLOR_MODE_ALIASES: dict = {
+    "rgb": "RGB",
+    "grayscale": "grayscale",
+    "greyscale": "grayscale",
+    "gray": "grayscale",
+    "grey": "grayscale",
+    "l": "grayscale",
+}
+
+
+def canonical_color_mode(value) -> Optional[str]:
+    """Canonical ``"RGB"``/``"grayscale"`` for a user-supplied ``color_mode``,
+    or ``None`` when unrecognized. Accepts common spellings case-insensitively
+    (``rgb``, ``grayscale``/``greyscale``/``gray``/``grey``/``l``)."""
+    if not isinstance(value, str):
+        return None
+    return _COLOR_MODE_ALIASES.get(value.strip().lower())
 
 
 # ANSI color codes

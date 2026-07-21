@@ -252,6 +252,70 @@ def test_tabular_without_schema_rejected(validator):
         validator.validate(config)
 
 
+def test_columns_descriptors_accepted(validator):
+    # Optional per-column alignment descriptors (di#360): unit + ordinal.
+    config = _load_example("tabular_classification.yaml")
+    config["columns"] = {
+        "age": {"unit": "years"},
+        "size": {"ordinal": ["low", "med", "high"]},
+    }
+    validator.validate(config)  # must not raise
+
+
+def test_columns_unknown_descriptor_key_rejected(validator):
+    # additionalProperties:false on the descriptor catches typos like "units".
+    config = _load_example("tabular_classification.yaml")
+    config["columns"] = {"age": {"units": "years"}}
+    with pytest.raises(ValidationError):
+        validator.validate(config)
+
+
+def test_columns_ordinal_must_be_string_array(validator):
+    config = _load_example("tabular_classification.yaml")
+    config["columns"] = {"size": {"ordinal": [1, 2, 3]}}
+    with pytest.raises(ValidationError):
+        validator.validate(config)
+
+
+def test_top_level_alignment_facts_accepted(validator):
+    # Review (#361): conventions.resolve() bridges these alignment facts from the
+    # TOP LEVEL into file_options, but the schema is additionalProperties:false,
+    # so an ingest.yaml that set them failed validation before resolve() ran —
+    # making the documented top-level surface unusable. They must now validate.
+    img = _load_example("image_classification.yaml")
+    img["color_mode"] = "grayscale"
+    img["bit_depth"] = 8
+    validator.validate(img)
+
+    txt = _load_example("text_classification.yaml")
+    txt["language"] = "en"
+    txt["normalization"] = "lowercase"
+    validator.validate(txt)
+
+    surv = _load_example("time_to_event_prediction.yaml")
+    surv["time_unit"] = "days"
+    surv["event_indicator"] = {"event": 1, "censored": 0}
+    validator.validate(surv)
+
+    emb = _load_example("embeddings.yaml")
+    emb["positive_definition"] = "same author"
+    validator.validate(emb)
+
+
+def test_top_level_alignment_facts_reject_bad_values(validator):
+    # The declared constraints still catch bad values at config time, not after
+    # ingest: bit_depth is an {8,16} enum and event_indicator requires both keys.
+    img = _load_example("image_classification.yaml")
+    img["bit_depth"] = 12
+    with pytest.raises(ValidationError):
+        validator.validate(img)
+
+    surv = _load_example("time_to_event_prediction.yaml")
+    surv["event_indicator"] = {"event": 1}  # missing "censored"
+    with pytest.raises(ValidationError):
+        validator.validate(surv)
+
+
 def test_masked_language_modeling_with_label_rejected(validator):
     """Issue #213: self-supervised categories (MLM, …) MUST NOT carry a
     `label:` field. The CSV has no label column, and the framework registers

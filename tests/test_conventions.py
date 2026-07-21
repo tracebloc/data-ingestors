@@ -369,3 +369,101 @@ def test_json_source_dispatches_correctly():
     r = resolve(config)
     assert r.source_type == "json"
     assert r.source_path == "/data/events.json"
+
+
+# ---------------------------------------------------------------------------
+# Vision alignment facts: color_mode (RGB/grayscale) + bit_depth bridged into
+# file_options for combine-time alignment (di#360).
+# ---------------------------------------------------------------------------
+def test_color_mode_bridged_and_canonicalized():
+    config = _load("image_classification.yaml")
+    config["color_mode"] = "rgb"
+    r = resolve(config)
+    assert r.file_options["color_mode"] == "RGB"
+
+
+def test_bit_depth_bridged():
+    config = _load("image_classification.yaml")
+    config["bit_depth"] = 16
+    r = resolve(config)
+    assert r.file_options["bit_depth"] == 16
+
+
+def test_invalid_color_mode_raises():
+    config = _load("image_classification.yaml")
+    config["color_mode"] = "RGBA"
+    with pytest.raises(ValueError, match="color_mode"):
+        resolve(config)
+
+
+def test_invalid_bit_depth_raises():
+    config = _load("image_classification.yaml")
+    config["bit_depth"] = 12
+    with pytest.raises(ValueError, match="bit_depth"):
+        resolve(config)
+
+
+# ---------------------------------------------------------------------------
+# Uploader-declared per-column descriptors (di#360)
+# ---------------------------------------------------------------------------
+
+def test_columns_bridge_into_file_options():
+    """Top-level `columns` (unit/ordinal) is carried on file_options as
+    `column_descriptors`, where BaseIngestor merges it into the enriched
+    schema."""
+    config = _load("tabular_classification.yaml")
+    config["columns"] = {"age": {"unit": "years"}}
+    r = resolve(config)
+    assert r.file_options["column_descriptors"] == {"age": {"unit": "years"}}
+
+
+def test_no_columns_leaves_no_descriptors():
+    r = resolve(_load("tabular_classification.yaml"))
+    assert "column_descriptors" not in r.file_options
+
+
+# ---------------------------------------------------------------------------
+# Text + survival alignment facts bridged into file_options (di#360)
+# ---------------------------------------------------------------------------
+def test_language_and_normalization_bridged():
+    config = _load("text_classification.yaml")
+    config["language"] = "en"
+    config["normalization"] = "nfc"
+    r = resolve(config)
+    assert r.file_options["language"] == "en"
+    assert r.file_options["normalization"] == "nfc"
+
+
+def test_time_unit_bridged():
+    config = _load("time_to_event_prediction.yaml")
+    config["time_unit"] = "months"
+    r = resolve(config)
+    assert r.file_options["time_unit"] == "months"
+
+
+def test_invalid_time_unit_raises():
+    config = _load("time_to_event_prediction.yaml")
+    config["time_unit"] = "fortnights"
+    with pytest.raises(ValueError, match="time_unit"):
+        resolve(config)
+
+
+def test_event_indicator_bridged():
+    config = _load("time_to_event_prediction.yaml")
+    config["event_indicator"] = {"event": 1, "censored": 0}
+    r = resolve(config)
+    assert r.file_options["event_indicator"] == {"event": 1, "censored": 0}
+
+
+def test_invalid_event_indicator_raises():
+    config = _load("time_to_event_prediction.yaml")
+    config["event_indicator"] = {"event": 1}  # missing 'censored'
+    with pytest.raises(ValueError, match="event_indicator"):
+        resolve(config)
+
+
+def test_positive_definition_bridged():
+    config = _load("embeddings.yaml")
+    config["positive_definition"] = "same-question paraphrase"
+    r = resolve(config)
+    assert r.file_options["positive_definition"] == "same-question paraphrase"

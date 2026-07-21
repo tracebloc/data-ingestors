@@ -6,22 +6,38 @@ pandas-based reading and validation capabilities.
 
 from typing import Dict, Any, Generator, Optional, List
 import codecs
+from collections import Counter
 import csv as _csv
 import numpy as np
 import pandas as pd
 from ..utils import redaction
+from ..utils.columns import resolve_column
 import logging
 from pathlib import Path
 
 from .base import BaseIngestor
 from ..database import Database
 from ..api.client import APIClient
-from ..utils.constants import RESET, RED, YELLOW
+from ..cli.conventions import REGRESSION_CLASS_CATEGORIES
+from ..utils.constants import RESET, RED, YELLOW, TaskCategory
 from ..utils import label_policy as label_policy_module
 from ..utils import coercion
 from ..config import Config
 
 config = Config()
+
+# Above this many distinct values a VARCHAR column is treated as free text / an
+# id-like field rather than a categorical feature, and no union vocabulary is
+# emitted for it (di#360). A near-unique column's value-set is useless for
+# stable cross-client encoding and would bloat the payload / leak more values.
+_MAX_CATEGORICAL_CARDINALITY = 1000
+
+# The time-series forecasting timestamp column is the literal name "timestamp"
+# (TimeFormatValidator). A bounded, in-order sample is enough for
+# ``pd.infer_freq`` to derive the sampling cadence; retaining all rows would be
+# wasteful on large series.
+_TIMESTAMP_COLUMN = "timestamp"
+_MAX_TIMESTAMP_SAMPLE = 500
 
 
 def _bom_safe_encoding(encoding: Optional[str]) -> str:
@@ -94,6 +110,14 @@ logger.setLevel(config.LOG_LEVEL)
 
 
 __all__ = ["CSVIngestor"]
+
+# The framework's standard prediction-target column: the user's label_column is
+# mapped onto a fixed ``label`` column (database.create_table), and the enriched
+# schema flags THAT column role:"target". feature_stats keys the regression-class
+# target under the same name so the two channels agree on the target key — a
+# consumer can look up feature_stats[label] directly instead of guessing which
+# column is the target (see the tracebloc-engine TSF scaler_y seeding).
+_TARGET_COLUMN = "label"
 
 
 def _cast_datetime_strict(series: pd.Series, column: str, dtype: str) -> pd.Series:
@@ -206,6 +230,69 @@ class CSVIngestor(BaseIngestor):
         )
         self.csv_options = csv_options or {}
 
+        # Per numeric-feature-column sufficient statistics, accumulated in the
+        # cast pass (_validate_csv) and emitted on the global-metadata channel
+        # for federated/global normalization (data-ingestors#360, backend#1037).
+        # Additive aggregates only — no raw values leave the client.
+        self._feature_stats_acc: Dict[str, Dict[str, Any]] = {}
+        # Row-id and annotation columns are never features — a data_id would
+        # pollute normalization. The label column is excluded for CLASSIFICATION
+        # tasks (its value is a class, not a numeric feature), but INCLUDED for
+        # REGRESSION-CLASS tasks — forecasting / time-to-event / tabular
+        # regression — where the target is a numeric column the backend must
+        # normalize globally (data-ingestors#360, backend#1037). Only the
+        # additive aggregates (count/sum/sum_sq/min/max) ship, under the target's
+        # column name; raw per-row target values remain governed by
+        # label_policy="bucket". min/max do disclose the two extremes — an
+        # accepted trade for enabling federated target normalization, and the
+        # only scalers derivable from these stats are Standard/MinMax/MaxAbs
+        # (Robust/Quantile/Power need quantiles/λ — a separate follow-up).
+        excluded = {c for c in (self.unique_id_column, self.annotation_column) if c}
+        if self.label_column and self.category not in REGRESSION_CLASS_CATEGORIES:
+            excluded.add(self.label_column)
+        self._feature_stats_excluded = excluded
+        # Configured names resolved to their ACTUAL header spellings, pinned once
+        # the real columns are seen (_validate_csv). Resolving up front then
+        # excluding by EXACT membership handles drifted headers (#340) WITHOUT
+        # over-matching a distinct feature that merely shares a role name's
+        # case-variant. Populated lazily; None until the first chunk.
+        self._feature_stats_excluded_resolved = None
+
+        # Per categorical-feature-column union vocabulary, accumulated in the
+        # VARCHAR/CHAR/TEXT cast pass and emitted under the same
+        # ``attributes.feature_stats[col].categories`` key the backend folds into
+        # the merged dataset's union vocab (backend#1037) and the edge encodes
+        # against for a stable cross-client index (tracebloc-engine#455). The
+        # label column is always excluded — its value-set is a *class* set gated
+        # by ``check_same_labels``, not a feature vocab — as are the row-id and
+        # annotation columns. A column whose distinct count crosses
+        # ``_MAX_CATEGORICAL_CARDINALITY`` is dropped (free text / id, not a
+        # categorical feature). Emitting the value-set discloses category
+        # presence — the same accepted trade as feature_stats min/max.
+        # Per-value OCCURRENCE COUNTS (not just presence) so a min-count
+        # threshold can suppress rare, re-identifying values at finalize
+        # (CATEGORICAL_MIN_COUNT).
+        self._categorical_acc: Dict[str, Counter] = {}
+        self._categorical_over_cap: set = set()
+        self._categorical_excluded = {
+            c
+            for c in (
+                self.unique_id_column,
+                self.annotation_column,
+                self.label_column,
+            )
+            if c
+        }
+        # Same resolve-once-then-exact-match treatment as the numeric exclusion.
+        self._categorical_excluded_resolved = None
+
+        # Temporal facts for time-series forecasting (di#360): the timestamp
+        # column's timezone (tz-aware iff the parsed dtype carries a tz) and a
+        # bounded in-order sample used to infer ``sampling_frequency`` via
+        # ``pd.infer_freq``. Accumulated in the TIMESTAMP cast branch.
+        self._timestamp_sample: List[Any] = []
+        self._timestamp_tz: Optional[str] = None
+
     def _validate_csv(self, df: pd.DataFrame) -> None:
         """Validate CSV data against schema using pandas functionality.
 
@@ -221,6 +308,24 @@ class CSVIngestor(BaseIngestor):
         """
         # Only validate columns that exist in both schema and CSV
         common_columns = set(self.schema.keys()) & set(df.columns)
+
+        # Pin the feature_stats exclusion sets to the ACTUAL header spellings once
+        # the real columns are known (#340): resolve each configured name to its
+        # column, then exclude by exact membership. Columns are identical across
+        # chunks, so resolve only on the first chunk. This excludes a case-/
+        # whitespace-drifted label/id/annotation header while NOT dropping a
+        # distinct feature that only case-matches a role name.
+        if self._feature_stats_excluded_resolved is None:
+            self._feature_stats_excluded_resolved = {
+                resolved
+                for name in self._feature_stats_excluded
+                if (resolved := resolve_column(df.columns, name))
+            }
+            self._categorical_excluded_resolved = {
+                resolved
+                for name in self._categorical_excluded
+                if (resolved := resolve_column(df.columns, name))
+            }
 
         # Log which schema columns are not in the CSV (for information only)
         missing_columns = set(self.schema.keys()) - set(df.columns)
@@ -292,6 +397,7 @@ class CSVIngestor(BaseIngestor):
                         )
                     _raise_on_overflow(column, df[column], converted, dtype)
                     df[column] = converted.astype("Int64")
+                    self._accumulate_feature_stats(column, df[column])
                 elif any(t in dtype.upper() for t in ("FLOAT", "DOUBLE", "DECIMAL", "NUMERIC")):
                     # float64 — NOT downcast='float' (float32), which corrupted
                     # precision: 3.14 -> '3.140000104904175'. Also covers DOUBLE/
@@ -320,6 +426,7 @@ class CSVIngestor(BaseIngestor):
                     # the object dtype that made this throw on the raw column.
                     _raise_on_overflow(column, df[column], converted, dtype)
                     df[column] = converted
+                    self._accumulate_feature_stats(column, df[column])
                 elif "BOOL" in dtype.upper():
                     # Map the textual/numeric boolean forms DataValidator accepts
                     # (true/false, yes/no, t/f, y/n, 1/0) to a nullable boolean
@@ -344,6 +451,8 @@ class CSVIngestor(BaseIngestor):
                     # substrings "DATE" and "TIME" both appear in "DATETIME"
                     # (and "TIME" in "TIMESTAMP").
                     df[column] = _cast_datetime_strict(df[column], column, dtype)
+                    if column == _TIMESTAMP_COLUMN:
+                        self._accumulate_temporal(df[column])
                 elif "DATE" in dtype.upper():
                     # DATE only — emit a plain date so the value doesn't gain a
                     # spurious time ('2026-01-02' was becoming '2026-01-02 00:00:00').
@@ -368,6 +477,7 @@ class CSVIngestor(BaseIngestor):
                             df[column].notna(), None
                         )
                     )
+                    self._accumulate_categorical(column, df[column])
             except Exception as e:
                 # Our own ValueErrors above are already content-safe; any
                 # OTHER exception may embed cell values (pandas/numpy
@@ -383,6 +493,225 @@ class CSVIngestor(BaseIngestor):
                     f"{type(e).__name__} (message suppressed — it can embed "
                     f"cell values, #226){RESET}"
                 ) from None
+
+    def _accumulate_feature_stats(self, column: str, series: pd.Series) -> None:
+        """Fold one chunk's numeric column into the running sufficient stats.
+
+        Called from the INT / FLOAT cast branches of ``_validate_csv`` with the
+        already-cast column — so there is no second read of the data. Accumulates
+        the five additive aggregates the backend folds into global mean/std/min/
+        max (backend#1037): ``count``, ``sum`` (Σx), ``sum_sq`` (Σx²), ``min``,
+        ``max``. Missing cells (``pd.NA`` / ``NaN``) are dropped, so ``count`` is
+        the non-null count and the aggregates ignore nulls.
+
+        Non-feature columns (label/target, row-id, annotation) are skipped — see
+        ``_feature_stats_excluded``. An all-null column contributes nothing and
+        never appears in the emitted stats (min/max would be undefined).
+        """
+        # Exclude by exact membership against the resolved exclusion set (the
+        # configured label/id/annotation names pinned to their real headers in
+        # _validate_csv). This drops a case-/whitespace-drifted role header but
+        # keeps a distinct feature that merely shares a role name's case-variant.
+        if column in (self._feature_stats_excluded_resolved or ()):
+            return
+        vals = series.dropna()
+        if vals.empty:
+            return
+        # Square in float64: an ``Int64`` column squared stays Int64 and a large
+        # value would overflow; the aggregates are float sufficient statistics.
+        fvals = vals.astype("float64")
+        chunk_count = int(len(vals))
+        chunk_sum = float(fvals.sum())
+        chunk_sum_sq = float((fvals**2).sum())
+        # ``.item()`` unwraps the numpy scalar to a native Python int/float, so an
+        # INT column reports integer min/max (18, not 18.0) while a float column
+        # stays float — and the emitted JSON matches the column's real type.
+        chunk_min = vals.min().item()
+        chunk_max = vals.max().item()
+
+        acc = self._feature_stats_acc.get(column)
+        if acc is None:
+            self._feature_stats_acc[column] = {
+                "count": chunk_count,
+                "sum": chunk_sum,
+                "sum_sq": chunk_sum_sq,
+                "min": chunk_min,
+                "max": chunk_max,
+            }
+        else:
+            acc["count"] += chunk_count
+            acc["sum"] += chunk_sum
+            acc["sum_sq"] += chunk_sum_sq
+            acc["min"] = min(acc["min"], chunk_min)
+            acc["max"] = max(acc["max"], chunk_max)
+
+    def feature_stats(self) -> Dict[str, Dict[str, Any]]:
+        """The finalized per-numeric-column sufficient statistics for this run.
+
+        Empty when the dataset has no numeric feature columns (e.g. an image
+        manifest, or a table of only string/date columns) — the caller then
+        omits the field entirely.
+
+        For regression-class tasks the target's stats are re-keyed from its
+        original CSV column name to the standardized ``label`` name, so the key
+        matches the enriched schema's ``role: "target"`` column and the target
+        stored in the DB ``label`` column. Feature columns keep their own names.
+        """
+        stats = {col: dict(s) for col, s in self._feature_stats_acc.items()}
+        # Resolve the configured target against the accumulator keys (actual CSV
+        # headers) case-/whitespace-insensitively: the keys use the raw header
+        # spelling, which can differ from label_column by case/whitespace, so an
+        # exact match would leave the target under the CSV name and break
+        # alignment with the schema's role:"target" and backend feature_stats[label].
+        resolved_target = (
+            resolve_column(stats.keys(), self.label_column)
+            if self.label_column
+            else None
+        )
+        if (
+            resolved_target
+            and self.category in REGRESSION_CLASS_CATEGORIES
+            and resolved_target != _TARGET_COLUMN
+        ):
+            # pop→assign standardizes the target's key to "label". "label" is the
+            # framework's reserved target key — database.create_table maps the
+            # target onto the standard `label` column and the enriched schema
+            # flags THAT column role:"target", so downstream (e.g. the engine's
+            # scaler_y seeding) reads feature_stats["label"] AS the target. If a
+            # numeric feature is also literally named "label" (allowed — see the
+            # reserved-column exclusion in create_table), it already occupies the
+            # key; the target must still own it, but drop the feature's stats
+            # loudly rather than clobbering them silently (bugbot medium).
+            if _TARGET_COLUMN in stats:
+                logger.warning(
+                    "feature_stats: regression target %r is re-keyed to the "
+                    "reserved %r key, which is also a numeric feature column; "
+                    "the target's statistics take that key and the feature's are "
+                    "dropped. Rename the '%s' feature column to avoid the clash.",
+                    resolved_target,
+                    _TARGET_COLUMN,
+                    _TARGET_COLUMN,
+                )
+            stats[_TARGET_COLUMN] = stats.pop(resolved_target)
+        return stats
+
+    def _accumulate_categorical(self, column: str, series: pd.Series) -> None:
+        """Fold one chunk's distinct categorical values into the running vocab.
+
+        Called from the VARCHAR/CHAR/TEXT cast branch of ``_validate_csv`` with
+        the already-cast column, so there is no second read. Non-null values
+        accumulate into a per-column ``Counter`` (occurrence counts, so a
+        min-count threshold can drop rare values at finalize); once a column's
+        distinct count crosses ``_MAX_CATEGORICAL_CARDINALITY`` it is dropped and
+        never re-considered (free text / id, not a categorical feature). Excluded
+        columns (label, row-id, annotation) are skipped.
+
+        Exclusion is by exact membership against the resolved exclusion set (the
+        configured names pinned to their real headers in ``_validate_csv``, #340),
+        so a header spelled ``Label`` / ``" label "`` is still excluded for a
+        config that says ``label`` — while a distinct feature that only case-
+        matches a role name is kept, not dropped.
+        """
+        if (
+            column in self._categorical_over_cap
+            or column in (self._categorical_excluded_resolved or ())
+        ):
+            return
+        vals = series.dropna()
+        if vals.empty:
+            return
+        acc = self._categorical_acc.setdefault(column, Counter())
+        # Vectorised per-chunk counts; Counter.update ADDS them across chunks.
+        acc.update(vals.astype(str).value_counts().to_dict())
+        if len(acc) > _MAX_CATEGORICAL_CARDINALITY:
+            self._categorical_over_cap.add(column)
+            self._categorical_acc.pop(column, None)
+
+    def categorical_vocab(self) -> Dict[str, List[str]]:
+        """The finalized per-categorical-column union vocabulary (sorted).
+
+        Values seen fewer than ``CATEGORICAL_MIN_COUNT`` times are suppressed —
+        a re-identification guard for rare categories (default 1 ⇒ keep all; see
+        the config field). A column left with no values is omitted. Empty when
+        the dataset has no categorical feature columns within the cardinality
+        cap. Sorted so the emitted order is deterministic and the backend's union
+        / the edge's label index are stable.
+        """
+        min_count = self.database.config.CATEGORICAL_MIN_COUNT
+        vocab: Dict[str, List[str]] = {}
+        for col, counts in self._categorical_acc.items():
+            kept = sorted(v for v, n in counts.items() if n >= min_count)
+            if kept:
+                vocab[col] = kept
+        return vocab
+
+    def _accumulate_temporal(self, series: pd.Series) -> None:
+        """Fold one chunk of the (already-parsed) timestamp column into the
+        temporal accumulators: capture the timezone and grow a bounded in-order
+        sample for ``pd.infer_freq``. Rows arrive in time order
+        (``TimeOrderedValidator`` gates it), so appending across chunks preserves
+        the cadence.
+        """
+        s = series.dropna()
+        if s.empty:
+            return
+        tz = getattr(s.dt, "tz", None)
+        if tz is not None:
+            self._timestamp_tz = str(tz)
+        if len(self._timestamp_sample) < _MAX_TIMESTAMP_SAMPLE:
+            need = _MAX_TIMESTAMP_SAMPLE - len(self._timestamp_sample)
+            self._timestamp_sample.extend(s.iloc[:need].tolist())
+
+    def _temporal_attributes(self) -> Dict[str, Any]:
+        """Reconcilable temporal facts for time-series forecasting (di#360):
+        ``timezone`` (when the timestamps are tz-aware) and ``sampling_frequency``
+        (a pandas offset alias, only when a regular cadence is inferable). Both
+        are omitted when unavailable — forward-compatible (absent → WARN)."""
+        if self.category != TaskCategory.TIME_SERIES_FORECASTING:
+            return {}
+        attrs: Dict[str, Any] = {}
+        if self._timestamp_tz is not None:
+            attrs["timezone"] = self._timestamp_tz
+        if len(self._timestamp_sample) >= 3:
+            try:
+                freq = pd.infer_freq(pd.DatetimeIndex(self._timestamp_sample))
+            except (ValueError, TypeError):
+                freq = None
+            if freq:
+                attrs["sampling_frequency"] = freq
+        return attrs
+
+    def _collect_run_metadata(self) -> Dict[str, Any]:
+        """Contribute this run's derived facts under the shared ``attributes``
+        namespace on the global-metadata channel (#360).
+
+        Per backend#1037's final ``dataset_meta`` shape, per-column extras live
+        under ``attributes.feature_stats`` (``schema`` stays a plain
+        ``{column: dtype}`` map): numeric columns carry the folded sufficient
+        stats ``{count, sum, sum_sq, min, max}``; categorical columns carry the
+        union vocabulary ``{categories: [...]}`` — a column is one or the other,
+        so they never collide. Time-series runs also add the reconcilable
+        ``timezone`` / ``sampling_frequency`` scalar facts. The base's
+        data-format scalar attributes (image ``resolution``, text ``encoding``)
+        are folded in via ``super()`` so a CSV manifest for an image/text dataset
+        still emits them. Omitted entirely when there is nothing to contribute so
+        the payload stays clean.
+        """
+        # Start from the base's data-format scalar attributes (image resolution,
+        # text encoding) so a CSV manifest for an image/text dataset still emits
+        # them, then add the tabular/temporal facts this ingestor derives.
+        meta = super()._collect_run_metadata()
+        attributes = meta.get("attributes", {})
+
+        feature_stats = self.feature_stats()
+        for column, categories in self.categorical_vocab().items():
+            feature_stats[column] = {"categories": categories}
+        if feature_stats:
+            attributes["feature_stats"] = feature_stats
+
+        attributes.update(self._temporal_attributes())
+
+        return {"attributes": attributes} if attributes else {}
 
     def read_data(self, file_path: str) -> Generator[Dict[str, Any], None, None]:
         """Read and validate CSV file using pandas optimizations.
