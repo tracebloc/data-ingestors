@@ -17,7 +17,6 @@ from tracebloc_ingestor.ingestors import base as base_mod
 from tracebloc_ingestor.ingestors import preflight
 from tracebloc_ingestor.ingestors.base import BaseIngestor, IngestionSummary
 from tracebloc_ingestor.validators.base import ValidationResult
-from tracebloc_ingestor.utils.constants import TaskCategory
 
 
 class FakeIngestor(BaseIngestor):
@@ -313,96 +312,6 @@ def test_ingest_label_resolves_on_later_record_for_sparse_json():
     _table, batch = ing.database.insert_batch.call_args.args
     assert [r.get("label") for r in batch] == [None, "dog"], (
         f"expected [None, 'dog']; got {[r.get('label') for r in batch]}"
-    )
-
-
-# ---------------------------------------------------------------------------
-# _resolve_filename_key (#372)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "record,expected",
-    [
-        ({"a": "1", "Filename": "f1"}, "f1"),      # case mismatch -> canonical
-        ({"a": "1", "FileName": "f1"}, "f1"),      # mixed case -> canonical
-        ({"a": "1", " filename ": "f1"}, "f1"),    # whitespace -> canonical
-        ({"a": "1", "filename": "f1"}, "f1"),       # exact -> unchanged
-    ],
-)
-def test_resolve_filename_key_remaps_to_canonical(record, expected):
-    """#372: a file-pointer header that only differs in case/whitespace is
-    remapped to the literal ``filename`` key the transfer read path uses."""
-    ing = make_ingestor(category=TaskCategory.IMAGE_CLASSIFICATION)
-    ing._resolve_filename_key(record)
-    assert record.get("filename") == expected
-
-
-def test_resolve_filename_key_noop_when_absent():
-    """An ``image_id``-only manifest is a genuinely different column, not a case
-    variant (cli#371 territory) — leave it untouched so it still fails at
-    transfer as the contract intends, rather than silently aliasing it."""
-    rec = {"a": "1", "image_id": "f1"}
-    ing = make_ingestor(category=TaskCategory.IMAGE_CLASSIFICATION)
-    ing._resolve_filename_key(rec)
-    assert "filename" not in rec
-
-
-def test_resolve_filename_key_noop_for_non_file_bearing():
-    """A tabular dataset may legitimately carry an unrelated ``FileName`` data
-    column that must NOT be hijacked as a file pointer."""
-    rec = {"a": "1", "FileName": "not-a-file-pointer"}
-    ing = make_ingestor(category=None)
-    ing._resolve_filename_key(rec)
-    assert "filename" not in rec
-
-
-def test_resolve_filename_key_resolves_on_later_record_for_sparse_json():
-    """Mirrors the #340 label edge: a leading (file-column-less) JSON object
-    must not stop resolution — the source column is resolved on the first
-    record that carries it and then applied to every subsequent record."""
-    ing = make_ingestor(category=TaskCategory.IMAGE_CLASSIFICATION)
-    r1 = {"a": "1"}                       # no file column at all
-    r2 = {"a": "2", "Filename": "f2"}     # mis-cased file column
-    r3 = {"a": "3", "Filename": "f3"}
-    ing._resolve_filename_key(r1)
-    ing._resolve_filename_key(r2)
-    ing._resolve_filename_key(r3)
-    assert "filename" not in r1
-    assert r2["filename"] == "f2"
-    assert r3["filename"] == "f3"
-    assert ing._filename_source_key == "Filename"
-
-
-def test_ingest_filename_case_mismatch_reaches_transfer():
-    """#372 end-to-end: an image manifest with a ``Filename`` header passes the
-    case-insensitive preflight; the ingest loop must remap it to the canonical
-    ``filename`` key or every record reaches file transfer with filename=None
-    and fails after upload ("No filename found in record", exit 9)."""
-    records = [
-        {"a": "1", "Filename": "img1", "label": "cat"},
-        {"a": "2", "Filename": "img2", "label": "dog"},
-    ]
-    ing = make_ingestor(
-        records=records,
-        category=TaskCategory.IMAGE_CLASSIFICATION,
-        label_column="label",
-        schema={"a": "INT", "label": "VARCHAR(10)"},
-    )
-    with patch.object(base_mod, "Session") as Sess, patch.object(
-        ing, "validate_data", return_value=True
-    ), patch.object(
-        base_mod, "map_file_transfer", side_effect=lambda cat, rec, *a, **k: rec
-    ) as mft:
-        Sess.return_value.__enter__.return_value = MagicMock()
-        ing.ingest("src", batch_size=10)
-    # Every record the transfer received carries a non-None canonical filename.
-    transferred = [c.kwargs.get("source_record") for c in mft.call_args_list]
-    assert [r.get("filename") for r in transferred] == ["img1", "img2"]
-    # And the cleaned records that reach the DB batch carry it too.
-    _table, batch = ing.database.insert_batch.call_args.args
-    assert [r.get("filename") for r in batch] == ["img1", "img2"], (
-        f"filenames nulled by case mismatch: {[r.get('filename') for r in batch]}"
     )
 
 

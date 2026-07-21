@@ -18,6 +18,13 @@ Two distinct ways a CSV manifest yields zero records, both caught here:
    referenced filenames against what's actually staged; the per-directory
    ``FileTypeValidator`` only checks the *extension* of files that ARE present,
    not whether the CSV's filenames resolve to any of them.
+3. **No EXACT ``filename`` column** (file-bearing categories, #372) — the file
+   column is misnamed (``image_id``) or only a case variant (``Filename``). The
+   cluster's transfer read is a case-sensitive ``record.get("filename")``, so it
+   resolves to no key and every row is dropped cluster-side with "No filename
+   found in record" (exit 9) AFTER the full upload. Rejected up front here so
+   the ingestor's own preflight agrees with its transfer read for every client;
+   mirrors the CLI's ``CheckImageFilenameColumn`` (cli#373).
 """
 
 import logging
@@ -80,8 +87,17 @@ class IngestableRecordsValidator(BaseValidator):
             if not row_result.is_valid:
                 return row_result
 
-            # 2) File-bearing: every referenced file missing -> zero records.
+            # 2) File-bearing: enforce the filename-column contract, then the
+            #    all-referenced-files-missing check.
             if self.file_subdir:
+                # 2a) No EXACT lowercase `filename` column -> doomed at the
+                #     cluster's case-sensitive transfer read; reject up front
+                #     (#372) rather than let it fail late after upload.
+                col_result = self._check_filename_column(path)
+                if not col_result.is_valid:
+                    return col_result
+                # 2b) Column present but every referenced file missing -> zero
+                #     ingestable records.
                 return self._check_referenced_files(path)
 
             return self._create_result(is_valid=True, metadata={"checked": True})
@@ -128,19 +144,15 @@ class IngestableRecordsValidator(BaseValidator):
         Early-exits on the first file that resolves, so a healthy dataset costs
         one ``stat``; only an all-missing dataset walks the whole column — which
         is exactly the zero-records case we want to surface up front.
+
+        Runs only after the manifest is confirmed to carry an EXACT lowercase
+        filename column (:meth:`_check_filename_column`), so ``filename_col`` is
+        always present here.
         """
         src_root = (self._config or config).SRC_PATH
         subdir = os.path.join(src_root, self.file_subdir)
 
-        filename_col = self._resolve_filename_column(path)
-        if filename_col is None:
-            # No filename column to cross-check — not this validator's error to
-            # raise (the read/transfer path surfaces a missing column). Pass.
-            return self._create_result(
-                is_valid=True,
-                metadata={"checked": False, "reason": "no_filename_column"},
-            )
-
+        filename_col = self._exact_filename_column(self._read_header(path))
         checked = 0
         try:
             chunks = pd.read_csv(
@@ -196,10 +208,77 @@ class IngestableRecordsValidator(BaseValidator):
             metadata={"referenced_files_checked": checked, "found_at_least_one": False},
         )
 
-    def _resolve_filename_column(self, path: Path) -> Optional[str]:
-        """Case-insensitively resolve the filename column from the CSV header."""
+    def _read_header(self, path: Path) -> list:
+        """The CSV header as a plain list of raw column names; ``[]`` if the
+        header can't be read (best-effort probe)."""
         try:
-            header = pd.read_csv(path, nrows=0, encoding="utf-8").columns
+            return list(pd.read_csv(path, nrows=0, encoding="utf-8").columns)
         except Exception:  # noqa: BLE001 — header probe is best-effort
-            return None
-        return self._match_column(header, self.filename_column)
+            return []
+
+    def _exact_filename_column(self, header: list) -> Optional[str]:
+        """The header naming each file, matched EXACTLY — whitespace-trimmed but
+        case-SENSITIVE (#372).
+
+        The cluster reads each file with a case-sensitive
+        ``record.get("filename")`` at transfer, over a record whose keys are the
+        CSV header after pandas strips surrounding whitespace
+        (``chunk.columns.str.strip()``). So ``filename`` and ``" filename "``
+        resolve, but ``Filename`` / ``FILENAME`` do NOT — matching what the
+        transfer will actually find, and the CLI's ``imageFileColIndex``
+        (cli#373). Returns the raw header (un-stripped) so callers can index the
+        frame with it; ``None`` when no exact column is present.
+        """
+        for col in header:
+            if str(col).strip() == self.filename_column:
+                return col
+        return None
+
+    def _check_filename_column(self, path: Path) -> ValidationResult:
+        """Reject a file-bearing manifest with no EXACT lowercase filename
+        column, before any upload (#372).
+
+        File-bearing tasks match each row to its file by the ``filename`` column,
+        and the cluster's transfer read is case-sensitive — a wrong name
+        (``image_id``) or a case variant (``Filename``) resolves to no key, so
+        every row is dropped cluster-side with "No filename found in record"
+        (exit 9) AFTER the full upload. Previously this validator matched the
+        column case-insensitively and DEFERRED when it was absent ("not this
+        validator's error to raise"), which let both cases pass preflight and
+        fail late. Rejecting here — fail-fast, in the dry-run — makes the
+        ingestor's own preflight agree with its transfer read for every client,
+        and mirrors the CLI's up-front ``CheckImageFilenameColumn`` (cli#373).
+        """
+        header = self._read_header(path)
+        if self._exact_filename_column(header) is not None:
+            return self._create_result(is_valid=True, metadata={"checked": True})
+
+        cols = ", ".join(str(c) for c in header) or "<none>"
+        # A case variant (``Filename``) still resolves case-insensitively — give
+        # a targeted "rename to lowercase" hint rather than "no column at all".
+        variant = self._match_column(header, self.filename_column)
+        if variant is not None:
+            variant = str(variant).strip()
+            return self._create_result(
+                is_valid=False,
+                errors=[
+                    f"Column {variant!r} must be lowercase "
+                    f"'{self.filename_column}': the cluster reads each file with "
+                    f"a case-sensitive record.get('{self.filename_column}') at "
+                    f"transfer, so {variant!r} would upload, then fail with 'No "
+                    f"filename found in record'. Rename it to "
+                    f"'{self.filename_column}' and re-run."
+                ],
+                metadata={"reason": "filename_column_case_variant"},
+            )
+        return self._create_result(
+            is_valid=False,
+            errors=[
+                f"No '{self.filename_column}' column in the manifest (columns: "
+                f"{cols}) — file-bearing tasks match each row to its file by "
+                f"that column, and the cluster drops every row without it ('No "
+                f"filename found in record'). Rename your file column to "
+                f"'{self.filename_column}' and re-run."
+            ],
+            metadata={"reason": "filename_column_missing"},
+        )

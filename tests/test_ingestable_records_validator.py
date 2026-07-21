@@ -82,15 +82,19 @@ def test_filename_with_extension_resolves_without_double_suffix(
     assert result.is_valid, result.errors
 
 
-def test_filename_column_is_case_insensitive(clean_env, tmp_path, make_csv):
+def test_filename_column_case_variant_is_rejected(clean_env, tmp_path, make_csv):
+    # #372: the cluster's transfer read is case-sensitive record.get("filename"),
+    # so a `FileName` case variant is doomed after upload. It must be rejected up
+    # front with a targeted "rename to lowercase" hint (NOT accepted as before).
     src = tmp_path / "src"
     (src / "sequences").mkdir(parents=True)
     clean_env.setenv("SRC_PATH", str(src))
     path = make_csv([{"FileName": "doc1"}])  # header cased differently
     result = IngestableRecordsValidator(file_subdir="sequences").validate(str(path))
-    # column resolves, file is missing -> rejected (not a no-op)
     assert not result.is_valid
-    assert "No referenced data files" in result.errors[0]
+    assert "must be lowercase 'filename'" in result.errors[0]
+    assert "'FileName'" in result.errors[0]
+    assert result.metadata["reason"] == "filename_column_case_variant"
 
 
 def test_tabular_style_no_subdir_only_checks_rows(make_csv):
@@ -112,16 +116,50 @@ def test_valid_dataset_with_files_passes(clean_env, tmp_path, make_csv):
     assert result.is_valid, result.errors
 
 
-def test_file_bearing_but_no_filename_column_is_noop(clean_env, tmp_path, make_csv):
-    # Rows present, file_subdir set, but the CSV has no filename column to
-    # cross-check -> not this validator's error to raise (pass through).
+def test_file_bearing_but_no_filename_column_is_rejected(clean_env, tmp_path, make_csv):
+    # #372: rows present, file_subdir set, but the CSV names its file column
+    # something other than `filename` (e.g. image_id / text_col). The cluster
+    # can't resolve it and drops every row after upload, so reject up front
+    # instead of deferring (the pre-#372 no-op).
     src = tmp_path / "src"
     (src / "sequences").mkdir(parents=True)
     clean_env.setenv("SRC_PATH", str(src))
     path = make_csv([{"text_col": "hi"}, {"text_col": "yo"}])
     result = IngestableRecordsValidator(file_subdir="sequences").validate(str(path))
-    assert result.is_valid
-    assert result.metadata["reason"] == "no_filename_column"
+    assert not result.is_valid
+    assert "No 'filename' column" in result.errors[0]
+    assert "text_col" in result.errors[0]  # lists the actual columns
+    assert result.metadata["reason"] == "filename_column_missing"
+
+
+def test_image_id_filename_column_is_rejected(clean_env, tmp_path, make_csv):
+    # #371/#372 image case: labels.csv uses `image_id` instead of `filename`.
+    # Doomed at the cluster's case-sensitive transfer read -> reject up front.
+    src = tmp_path / "src"
+    (src / "images").mkdir(parents=True)
+    clean_env.setenv("SRC_PATH", str(src))
+    path = make_csv([{"image_id": "001", "label": "cat"}])
+    result = IngestableRecordsValidator(
+        file_subdir="images", extension=".jpg"
+    ).validate(str(path))
+    assert not result.is_valid
+    assert "No 'filename' column" in result.errors[0]
+    assert result.metadata["reason"] == "filename_column_missing"
+
+
+def test_exact_filename_column_with_whitespace_is_accepted(
+    clean_env, tmp_path, make_csv
+):
+    # `" filename "` resolves at transfer (pandas strips header whitespace), so
+    # it must pass the column check too — only case, not whitespace, is strict.
+    src = tmp_path / "src"
+    seq = src / "sequences"
+    seq.mkdir(parents=True)
+    _write(seq / "doc1.txt", "x")
+    clean_env.setenv("SRC_PATH", str(src))
+    path = make_csv([{" filename ": "doc1"}])
+    result = IngestableRecordsValidator(file_subdir="sequences").validate(str(path))
+    assert result.is_valid, result.errors
 
 
 def test_absolute_or_traversal_path_is_not_counted_as_found(
