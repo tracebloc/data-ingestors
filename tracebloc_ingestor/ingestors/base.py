@@ -82,6 +82,15 @@ _TEXT_CATEGORIES = _NLP_CATEGORIES - {TaskCategory.EMBEDDINGS}
 # Survival (time-to-event) duration units the combine-time contract accepts.
 _TIME_UNITS = ("days", "weeks", "months", "years")
 
+# file_options keys that are ingestor-internal bridges, never wire payload:
+# the label-stripped ``schema`` copy is a validator artifact (the canonical
+# schema ships as the top-level ``schema`` arg), and ``column_descriptors``
+# only carries the uploader's ``unit``/``ordinal`` declarations from config
+# resolution to ``_schema_payload``, which merges them onto the enriched
+# schema's columns — the raw map, keyed by CSV source names, duplicates
+# those facts under names the backend can't correlate (bugbot on #383).
+_META_DATA_INTERNAL_KEYS = frozenset({"schema", "column_descriptors"})
+
 
 def _valid_event_indicator(v: Any) -> bool:
     """A survival ``event_indicator`` is ``{event: int, censored: int}`` — the
@@ -782,6 +791,19 @@ class BaseIngestor(ABC):
                 enriched[target]["ordinal"] = desc["ordinal"]
         return enriched
 
+    def _meta_data_payload(self) -> Dict[str, Any]:
+        """The ``meta_data`` value shipped on the global-metadata channel:
+        ``file_options`` minus the ingestor-internal bridges
+        (``_META_DATA_INTERNAL_KEYS``), so a single, unambiguous copy of the
+        schema and the per-column descriptors is on the wire (G8, #360).
+        Split out from ``_ingest`` so the filter is unit-testable without a
+        full ingest run."""
+        return {
+            k: v
+            for k, v in self.file_options.items()
+            if k not in _META_DATA_INTERNAL_KEYS
+        }
+
     def _count_records(self, source: Any) -> Optional[int]:
         """
         Try to count total records in the source for progress tracking.
@@ -1200,14 +1222,7 @@ class BaseIngestor(ABC):
                         category=self.category,
                         schema=self._schema_payload(schema_dict),
                         samples=samples,
-                        # The internal, label-stripped ``schema`` copy in
-                        # file_options is a validator artifact; the canonical
-                        # schema ships as the top-level ``schema`` arg above
-                        # (enriched, target-bearing). Drop the duplicate so a
-                        # single, unambiguous schema is on the wire (G8, #360).
-                        meta_data={
-                            k: v for k, v in self.file_options.items() if k != "schema"
-                        },
+                        meta_data=self._meta_data_payload(),
                     )
                     dataset_registered = True
                     stats["api_sent_records"] = stats["inserted_records"]

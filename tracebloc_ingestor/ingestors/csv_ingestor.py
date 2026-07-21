@@ -19,6 +19,7 @@ from .base import BaseIngestor
 from ..database import Database
 from ..api.client import APIClient
 from ..cli.conventions import REGRESSION_CLASS_CATEGORIES
+from ..modalities.registry import TABULAR_FAMILY_CATEGORIES
 from ..utils.constants import RESET, RED, YELLOW, TaskCategory
 from ..utils import label_policy as label_policy_module
 from ..utils import coercion
@@ -229,6 +230,14 @@ class CSVIngestor(BaseIngestor):
             data_id_strategy=data_id_strategy,
         )
         self.csv_options = csv_options or {}
+
+        # Alignment stats treat the CSV's cell values as FEATURES, which is
+        # only true when the rows are the data (ModalitySpec's
+        # is_tabular_family). For manifest-style categories (image/objdet/
+        # keypoint/text pointer files) the cells are bookkeeping — and a TEXT
+        # column's vocab would ship raw cell content — so both accumulators
+        # stay off entirely (bugbot medium on #383).
+        self._emit_alignment_stats = category in TABULAR_FAMILY_CATEGORIES
 
         # Per numeric-feature-column sufficient statistics, accumulated in the
         # cast pass (_validate_csv) and emitted on the global-metadata channel
@@ -507,7 +516,11 @@ class CSVIngestor(BaseIngestor):
         Non-feature columns (label/target, row-id, annotation) are skipped — see
         ``_feature_stats_excluded``. An all-null column contributes nothing and
         never appears in the emitted stats (min/max would be undefined).
+        Manifest-style categories accumulate nothing at all — see
+        ``_emit_alignment_stats``.
         """
+        if not self._emit_alignment_stats:
+            return
         # Exclude by exact membership against the resolved exclusion set (the
         # configured label/id/annotation names pinned to their real headers in
         # _validate_csv). This drops a case-/whitespace-drifted role header but
@@ -610,8 +623,11 @@ class CSVIngestor(BaseIngestor):
         configured names pinned to their real headers in ``_validate_csv``, #340),
         so a header spelled ``Label`` / ``" label "`` is still excluded for a
         config that says ``label`` — while a distinct feature that only case-
-        matches a role name is kept, not dropped.
+        matches a role name is kept, not dropped. Manifest-style categories
+        accumulate nothing at all — see ``_emit_alignment_stats``.
         """
+        if not self._emit_alignment_stats:
+            return
         if (
             column in self._categorical_over_cap
             or column in (self._categorical_excluded_resolved or ())
