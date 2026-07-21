@@ -163,10 +163,16 @@ def _find_src(
     """
     cfg = cfg or config
     if force_extension:
-        # Mirror _has_extension's rsplit so the stem matches Path.stem exactly
-        # (what FilePairingValidator pairs on). A value with no recognised
-        # extension — a bare stem, or an internal dot like ``image.001`` — is
-        # kept whole so we never strip a non-extension segment.
+        # Strip only a RECOGNISED trailing extension (the same _has_extension
+        # gate the image lookup uses). For the jpg/jpeg/png images objdet ships
+        # (FileTypeValidator enforces that set) this equals the image file's
+        # Path.stem — what File Pairing / Pascal VOC XML pair on — so validation
+        # and transfer resolve the same annotation. This is deliberately NOT
+        # Path.stem: a value with no recognised extension — a bare stem, or an
+        # internal dot like ``image.001`` — is kept whole, so we never strip a
+        # non-extension segment (Path.stem would wrongly turn ``image.001`` into
+        # ``image``). The two only diverge for a non-recognised final suffix
+        # (e.g. ``a.tar.gz``), which objdet images can't have.
         stem = filename.rsplit(".", 1)[0] if _has_extension(filename) else filename
         filename_with_ext = f"{stem}{extension}"
     else:
