@@ -32,7 +32,10 @@ def make_csv_ingestor(schema=None, categorical_min_count=1, **overrides):
         table_name="tbl",
         schema=schema if schema is not None else {"a": "INT"},
         intent="train",
-        category=None,
+        # Alignment stats only accumulate for the tabular family
+        # (TABULAR_FAMILY_CATEGORIES), so the factory defaults to a tabular
+        # category; the gating tests below override it.
+        category=TaskCategory.TABULAR_CLASSIFICATION,
     )
     kwargs.update(overrides)
     return CSVIngestor(**kwargs)
@@ -466,3 +469,60 @@ def test_feature_stats_keeps_feature_that_case_matches_role_name(make_csv):
     stats = ing.feature_stats()
     assert set(stats) == {"feat", "Label"}
     assert "label" not in stats
+
+
+# ---- category gating (bugbot on #383) --------------------------------------
+# feature_stats / categorical vocab are tabular alignment facts. For every
+# category whose CSV is a manifest (image/objdet/keypoint/text pointer files)
+# the cells are bookkeeping, not features — a keypoint Visibility JSON column
+# must not ship as a "vocab" — so the accumulators stay off entirely.
+
+
+@pytest.mark.parametrize(
+    "category",
+    [
+        TaskCategory.IMAGE_CLASSIFICATION,
+        TaskCategory.OBJECT_DETECTION,
+        TaskCategory.KEYPOINT_DETECTION,
+        TaskCategory.SEMANTIC_SEGMENTATION,
+        TaskCategory.TEXT_CLASSIFICATION,
+        TaskCategory.EMBEDDINGS,
+    ],
+)
+def test_alignment_stats_off_for_manifest_categories(make_csv, category):
+    path = make_csv(
+        {
+            "filename": ["a.jpg", "b.jpg", "c.jpg"],
+            "width": [640, 480, 640],
+            "Visibility": ['[1, 1]', '[0, 1]', '[1, 0]'],
+        }
+    )
+    ing = make_csv_ingestor(
+        schema={"filename": "VARCHAR(255)", "width": "INT", "Visibility": "TEXT"},
+        category=category,
+    )
+    list(ing.read_data(str(path)))
+
+    assert ing.feature_stats() == {}
+    assert ing.categorical_vocab() == {}
+    # No alignment stats reach the emitted attributes. (The base hook may
+    # still contribute scalar facts — e.g. text categories emit ``encoding``
+    # — so only the feature_stats key must be absent.)
+    run_meta = ing._collect_run_metadata()
+    assert "feature_stats" not in run_meta.get("attributes", {})
+
+
+def test_alignment_stats_on_for_time_series_classification(make_csv):
+    # time_series_classification is tabular-family (CSV rows ARE the data):
+    # numeric features accumulate; its label is classification-class, excluded.
+    path = make_csv({"reading": [1.0, 2.0, 3.0], "label": ["a", "b", "a"]})
+    ing = make_csv_ingestor(
+        schema={"reading": "FLOAT", "label": "VARCHAR(255)"},
+        label_column="label",
+        category=TaskCategory.TIME_SERIES_CLASSIFICATION,
+    )
+    list(ing.read_data(str(path)))
+
+    stats = ing.feature_stats()
+    assert set(stats) == {"reading"}
+    assert stats["reading"]["count"] == 3
