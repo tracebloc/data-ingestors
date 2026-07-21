@@ -59,6 +59,14 @@ CASES = [
             images=str(T / "image_classification/data/images"),
             label="label",
             spec={"file_options": {"extension": ".jpeg", "target_size": [256, 256]}},
+            # #350: this fixture is 6 unique (filename,label) rows repeated 96×.
+            # The content-vs-source comparison below assumes 1:1 storage, so pin
+            # uuid; under the content_hash default these rows dedup to 6 (working
+            # as designed). content_hash dedup/retry is covered by
+            # test_database_e2e.py. The tabular case below keeps the default
+            # (unique rows ⇒ content_hash stores 1:1 too), exercising the full
+            # run.main() stack with content_hash.
+            data_id={"strategy": "uuid"},
         ),
     ),
     dict(

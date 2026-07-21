@@ -56,6 +56,9 @@ class FakeIngestor(BaseIngestor):
 
 def make_ingestor(records=None, **overrides):
     db = MagicMock(name="Database")
+    # #350: content_hash is the default id strategy; the mock DB must return a
+    # real salt string (a MagicMock salt poisons the hash and drops every row).
+    db.get_or_create_table_salt.return_value = "0" * 64
     db.create_table.return_value = MagicMock(name="table")
     db.insert_batch.return_value = ([1, 2], [])
     db.get_table_schema.return_value = {"a": "INT"}

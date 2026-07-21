@@ -236,16 +236,29 @@ def test_object_label_without_policy_defaults_to_passthrough():
 # data_id resolution
 # ---------------------------------------------------------------------------
 
-def test_no_data_id_block_means_uuid_generation():
+def test_no_data_id_block_means_content_hash():
+    # #350: content_hash is now the default when no data_id block is present.
     r = resolve(_load("image_classification.yaml"))
     assert r.unique_id_column is None
+    assert r.data_id_strategy == "content_hash"
 
 
-def test_uuid_strategy_explicit():
+def test_content_hash_strategy_explicit():
+    config = _load("image_classification.yaml")
+    config["data_id"] = {"strategy": "content_hash"}
+    r = resolve(config)
+    assert r.unique_id_column is None
+    assert r.data_id_strategy == "content_hash"
+
+
+def test_uuid_strategy_explicit_is_opt_out():
+    # #350: after the default flipped to content_hash, an explicit
+    # strategy=uuid must still opt back into fresh-per-record UUIDs.
     config = _load("image_classification.yaml")
     config["data_id"] = {"strategy": "uuid"}
     r = resolve(config)
     assert r.unique_id_column is None
+    assert r.data_id_strategy == "uuid"
 
 
 def test_column_strategy_sets_unique_id_column():

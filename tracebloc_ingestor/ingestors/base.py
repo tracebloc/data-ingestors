@@ -153,7 +153,7 @@ class BaseIngestor(ABC):
         data_format: Optional[str] = None,
         file_options: Optional[Dict[str, Any]] = None,
         label_policy: str = label_policy_module.PASSTHROUGH,
-        data_id_strategy: str = "uuid",
+        data_id_strategy: str = "content_hash",
     ):
         """Initialize the base ingestor.
 
@@ -180,7 +180,11 @@ class BaseIngestor(ABC):
             ValueError: If unique_id_column is not provided
         """
         self.ingestor_id = str(uuid.uuid4())
-        # #225: deterministic content-hash data_id (opt-in, landed dark).
+        # #225: deterministic content-hash data_id. Now the default (#350):
+        # landed dark in v0.5.7, soaked opt-in through v0.6.0/v0.7.x, flipped
+        # here so a retried k8s Job re-claims its rows via the data_id UNIQUE
+        # upsert instead of duplicating them. Pass ``data_id_strategy="uuid"``
+        # to opt back into fresh-per-record UUIDs.
         # unique_id_column wins if both are set (schema can't express both;
         # belt-and-suspenders). The salt fetch is DEFERRED to ingest() —
         # mirroring #260's deferred create_table — so a validator-rejected

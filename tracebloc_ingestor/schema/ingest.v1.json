@@ -165,8 +165,8 @@
         "strategy": {
           "type": "string",
           "enum": ["uuid", "column", "content_hash"],
-          "default": "uuid",
-          "description": "How `data_id` is generated. `uuid` (default) generates a fresh UUID per record — no source column leaves the cluster, but a retried run re-inserts every row under new ids. `column` maps a source column's value, which is louder (logged warning) and only safe when the column doesn't carry PII. `content_hash` derives a deterministic id from the record's content (features + label + source filename), salted with a random per-table value that never leaves the cluster — a retried run re-claims its previous rows instead of duplicating them. Note: genuinely identical source rows therefore collapse into one stored row (content-level dedup)."
+          "default": "content_hash",
+          "description": "How `data_id` is generated. `content_hash` (default) derives a deterministic id from the record's content (features + label + source filename), salted with a random per-table value that never leaves the cluster — a retried run re-claims its previous rows instead of duplicating them. Note: genuinely identical source rows therefore collapse into one stored row (content-level dedup). `uuid` generates a fresh UUID per record — no source column leaves the cluster, but a retried run re-inserts every row under new ids. `column` maps a source column's value, which is louder (logged warning) and only safe when the column doesn't carry PII."
         },
         "column": {
           "type": "string",
