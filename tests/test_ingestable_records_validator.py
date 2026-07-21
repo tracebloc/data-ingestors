@@ -210,6 +210,9 @@ def test_missing_filename_column_message_is_capped(clean_env, tmp_path, make_csv
     result = IngestableRecordsValidator(file_subdir="images").validate(str(path))
     assert not result.is_valid
     assert "more of 40)" in result.errors[0]  # capped preview, not all 40 names
+    # ...but the FULL header set is retained in metadata (learned Bugbot rule).
+    assert len(result.metadata["columns"]) == 40
+    assert result.metadata["columns"][0] == "c0"
 
 
 def test_absolute_or_traversal_path_is_not_counted_as_found(

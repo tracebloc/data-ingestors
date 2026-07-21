@@ -275,8 +275,11 @@ class IngestableRecordsValidator(BaseValidator):
         if self._exact_filename_column(header) is not None:
             return self._create_result(is_valid=True, metadata={"checked": True})
 
-        # Cap the column list so a wide manifest can't produce an unbounded
-        # message (redaction.column_preview, as #372 did for mask_id_validator).
+        # Cap the column list in the MESSAGE (redaction.column_preview, as #372
+        # did for mask_id_validator) but keep the FULL header in metadata so
+        # CLI/programmatic consumers don't lose it — the learned Bugbot rule
+        # ("cap the list, keep the full set in metadata").
+        full_columns = [str(c) for c in header]
         cols = redaction.column_preview(header) if header else "<none>"
         # A case variant (``Filename``) still resolves case-insensitively — give
         # a targeted "rename to lowercase" hint rather than "no column at all".
@@ -293,7 +296,10 @@ class IngestableRecordsValidator(BaseValidator):
                     f"filename found in record'. Rename it to "
                     f"'{self.filename_column}' and re-run."
                 ],
-                metadata={"reason": "filename_column_case_variant"},
+                metadata={
+                    "reason": "filename_column_case_variant",
+                    "columns": full_columns,
+                },
             )
         return self._create_result(
             is_valid=False,
@@ -304,5 +310,5 @@ class IngestableRecordsValidator(BaseValidator):
                 f"filename found in record'). Rename your file column to "
                 f"'{self.filename_column}' and re-run."
             ],
-            metadata={"reason": "filename_column_missing"},
+            metadata={"reason": "filename_column_missing", "columns": full_columns},
         )
