@@ -122,7 +122,12 @@ def _has_extension(filename: str) -> bool:
 
 
 def _find_src(
-    subdirectory: str, filename: str, extension: str, cfg: Optional[Config] = None
+    subdirectory: str,
+    filename: str,
+    extension: str,
+    cfg: Optional[Config] = None,
+    *,
+    force_extension: bool = False,
 ):
     """Resolve a source file in `SRC_PATH/<subdirectory>/`.
 
@@ -136,11 +141,38 @@ def _find_src(
     ``cfg`` is the run's resolved Config, threaded from ``map_file_transfer``
     (P4c); ``None`` falls back to the module-global ``config`` for direct
     callers / tests.
+
+    ``force_extension`` selects how ``extension`` is applied:
+
+    - ``False`` (default): the manifest ``filename`` names *this very file*, so
+      keep its own extension when it already has one and only append
+      ``extension`` when it doesn't — the image / text case (``a.jpg`` stays
+      ``a.jpg``; bare ``a`` becomes ``a.jpg``).
+    - ``True``: the manifest ``filename`` names a DIFFERENT file that merely
+      shares the stem — a sidecar whose extension is fixed and differs from the
+      image's. Object detection annotations are always ``<stem>.xml`` (the
+      documented ``{image_name}.xml`` convention), so strip a recognised
+      trailing extension off ``filename`` and append ``extension``: both the
+      extension-bearing ``a.jpg`` and the bare stem ``a`` resolve to ``a.xml``.
+      Without this, an extension-bearing manifest value kept its ``.jpg`` and
+      the annotation lookup searched ``annotations/a.jpg`` — which never exists
+      — so every record was silently skipped even though the File Pairing
+      validator (which pairs by on-disk stem) had passed. The manifest format
+      is documented as working "with or without extension"; this keeps the
+      annotation side of the transfer honouring that contract.
     """
     cfg = cfg or config
-    filename_with_ext = (
-        filename if _has_extension(filename) else f"{filename}{extension}"
-    )
+    if force_extension:
+        # Mirror _has_extension's rsplit so the stem matches Path.stem exactly
+        # (what FilePairingValidator pairs on). A value with no recognised
+        # extension — a bare stem, or an internal dot like ``image.001`` — is
+        # kept whole so we never strip a non-extension segment.
+        stem = filename.rsplit(".", 1)[0] if _has_extension(filename) else filename
+        filename_with_ext = f"{stem}{extension}"
+    else:
+        filename_with_ext = (
+            filename if _has_extension(filename) else f"{filename}{extension}"
+        )
     # _safe_join raises on a traversal/absolute filename (#239); a genuinely
     # missing file still returns None below (skip), so a malicious manifest
     # value is rejected loudly while an absent sidecar is tolerated.
@@ -242,8 +274,12 @@ def annotation_transfer(
             return None
 
         if src_path is None:
+            # force_extension: the annotation is <stem>.xml, derived from the
+            # image filename's stem — never the image's own extension. See
+            # _find_src for why an extension-bearing manifest value would
+            # otherwise miss the annotation (object_detection skip bug).
             src_path, filename_with_ext = _find_src(
-                "annotations", filename, extension, cfg=cfg
+                "annotations", filename, extension, cfg=cfg, force_extension=True
             )
             if src_path is None:
                 logger.error(
