@@ -283,3 +283,31 @@ def test_descriptors_still_reach_enriched_schema_after_meta_data_strip():
     enriched = ing._schema_payload({"a": "INT"})
     assert enriched["a"]["unit"] == "kg"
     assert "column_descriptors" not in ing._meta_data_payload()
+
+
+def test_meta_data_payload_strips_scalar_alignment_bridges():
+    # Second bugbot round on #383: the scalar alignment facts bridged onto
+    # file_options (7c-7g in conventions.resolve) are copied under
+    # ``attributes`` by _scalar_attribute_metadata — the only channel the
+    # backend reads. The raw top-level copies must not ship beside them.
+    bridged = {
+        "color_mode": "RGB",
+        "bit_depth": 8,
+        "language": "en",
+        "normalization": "lowercase",
+        "time_unit": "days",
+        "event_indicator": {"event": 1, "censored": 0},
+        "positive_definition": "same-document pairs",
+    }
+    ing = make_ingestor(
+        enriched=True,
+        file_options={**bridged, "target_size": [512, 512]},
+    )
+    meta = ing._meta_data_payload()
+    for key in bridged:
+        assert key not in meta, key
+    # Genuine file_options and the canonical attributes channel still ship.
+    assert meta["target_size"] == [512, 512]
+
+    ing.file_options.setdefault("attributes", {})["color_mode"] = "RGB"
+    assert ing._meta_data_payload()["attributes"]["color_mode"] == "RGB"

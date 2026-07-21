@@ -82,14 +82,30 @@ _TEXT_CATEGORIES = _NLP_CATEGORIES - {TaskCategory.EMBEDDINGS}
 # Survival (time-to-event) duration units the combine-time contract accepts.
 _TIME_UNITS = ("days", "weeks", "months", "years")
 
-# file_options keys that are ingestor-internal bridges, never wire payload:
-# the label-stripped ``schema`` copy is a validator artifact (the canonical
-# schema ships as the top-level ``schema`` arg), and ``column_descriptors``
-# only carries the uploader's ``unit``/``ordinal`` declarations from config
-# resolution to ``_schema_payload``, which merges them onto the enriched
-# schema's columns — the raw map, keyed by CSV source names, duplicates
-# those facts under names the backend can't correlate (bugbot on #383).
-_META_DATA_INTERNAL_KEYS = frozenset({"schema", "column_descriptors"})
+# file_options keys that are ingestor-internal bridges, never wire payload.
+# ``schema`` is a validator artifact (the canonical schema ships as the
+# top-level ``schema`` arg). The rest are alignment facts bridged from config
+# resolution onto file_options ONLY so the emit hooks can place them on their
+# canonical channels: ``column_descriptors`` (unit/ordinal) merges onto the
+# enriched schema's columns (``_schema_payload``); the scalar facts are
+# copied under ``attributes`` (``_scalar_attribute_metadata``) — the only
+# place the backend reads them (dataset_validators reads
+# ``meta_data.attributes``). Shipping the raw keys beside the canonical
+# copies duplicated them at meta_data top level (bugbot on #383, both
+# rounds).
+_META_DATA_INTERNAL_KEYS = frozenset(
+    {
+        "schema",
+        "column_descriptors",
+        "color_mode",
+        "bit_depth",
+        "language",
+        "normalization",
+        "time_unit",
+        "event_indicator",
+        "positive_definition",
+    }
+)
 
 
 def _valid_event_indicator(v: Any) -> bool:
