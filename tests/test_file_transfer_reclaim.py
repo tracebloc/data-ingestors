@@ -260,3 +260,44 @@ def test_skips_when_table_name_unset(tmp_path):
     cfg = _cfg(src, storage, table="")
     assert file_transfer.reclaim_source(cfg) is False
     assert src.exists()
+
+
+# ---------------------------------------------------------------------------
+# best-effort contract (3rd Bugbot round, PR #381): reclaim runs AFTER the load
+# is durable + registered, so NO error in it — guards, realpath, or logging,
+# not just rmtree — may propagate and turn a green ingest red.
+# ---------------------------------------------------------------------------
+
+
+def test_internal_error_never_fails_the_ingest(tmp_path, monkeypatch):
+    # An unexpected raise in a guard (here _is_within) must be swallowed, not
+    # propagated — the delete never happens and the load stays green.
+    storage = tmp_path / "shared"
+    src = storage / ".tracebloc-staging" / "tbl"
+    src.mkdir(parents=True)
+    _seed(src, "images")
+
+    def boom(*_a, **_k):
+        raise RuntimeError("unexpected guard failure")
+
+    monkeypatch.setattr(file_transfer, "_is_within", boom)
+    cfg = _cfg(src, storage)
+    assert file_transfer.reclaim_source(cfg) is False  # must NOT raise
+    assert src.exists()  # never reached rmtree
+
+
+def test_logging_failure_never_fails_the_ingest(tmp_path, monkeypatch):
+    # Even a broken logger inside reclaim must not propagate (Bugbot flagged
+    # logging as a raise path). A skip-path log that throws is swallowed.
+    storage = tmp_path / "shared"
+    other = storage / ".tracebloc-staging" / "other"
+    other.mkdir(parents=True)
+    _seed(other, "images")
+
+    def boom(*_a, **_k):
+        raise RuntimeError("logger down")
+
+    monkeypatch.setattr(file_transfer.logger, "info", boom)
+    cfg = _cfg(other, storage, table="tbl")  # mismatch → gate logs .info → boom
+    assert file_transfer.reclaim_source(cfg) is False  # must NOT raise
+    assert other.exists()

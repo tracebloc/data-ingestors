@@ -505,13 +505,41 @@ def reclaim_source(cfg: Optional[Config] = None) -> bool:
     directory. A final backstop still refuses if the resolved source overlaps
     the table dir at all.
 
-    Best-effort: a filesystem error while removing the tree is logged and
-    swallowed — the load already succeeded, so a leftover staging copy (the
-    pre-#346 status quo) must never turn a green ingest red.
+    Best-effort: ANY error — deriving the guards or the delete itself — is
+    logged and swallowed (returns False). The load has already succeeded when
+    this is called, so a leftover staging copy (the pre-#346 status quo) must
+    never turn a green ingest red.
 
     Returns ``True`` iff the staging tree was removed.
     """
     cfg = cfg or config
+    # Best-effort wrapper: reclaim runs AFTER the load is durable + registered
+    # (see _ingest_with_lock), so NOTHING here — realpath, isdir, the guards,
+    # rmtree, even a logging failure — may turn a green ingest red (Bugbot #381).
+    # Any error is swallowed and the leftover staging copy (the pre-#346 status
+    # quo) is left for manual cleanup.
+    try:
+        return _reclaim_source(cfg)
+    except Exception as e:
+        try:
+            logger.warning(
+                f"{YELLOW}Could not reclaim staged source (SRC_PATH="
+                f"{cfg.SRC_PATH!r}): {e}. The load succeeded; the leftover "
+                f"staging copy is the pre-#346 status quo and can be removed "
+                f"manually.{RESET}"
+            )
+        except Exception:
+            pass  # a broken logger must not fail a green ingest either
+        return False
+
+
+def _reclaim_source(cfg: Config) -> bool:
+    """The guarded reclaim decision + delete (contract: see ``reclaim_source``).
+
+    Split out so ``reclaim_source`` can wrap the WHOLE thing in one best-effort
+    guard — a raise anywhere here (a bad ``realpath`` / ``isdir``, an overlap
+    check, a logging failure, or ``rmtree``) must never propagate to the ingest.
+    """
     src = cfg.SRC_PATH
     if not src:
         return False
@@ -562,17 +590,9 @@ def reclaim_source(cfg: Optional[Config] = None) -> bool:
         )
         return False
 
-    try:
-        shutil.rmtree(src_real)
-        logger.info(
-            f"{GREEN}Reclaimed staged source {src_real} after a verified, clean "
-            f"load — no duplicate copy left on the PVC (#346).{RESET}"
-        )
-        return True
-    except OSError as e:
-        logger.warning(
-            f"{YELLOW}Could not reclaim staged source {src_real}: {e}. The load "
-            f"succeeded; the leftover staging copy is the pre-#346 status quo "
-            f"and can be removed manually.{RESET}"
-        )
-        return False
+    shutil.rmtree(src_real)
+    logger.info(
+        f"{GREEN}Reclaimed staged source {src_real} after a verified, clean "
+        f"load — no duplicate copy left on the PVC (#346).{RESET}"
+    )
+    return True
