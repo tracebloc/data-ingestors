@@ -1798,6 +1798,11 @@ def test_objdet_content_hash_constructor_warns(caplog):
     # explicit content_hash from the signature default — so the constructor
     # warns loudly about the duplicate-row collapse instead of overriding
     # (bugbot High on #383).
+    # Local import: develop's copy of this file has no module-level
+    # TaskCategory import, so the PR merge-ref loses it — the test must be
+    # self-contained (same convention as every other test here).
+    from tracebloc_ingestor.utils.constants import TaskCategory
+
     with caplog.at_level(logging.WARNING):
         make_ingestor(category=TaskCategory.OBJECT_DETECTION)
     assert any("collapse" in r.getMessage() for r in caplog.records)
