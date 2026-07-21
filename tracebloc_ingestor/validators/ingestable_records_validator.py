@@ -30,13 +30,15 @@ Two distinct ways a CSV manifest yields zero records, both caught here:
 import logging
 import os
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 
 import pandas as pd
 
 from ..config import Config
 from ..file_transfer import _has_extension, _safe_join
+from ..utils import redaction
 from ..utils.constants import FileExtension
+from ..utils.csv_dialect import read_dialect_kwargs, validate_csv_options
 from .base import BaseValidator, ValidationResult
 
 config = Config()
@@ -56,7 +58,13 @@ class IngestableRecordsValidator(BaseValidator):
         extension: Expected file extension, appended to a CSV filename that
             carries none (same rule the transfer uses).
         filename_column: CSV column naming each sample's file (default
-            ``"filename"``; resolved case-insensitively).
+            ``"filename"``; required as an EXACT lowercase match, #372).
+        csv_options: the run's pandas read options (delimiter / encoding /
+            quoting). Threaded so every read here tokenizes the manifest the
+            SAME way the ingest write path does — otherwise a non-comma / BOM
+            manifest reads as one mashed column and the exact-``filename`` check
+            (#372) false-rejects a valid dataset. Mirrors the grouped validators
+            (#376). A malformed value is rejected at construction.
     """
 
     def __init__(
@@ -65,12 +73,24 @@ class IngestableRecordsValidator(BaseValidator):
         extension: str = FileExtension.TXT,
         filename_column: str = "filename",
         name: str = "Ingestable Records",
+        csv_options: Optional[Dict[str, Any]] = None,
     ):
         super().__init__(name)
         self.file_subdir = file_subdir
         ext = extension or FileExtension.TXT
         self.extension = ext if ext.startswith(".") else f".{ext}"
         self.filename_column = filename_column
+        self._csv_options = csv_options or {}
+        # Fail fast at construction on a malformed dialect, not mid-scan —
+        # same contract as the grouped validators (#376).
+        validate_csv_options(self._csv_options)
+
+    def _dialect_kwargs(self) -> Dict[str, Any]:
+        """pandas ``read_csv`` dialect kwargs (sep / encoding / quoting) matching
+        the ingest write path, via the shared :func:`read_dialect_kwargs` (#376).
+        Callers merge their own read-shape kwargs (``nrows`` / ``usecols`` / …)
+        on top."""
+        return read_dialect_kwargs(self._csv_options)
 
     def validate(self, data: Any, **kwargs) -> ValidationResult:
         try:
@@ -118,8 +138,8 @@ class IngestableRecordsValidator(BaseValidator):
             # keep the read cheap and inference-free — we only count rows here.
             head = pd.read_csv(
                 path,
+                **self._dialect_kwargs(),
                 nrows=1,
-                encoding="utf-8",
                 dtype=str,
                 keep_default_na=False,
             )
@@ -157,8 +177,8 @@ class IngestableRecordsValidator(BaseValidator):
         try:
             chunks = pd.read_csv(
                 path,
+                **self._dialect_kwargs(),
                 usecols=[filename_col],
-                encoding="utf-8",
                 chunksize=50_000,
                 dtype=str,
                 keep_default_na=False,
@@ -212,7 +232,9 @@ class IngestableRecordsValidator(BaseValidator):
         """The CSV header as a plain list of raw column names; ``[]`` if the
         header can't be read (best-effort probe)."""
         try:
-            return list(pd.read_csv(path, nrows=0, encoding="utf-8").columns)
+            return list(
+                pd.read_csv(path, **self._dialect_kwargs(), nrows=0).columns
+            )
         except Exception:  # noqa: BLE001 — header probe is best-effort
             return []
 
@@ -253,7 +275,9 @@ class IngestableRecordsValidator(BaseValidator):
         if self._exact_filename_column(header) is not None:
             return self._create_result(is_valid=True, metadata={"checked": True})
 
-        cols = ", ".join(str(c) for c in header) or "<none>"
+        # Cap the column list so a wide manifest can't produce an unbounded
+        # message (redaction.column_preview, as #372 did for mask_id_validator).
+        cols = redaction.column_preview(header) if header else "<none>"
         # A case variant (``Filename``) still resolves case-insensitively — give
         # a targeted "rename to lowercase" hint rather than "no column at all".
         variant = self._match_column(header, self.filename_column)

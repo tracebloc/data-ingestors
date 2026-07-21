@@ -9,6 +9,7 @@ with a misleading "rows already in the database" message.
 from __future__ import annotations
 
 import pandas as pd
+import pytest
 
 from tracebloc_ingestor.validators.ingestable_records_validator import (
     IngestableRecordsValidator,
@@ -160,6 +161,55 @@ def test_exact_filename_column_with_whitespace_is_accepted(
     path = make_csv([{" filename ": "doc1"}])
     result = IngestableRecordsValidator(file_subdir="sequences").validate(str(path))
     assert result.is_valid, result.errors
+
+
+def test_semicolon_manifest_not_false_rejected_with_csv_options(clean_env, tmp_path):
+    # #376/#372: a non-comma manifest must be tokenized with the run's dialect.
+    # Without it the header reads as one column ("filename;label"), the exact-
+    # filename check finds nothing, and a VALID dataset is false-rejected —
+    # defeating the purpose of the check. With csv_options it parses correctly.
+    src = tmp_path / "src"
+    seq = src / "sequences"
+    seq.mkdir(parents=True)
+    _write(seq / "doc1.txt", "x")
+    clean_env.setenv("SRC_PATH", str(src))
+    path = _write(tmp_path / "m.csv", "filename;label\ndoc1;cat\n")
+    result = IngestableRecordsValidator(
+        file_subdir="sequences", csv_options={"delimiter": ";"}
+    ).validate(str(path))
+    assert result.is_valid, result.errors
+
+
+def test_semicolon_manifest_mis_tokenized_without_dialect(clean_env, tmp_path):
+    # The failure mode the dialect threading prevents: comma-tokenized, the
+    # semicolon header is one mashed column with no exact `filename`.
+    src = tmp_path / "src"
+    seq = src / "sequences"
+    seq.mkdir(parents=True)
+    _write(seq / "doc1.txt", "x")
+    clean_env.setenv("SRC_PATH", str(src))
+    path = _write(tmp_path / "m.csv", "filename;label\ndoc1;cat\n")
+    result = IngestableRecordsValidator(file_subdir="sequences").validate(str(path))
+    assert not result.is_valid  # mashed header -> no exact filename column
+
+
+def test_malformed_csv_options_rejected_at_construction():
+    # Mirrors the grouped validators (#376): fail fast at construction.
+    with pytest.raises(ValueError):
+        IngestableRecordsValidator(csv_options={"delimiter": 123})
+
+
+def test_missing_filename_column_message_is_capped(clean_env, tmp_path, make_csv):
+    # #372 fix-2: a wide manifest must not produce an unbounded column list in
+    # the error (redaction.column_preview caps it).
+    src = tmp_path / "src"
+    (src / "images").mkdir(parents=True)
+    clean_env.setenv("SRC_PATH", str(src))
+    wide = {f"c{i}": "v" for i in range(40)}  # 40 columns, none named filename
+    path = make_csv([wide])
+    result = IngestableRecordsValidator(file_subdir="images").validate(str(path))
+    assert not result.is_valid
+    assert "more of 40)" in result.errors[0]  # capped preview, not all 40 names
 
 
 def test_absolute_or_traversal_path_is_not_counted_as_found(
