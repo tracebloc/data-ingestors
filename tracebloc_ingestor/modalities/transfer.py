@@ -72,8 +72,15 @@ def object_detection(
             f"{RED}Source image not found: {os.path.join(cfg.SRC_PATH, 'images', image_filename)} — skipping record{RESET}"
         )
         return None
+    # force_extension: the annotation is <stem>.xml (the documented
+    # {image_name}.xml convention), derived from the image filename's stem
+    # regardless of whether the manifest value carries the image extension.
+    # A manifest `filename` of `a.jpg` must resolve to `annotations/a.xml`,
+    # not `annotations/a.jpg` — the latter never exists, so every record was
+    # skipped (exit 9, 0 ingested) while every validator, including File
+    # Pairing (which pairs by on-disk stem), had passed.
     annotation_src_path, annotation_filename = _find_src(
-        "annotations", filename, ".xml", cfg=cfg
+        "annotations", filename, ".xml", cfg=cfg, force_extension=True
     )
     if annotation_src_path is None:
         logger.error(
