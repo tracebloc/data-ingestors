@@ -8,7 +8,10 @@ with a misleading "rows already in the database" message.
 
 from __future__ import annotations
 
+import json
+
 import pandas as pd
+import pytest
 
 from tracebloc_ingestor.validators.ingestable_records_validator import (
     IngestableRecordsValidator,
@@ -17,6 +20,12 @@ from tracebloc_ingestor.validators.ingestable_records_validator import (
 
 def _write(path, text):
     path.write_text(text, encoding="utf-8")
+    return path
+
+
+def _write_json(tmp_path, obj, name="manifest.json"):
+    path = tmp_path / name
+    path.write_text(json.dumps(obj), encoding="utf-8")
     return path
 
 
@@ -82,15 +91,19 @@ def test_filename_with_extension_resolves_without_double_suffix(
     assert result.is_valid, result.errors
 
 
-def test_filename_column_is_case_insensitive(clean_env, tmp_path, make_csv):
+def test_filename_column_case_variant_is_rejected(clean_env, tmp_path, make_csv):
+    # #372: the cluster's transfer read is case-sensitive record.get("filename"),
+    # so a `FileName` case variant is doomed after upload. It must be rejected up
+    # front with a targeted "rename to lowercase" hint (NOT accepted as before).
     src = tmp_path / "src"
     (src / "sequences").mkdir(parents=True)
     clean_env.setenv("SRC_PATH", str(src))
     path = make_csv([{"FileName": "doc1"}])  # header cased differently
     result = IngestableRecordsValidator(file_subdir="sequences").validate(str(path))
-    # column resolves, file is missing -> rejected (not a no-op)
     assert not result.is_valid
-    assert "No referenced data files" in result.errors[0]
+    assert "must be lowercase 'filename'" in result.errors[0]
+    assert "'FileName'" in result.errors[0]
+    assert result.metadata["reason"] == "filename_column_case_variant"
 
 
 def test_tabular_style_no_subdir_only_checks_rows(make_csv):
@@ -112,16 +125,102 @@ def test_valid_dataset_with_files_passes(clean_env, tmp_path, make_csv):
     assert result.is_valid, result.errors
 
 
-def test_file_bearing_but_no_filename_column_is_noop(clean_env, tmp_path, make_csv):
-    # Rows present, file_subdir set, but the CSV has no filename column to
-    # cross-check -> not this validator's error to raise (pass through).
+def test_file_bearing_but_no_filename_column_is_rejected(clean_env, tmp_path, make_csv):
+    # #372: rows present, file_subdir set, but the CSV names its file column
+    # something other than `filename` (e.g. image_id / text_col). The cluster
+    # can't resolve it and drops every row after upload, so reject up front
+    # instead of deferring (the pre-#372 no-op).
     src = tmp_path / "src"
     (src / "sequences").mkdir(parents=True)
     clean_env.setenv("SRC_PATH", str(src))
     path = make_csv([{"text_col": "hi"}, {"text_col": "yo"}])
     result = IngestableRecordsValidator(file_subdir="sequences").validate(str(path))
-    assert result.is_valid
-    assert result.metadata["reason"] == "no_filename_column"
+    assert not result.is_valid
+    assert "No 'filename' column" in result.errors[0]
+    assert "text_col" in result.errors[0]  # lists the actual columns
+    assert result.metadata["reason"] == "filename_column_missing"
+
+
+def test_image_id_filename_column_is_rejected(clean_env, tmp_path, make_csv):
+    # #371/#372 image case: labels.csv uses `image_id` instead of `filename`.
+    # Doomed at the cluster's case-sensitive transfer read -> reject up front.
+    src = tmp_path / "src"
+    (src / "images").mkdir(parents=True)
+    clean_env.setenv("SRC_PATH", str(src))
+    path = make_csv([{"image_id": "001", "label": "cat"}])
+    result = IngestableRecordsValidator(
+        file_subdir="images", extension=".jpg"
+    ).validate(str(path))
+    assert not result.is_valid
+    assert "No 'filename' column" in result.errors[0]
+    assert result.metadata["reason"] == "filename_column_missing"
+
+
+def test_exact_filename_column_with_whitespace_is_accepted(
+    clean_env, tmp_path, make_csv
+):
+    # `" filename "` resolves at transfer (pandas strips header whitespace), so
+    # it must pass the column check too — only case, not whitespace, is strict.
+    src = tmp_path / "src"
+    seq = src / "sequences"
+    seq.mkdir(parents=True)
+    _write(seq / "doc1.txt", "x")
+    clean_env.setenv("SRC_PATH", str(src))
+    path = make_csv([{" filename ": "doc1"}])
+    result = IngestableRecordsValidator(file_subdir="sequences").validate(str(path))
+    assert result.is_valid, result.errors
+
+
+def test_semicolon_manifest_not_false_rejected_with_csv_options(clean_env, tmp_path):
+    # #376/#372: a non-comma manifest must be tokenized with the run's dialect.
+    # Without it the header reads as one column ("filename;label"), the exact-
+    # filename check finds nothing, and a VALID dataset is false-rejected —
+    # defeating the purpose of the check. With csv_options it parses correctly.
+    src = tmp_path / "src"
+    seq = src / "sequences"
+    seq.mkdir(parents=True)
+    _write(seq / "doc1.txt", "x")
+    clean_env.setenv("SRC_PATH", str(src))
+    path = _write(tmp_path / "m.csv", "filename;label\ndoc1;cat\n")
+    result = IngestableRecordsValidator(
+        file_subdir="sequences", csv_options={"delimiter": ";"}
+    ).validate(str(path))
+    assert result.is_valid, result.errors
+
+
+def test_semicolon_manifest_mis_tokenized_without_dialect(clean_env, tmp_path):
+    # The failure mode the dialect threading prevents: comma-tokenized, the
+    # semicolon header is one mashed column with no exact `filename`.
+    src = tmp_path / "src"
+    seq = src / "sequences"
+    seq.mkdir(parents=True)
+    _write(seq / "doc1.txt", "x")
+    clean_env.setenv("SRC_PATH", str(src))
+    path = _write(tmp_path / "m.csv", "filename;label\ndoc1;cat\n")
+    result = IngestableRecordsValidator(file_subdir="sequences").validate(str(path))
+    assert not result.is_valid  # mashed header -> no exact filename column
+
+
+def test_malformed_csv_options_rejected_at_construction():
+    # Mirrors the grouped validators (#376): fail fast at construction.
+    with pytest.raises(ValueError):
+        IngestableRecordsValidator(csv_options={"delimiter": 123})
+
+
+def test_missing_filename_column_message_is_capped(clean_env, tmp_path, make_csv):
+    # #372 fix-2: a wide manifest must not produce an unbounded column list in
+    # the error (redaction.column_preview caps it).
+    src = tmp_path / "src"
+    (src / "images").mkdir(parents=True)
+    clean_env.setenv("SRC_PATH", str(src))
+    wide = {f"c{i}": "v" for i in range(40)}  # 40 columns, none named filename
+    path = make_csv([wide])
+    result = IngestableRecordsValidator(file_subdir="images").validate(str(path))
+    assert not result.is_valid
+    assert "more of 40)" in result.errors[0]  # capped preview, not all 40 names
+    # ...but the FULL header set is retained in metadata (learned Bugbot rule).
+    assert len(result.metadata["columns"]) == 40
+    assert result.metadata["columns"][0] == "c0"
 
 
 def test_absolute_or_traversal_path_is_not_counted_as_found(
@@ -142,3 +241,82 @@ def test_absolute_or_traversal_path_is_not_counted_as_found(
     result = IngestableRecordsValidator(file_subdir="sequences").validate(str(path))
     assert not result.is_valid
     assert "No referenced data files" in result.errors[0]
+
+
+# --- JSON manifests: same exact-`filename` contract as CSV (#384 / #3) --------
+# Removing BaseIngestor._resolve_filename_key dropped the ingest-time case/
+# whitespace remap; the preflight now enforces the exact key for JSON too, so a
+# case-variant no longer passes preflight and fails late cluster-side (exit 9).
+
+
+def test_json_file_bearing_with_exact_filename_passes(tmp_path):
+    path = _write_json(tmp_path, [{"filename": "a.txt", "label": "x"}])
+    result = IngestableRecordsValidator(file_subdir="sequences").validate(str(path))
+    assert result.is_valid
+
+
+def test_json_file_bearing_case_variant_filename_is_rejected(tmp_path):
+    # The cluster reads case-sensitive record.get("filename") for JSON too, so a
+    # `Filename` key would upload then fail late — reject up front. JSON keys are
+    # matched verbatim, so the hint says "exactly" (not "lowercase" like CSV).
+    path = _write_json(tmp_path, [{"Filename": "a.txt", "label": "x"}])
+    result = IngestableRecordsValidator(file_subdir="sequences").validate(str(path))
+    assert not result.is_valid
+    assert "must be exactly 'filename'" in result.errors[0]
+    assert "'Filename'" in result.errors[0]
+    assert result.metadata["reason"] == "filename_column_case_variant"
+
+
+def test_json_padded_filename_key_is_rejected(tmp_path):
+    # Bugbot #384: unlike CSV (pandas strips headers), JSON keys are NOT
+    # stripped, so a padded `" filename "` key fails the cluster's
+    # record.get("filename") at transfer — must be rejected up front, not
+    # accepted as the CSV whitespace-lenient path does.
+    path = _write_json(tmp_path, [{" filename ": "a.txt", "label": "x"}])
+    result = IngestableRecordsValidator(file_subdir="sequences").validate(str(path))
+    assert not result.is_valid
+    assert "must be exactly 'filename'" in result.errors[0]
+    assert result.metadata["reason"] == "filename_column_case_variant"
+
+
+def test_json_sparse_first_record_missing_filename_still_passes(tmp_path):
+    # Bugbot #384: a leading object may omit `filename` while later records carry
+    # it (the transfer reads each row independently, so those rows ingest).
+    # Preflight must union keys across records, not judge on the first alone.
+    path = _write_json(
+        tmp_path,
+        [{"label": "x"}, {"filename": "a.txt", "label": "y"}],
+    )
+    result = IngestableRecordsValidator(file_subdir="sequences").validate(str(path))
+    assert result.is_valid, result.errors
+
+
+def test_json_file_bearing_missing_filename_is_rejected(tmp_path):
+    path = _write_json(tmp_path, [{"image_id": "a", "label": "x"}])
+    result = IngestableRecordsValidator(file_subdir="sequences").validate(str(path))
+    assert not result.is_valid
+    assert result.metadata["reason"] == "filename_column_missing"
+
+
+def test_json_single_object_form_is_checked(tmp_path):
+    # Object form (not an array) is read via json.load; its keys are checked.
+    path = _write_json(tmp_path, {"Filename": "a.txt"})
+    result = IngestableRecordsValidator(file_subdir="sequences").validate(str(path))
+    assert not result.is_valid
+    assert result.metadata["reason"] == "filename_column_case_variant"
+
+
+def test_json_non_file_bearing_passes(tmp_path):
+    # No file_subdir → no filename contract to enforce.
+    path = _write_json(tmp_path, [{"anything": 1}])
+    result = IngestableRecordsValidator(file_subdir=None).validate(str(path))
+    assert result.is_valid
+
+
+def test_malformed_json_is_skipped_not_rejected(tmp_path):
+    # A parse error is the JSON-structure validators' concern — the filename
+    # preflight must skip (not false-reject) when it can't read the keys.
+    path = _write(tmp_path / "bad.json", "{ this is not valid json")
+    result = IngestableRecordsValidator(file_subdir="sequences").validate(str(path))
+    assert result.is_valid
+    assert result.metadata.get("checked") is False
