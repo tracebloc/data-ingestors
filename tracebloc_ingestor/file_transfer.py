@@ -482,19 +482,22 @@ def reclaim_source(cfg: Optional[Config] = None) -> bool:
     in ``BaseIngestor._ingest_with_lock``, which leaves staged files in place.
 
     SAFETY — reclaim is OPT-IN, not blocklist. We delete a directory only when
-    we can PROVE it is a throwaway copy tracebloc itself staged: the resolved
-    ``SRC_PATH`` must live strictly inside ``STORAGE_PATH/.tracebloc-staging``
-    (``SharedRoot/.tracebloc-staging/<table>`` — what the CLI stage pod writes).
-    Every other layout is left untouched — no worse than the pre-#346 status
-    quo — because it is not provably ours to delete:
+    we can PROVE it is a throwaway copy tracebloc itself staged FOR THIS TABLE:
+    the resolved ``SRC_PATH`` must equal EXACTLY
+    ``STORAGE_PATH/.tracebloc-staging/<TABLE_NAME>`` — the per-table dir the CLI
+    stage pod writes. Binding to ``cfg.TABLE_NAME`` (not merely "somewhere under
+    ``.tracebloc-staging``") means a stray or symlinked ``SRC_PATH`` cannot reach
+    a SIBLING dataset's staging. Every other layout is left untouched — no worse
+    than the pre-#346 status quo — because it is not provably ours to delete:
 
-      - unset / empty ``SRC_PATH`` (tabular etc. stage nothing);
+      - unset / empty ``SRC_PATH`` or ``TABLE_NAME`` (tabular etc. stage nothing);
       - ``SRC_PATH`` is not an existing directory — nothing to reclaim;
       - a customer's OWN mounted dataset dir in the helm layout, where
         ``_resolve_config`` derives ``SRC_PATH`` as the parent of ``images:``
         (e.g. ``/data/shared/cats-dogs``, a SIBLING of the table dir) — deleting
         that would destroy the user's data;
-      - the shared-PVC root, ``/``, or anything that resolves outside staging.
+      - another table's ``.tracebloc-staging/<other>`` dir, the shared-PVC root,
+        ``/``, or anything that resolves outside this table's staging dir.
 
     Paths are resolved with ``os.path.realpath`` before every check AND before
     the delete, so a symlinked ``SRC_PATH`` (PVC mounts are symlinks) cannot
@@ -522,15 +525,30 @@ def reclaim_source(cfg: Optional[Config] = None) -> bool:
     if not os.path.isdir(src_real):
         return False
 
-    # Opt-in gate: reclaim ONLY an isolated SharedRoot/.tracebloc-staging/<table>
-    # dir (strictly inside the staging subtree — not the staging root itself).
-    staging_root = os.path.join(storage_real, STAGING_DIRNAME)
-    if src_real == staging_root or not _is_within(src_real, staging_root):
+    # Opt-in gate: reclaim ONLY THIS table's own staging dir — exactly
+    # STORAGE_PATH/.tracebloc-staging/<TABLE_NAME>, what the CLI stage pod writes.
+    # Binding to cfg.TABLE_NAME (not merely "somewhere under .tracebloc-staging")
+    # stops a stray SRC_PATH — another dataset's staging, or a <table> symlink
+    # that realpaths into the tree — from rmtree'ing a sibling's data on the
+    # shared PVC (Bugbot #381). `expected` is the literal per-table path (NOT
+    # realpath'd), so a `<table>` that is itself a symlink elsewhere fails the
+    # equality against the fully-resolved src and is left alone. A blank table
+    # name, or one that escapes the staging subtree, skips.
+    staging_root = os.path.normpath(os.path.join(storage_real, STAGING_DIRNAME))
+    table = (cfg.TABLE_NAME or "").strip()
+    expected = os.path.normpath(os.path.join(staging_root, table))
+    if (
+        not table
+        or src_real != expected
+        or expected == staging_root
+        or not _is_within(expected, staging_root)
+    ):
         logger.info(
-            f"{YELLOW}Not reclaiming staged source {src_real}: it is not an "
-            f"isolated {STAGING_DIRNAME}/<table> dir under {storage_real} — e.g. "
-            f"a user-mounted dataset dir (helm layout), the storage root, or a "
-            f"symlink resolving outside staging. Leaving it in place (#346).{RESET}"
+            f"{YELLOW}Not reclaiming staged source {src_real}: it is not this "
+            f"table's own {STAGING_DIRNAME}/{table or '<table>'} dir under "
+            f"{storage_real} (a helm user dir, another table's staging, the "
+            f"storage root, or a symlink resolving elsewhere). Leaving it in "
+            f"place (#346).{RESET}"
         )
         return False
 

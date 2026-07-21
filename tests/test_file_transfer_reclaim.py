@@ -214,3 +214,49 @@ def test_reclaims_through_symlinked_storage_mount(tmp_path):
     cfg = _cfg(storage_link / ".tracebloc-staging" / "tbl", storage_link)
     assert file_transfer.reclaim_source(cfg) is True
     assert not real_src.exists()
+
+
+# ---------------------------------------------------------------------------
+# guard added for the 2nd Bugbot round (PR #381): reclaim must be bound to
+# THIS table's staging dir, not just "somewhere under .tracebloc-staging".
+# ---------------------------------------------------------------------------
+
+
+def test_refuses_another_tables_staging_dir(tmp_path):
+    # SRC_PATH points at a DIFFERENT table's staging dir under the same
+    # .tracebloc-staging tree. Deleting it would take a sibling dataset's
+    # staging with it — must skip (gate binds to cfg.TABLE_NAME).
+    storage = tmp_path / "shared"
+    other = storage / ".tracebloc-staging" / "other_table"
+    other.mkdir(parents=True)
+    _seed(other, "images")
+    cfg = _cfg(other, storage, table="tbl")  # our table is 'tbl', not 'other_table'
+    assert file_transfer.reclaim_source(cfg) is False
+    assert other.exists() and (other / "images" / "cat.jpg").exists()
+
+
+def test_refuses_symlink_into_another_tables_staging(tmp_path):
+    # Our per-table path is a symlink that realpaths to ANOTHER table's staging
+    # under the same tree. The literal-path equality (src resolves elsewhere)
+    # skips it — the sibling's data survives.
+    storage = tmp_path / "shared"
+    other = storage / ".tracebloc-staging" / "other_table"
+    other.mkdir(parents=True)
+    _seed(other, "images")
+    link = storage / ".tracebloc-staging" / "tbl"
+    os.symlink(other, link)
+    cfg = _cfg(link, storage, table="tbl")
+    assert file_transfer.reclaim_source(cfg) is False
+    assert other.exists() and (other / "images" / "cat.jpg").exists()
+
+
+def test_skips_when_table_name_unset(tmp_path):
+    # A well-formed staging dir but no TABLE_NAME to bind it to → skip (we can't
+    # prove which table this staging belongs to).
+    storage = tmp_path / "shared"
+    src = storage / ".tracebloc-staging" / "tbl"
+    src.mkdir(parents=True)
+    _seed(src, "images")
+    cfg = _cfg(src, storage, table="")
+    assert file_transfer.reclaim_source(cfg) is False
+    assert src.exists()
