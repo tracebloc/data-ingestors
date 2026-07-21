@@ -133,6 +133,10 @@ CASES = [
             "label_column": "image_label",
             "label_policy": PASSTHROUGH,
             "unique_id_column": None,
+            # Objdet manifests are one-row-per-object; the category defaults
+            # to per-row UUIDs so duplicate (filename, label) rows don't
+            # collapse under a content digest (bugbot on #383).
+            "data_id_strategy": "uuid",
             "annotation_column": None,
             "file_options": {
                 "target_size": [1920, 1080],

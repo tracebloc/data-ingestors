@@ -263,6 +263,24 @@ class BaseIngestor(ABC):
         # run leaves no salt row behind. get_or_create is atomic
         # (INSERT IGNORE), so it needs no table lock even then.
         self.data_id_strategy = data_id_strategy
+        if (
+            category == TaskCategory.OBJECT_DETECTION
+            and data_id_strategy == "content_hash"
+            and not unique_id_column
+        ):
+            # Objdet manifests list one row PER OBJECT: duplicate
+            # (filename, label) rows are distinct objects, but they produce
+            # identical content digests, so the data_id UNIQUE upsert keeps
+            # only one of them (bugbot High on #383). The YAML resolver
+            # defaults objdet to uuid; this guards the direct-constructor
+            # path, which can't distinguish an explicit choice from the
+            # signature default — hence a warning, not an override.
+            logger.warning(
+                "object_detection with data_id_strategy='content_hash': "
+                "duplicate (filename, label) manifest rows collapse into one "
+                "stored row. If each row is one object (the usual manifest "
+                "shape), pass data_id_strategy='uuid'."
+            )
         self._table_salt: Optional[str] = None
         self.database = database
         self.engine: Engine = database.engine

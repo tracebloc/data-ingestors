@@ -6,6 +6,7 @@ SQLAlchemy Session is patched out so no real engine is touched.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from typing import Any, Dict, Generator, List
 from unittest.mock import MagicMock, patch
@@ -1698,3 +1699,26 @@ def test_zero_record_run_journals_start_but_not_registered():
     _run_happy_ingest(ing)
     ing.database.record_ingest_started.assert_called_once()
     ing.database.mark_ingest_registered.assert_not_called()
+
+
+def test_objdet_content_hash_constructor_warns(caplog):
+    # The YAML resolver defaults object_detection to uuid, but the direct-
+    # constructor path (templates, custom scripts) can't distinguish an
+    # explicit content_hash from the signature default — so the constructor
+    # warns loudly about the duplicate-row collapse instead of overriding
+    # (bugbot High on #383).
+    # Local import: develop's copy of this file has no module-level
+    # TaskCategory import, so the PR merge-ref loses it — the test must be
+    # self-contained (same convention as every other test here).
+    from tracebloc_ingestor.utils.constants import TaskCategory
+
+    with caplog.at_level(logging.WARNING):
+        make_ingestor(category=TaskCategory.OBJECT_DETECTION)
+    assert any("collapse" in r.getMessage() for r in caplog.records)
+
+    caplog.clear()
+    with caplog.at_level(logging.WARNING):
+        make_ingestor(
+            category=TaskCategory.OBJECT_DETECTION, data_id_strategy="uuid"
+        )
+    assert not any("collapse" in r.getMessage() for r in caplog.records)

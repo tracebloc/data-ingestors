@@ -302,9 +302,22 @@ def resolve(config: Dict[str, Any]) -> ResolvedConfig:
     #    content_hash. The explicit ``uuid`` branch below is the opt-out: without
     #    it, ``strategy: uuid`` would fall through and silently stay content_hash.
     data_id = config.get("data_id") or {}
-    if data_id.get("strategy") == "column":
+    strategy = data_id.get("strategy")
+    if strategy == "column":
         resolved.unique_id_column = data_id["column"]
-    elif data_id.get("strategy") == "uuid":
+    elif strategy == "uuid":
+        resolved.data_id_strategy = "uuid"
+    elif strategy is None and category == TaskCategory.OBJECT_DETECTION:
+        # Object-detection manifests list one row PER OBJECT, so duplicate
+        # (filename, label) rows are the norm — the bundled VisDrone sample
+        # has three identical `car` rows for one image. Those rows hash to
+        # the SAME content digest and the data_id UNIQUE upsert would keep a
+        # single stored row, silently under-counting objects (bugbot High on
+        # #383). Absent an explicit choice, objdet therefore keeps
+        # fresh-per-row UUIDs; an explicit `strategy: content_hash` is
+        # honored (and #227 cleans up retry duplicates either way). Restoring
+        # retry idempotency for objdet needs a row-ordinal-salted hash — a
+        # follow-up, not a default.
         resolved.data_id_strategy = "uuid"
     # else (content_hash, or absent): leave default ⇒ content_hash
 

@@ -467,3 +467,29 @@ def test_positive_definition_bridged():
     config["positive_definition"] = "same-question paraphrase"
     r = resolve(config)
     assert r.file_options["positive_definition"] == "same-question paraphrase"
+
+
+# ---------------------------------------------------------------------------
+# data_id — object_detection category default (bugbot High on #383)
+# ---------------------------------------------------------------------------
+
+
+def test_objdet_defaults_to_uuid():
+    # Objdet manifests list one row per object, so duplicate (filename, label)
+    # rows are real objects — the bundled VisDrone sample has three `car` rows
+    # for one image. A content digest is identical across those duplicates and
+    # the UNIQUE upsert would collapse them, so absent an explicit choice the
+    # objdet default stays uuid.
+    r = resolve(_load("object_detection.yaml"))
+    assert r.unique_id_column is None
+    assert r.data_id_strategy == "uuid"
+
+
+def test_objdet_explicit_content_hash_is_honored():
+    # The category default only fills the ABSENT case — an uploader who
+    # explicitly asks for content_hash (e.g. a one-row-per-image manifest)
+    # keeps it.
+    config = _load("object_detection.yaml")
+    config["data_id"] = {"strategy": "content_hash"}
+    r = resolve(config)
+    assert r.data_id_strategy == "content_hash"

@@ -70,6 +70,10 @@ def main():
         file_options=object_detection_options,
         label_column="image_label",
         intent=Intent.TRAIN,  # Is the data for training or testing
+        # Objdet manifests carry one row per object; duplicate
+        # (filename, label) rows are real objects, so per-row UUIDs —
+        # a content hash would collapse them (bugbot on #383).
+        data_id_strategy="uuid",
     )
 
     # Ingest data with validation
