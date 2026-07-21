@@ -22,6 +22,7 @@ from tracebloc_ingestor import Config
 from tracebloc_ingestor.utils.constants import (
     GREEN,
     RED,
+    YELLOW,
     RESET,
     RETRY_MAX_ATTEMPTS,
     RETRY_WAIT_MAX,
@@ -437,3 +438,85 @@ def map_file_transfer(
     finally:
         for key in lent:
             record.pop(key, None)
+
+
+def reclaim_source(cfg: Optional[Config] = None) -> bool:
+    """Delete the staged ``SRC_PATH`` tree after a VERIFIED, clean load (#346).
+
+    Every ``*_transfer`` above **copies** a file-bearing dataset's staged
+    sidecars from ``SRC_PATH/<subdir>/`` into the final table dir
+    ``DEST_PATH`` (see ``_copy_file_with_retry``) but historically never
+    removed the staging copy — so each ingest left two copies of the data on
+    the shared PVC (~2x disk for image / detection / segmentation datasets).
+    This reclaims the staging tree, replacing the CLI's extra ``rm -rf`` pod
+    (tracebloc/cli#167) and closing the leak for the helm-driven path too.
+
+    The caller MUST invoke this only once the load is fully durable (DB rows
+    committed + dataset registered with the backend) AND clean (no failed
+    records). On a partial/failed load the source is deliberately kept so the
+    operator can retry or inspect it — mirroring the compensating-delete branch
+    in ``BaseIngestor._ingest_with_lock``, which leaves staged files in place.
+
+    SAFETY — the delete is a no-op (returns ``False``) unless ``SRC_PATH`` is a
+    real, standalone staging directory that provably does NOT contain the table
+    just written:
+
+      - unset / empty ``SRC_PATH`` (tabular etc. stage nothing) — skip;
+      - ``SRC_PATH`` is not an existing directory — nothing to reclaim;
+      - ``SRC_PATH`` == ``STORAGE_PATH`` (the shared-PVC root) — never delete it;
+      - ``SRC_PATH`` == ``DEST_PATH``, or ``DEST_PATH`` lives INSIDE ``SRC_PATH``
+        — deleting SRC would take the freshly-written table (and, for a shared
+        root, every other tenant's data) with it. This is the helm-direct
+        layout where data was staged straight into the shared root rather than
+        an isolated ``.tracebloc-staging/<table>`` dir; leaving it untouched is
+        strictly no worse than the pre-#346 status quo;
+      - ``SRC_PATH`` lives inside ``DEST_PATH`` — degenerate, skip.
+
+    Best-effort: a filesystem error while removing the tree is logged and
+    swallowed — the load already succeeded, so a leftover staging copy (the
+    pre-#346 status quo) must never turn a green ingest red.
+
+    Returns ``True`` iff the staging tree was removed.
+    """
+    cfg = cfg or config
+    src = cfg.SRC_PATH
+    if not src:
+        return False
+
+    src_abs = os.path.abspath(src)
+    dest_abs = os.path.abspath(cfg.DEST_PATH)
+    storage_abs = os.path.abspath(cfg.STORAGE_PATH)
+
+    if not os.path.isdir(src_abs):
+        return False
+    if src_abs == storage_abs:
+        logger.warning(
+            f"{YELLOW}Not reclaiming staged source {src_abs}: it is the shared "
+            f"storage root (STORAGE_PATH) — refusing to delete it (#346).{RESET}"
+        )
+        return False
+    if src_abs == dest_abs or dest_abs.startswith(src_abs + os.sep):
+        logger.warning(
+            f"{YELLOW}Not reclaiming staged source {src_abs}: the table dir "
+            f"{dest_abs} lives inside it, so removing SRC would delete the "
+            f"freshly-written table. Data was staged into the storage root "
+            f"rather than an isolated staging dir; skipping reclaim (#346).{RESET}"
+        )
+        return False
+    if src_abs.startswith(dest_abs + os.sep):
+        return False
+
+    try:
+        shutil.rmtree(src_abs)
+        logger.info(
+            f"{GREEN}Reclaimed staged source {src_abs} after a verified, clean "
+            f"load — no duplicate copy left on the PVC (#346).{RESET}"
+        )
+        return True
+    except OSError as e:
+        logger.warning(
+            f"{YELLOW}Could not reclaim staged source {src_abs}: {e}. The load "
+            f"succeeded; the leftover staging copy is the pre-#346 status quo "
+            f"and can be removed manually.{RESET}"
+        )
+        return False
