@@ -243,3 +243,43 @@ def test_target_source_column_stripped_from_schema_under_case_drift():
     assert set(ing._table_schema) == {"feat"}
     # ...and from the sanitized schema shipped to the backend in meta_data.
     assert "price" not in ing.file_options["schema"]
+
+
+# ---- the meta_data payload (bugbot on #383) -------------------------------
+
+
+def test_meta_data_payload_strips_internal_bridges():
+    # ``schema`` (validator artifact — the canonical schema ships as the
+    # top-level arg) and ``column_descriptors`` (already merged onto the
+    # enriched schema's columns by _schema_payload) are ingestor-internal;
+    # neither may ship in meta_data. Everything else passes through.
+    ing = make_ingestor(
+        enriched=True,
+        label_column="y",
+        file_options={
+            "column_descriptors": {"a": {"unit": "years"}},
+            "target_size": [512, 512],
+            "attributes": {"color_mode": "RGB"},
+        },
+    )
+    # The label-stripped internal schema copy base.py maintains is present...
+    assert "schema" in ing.file_options
+
+    meta = ing._meta_data_payload()
+    assert "schema" not in meta
+    assert "column_descriptors" not in meta
+    # ...while genuine wire payload is untouched.
+    assert meta["target_size"] == [512, 512]
+    assert meta["attributes"] == {"color_mode": "RGB"}
+
+
+def test_descriptors_still_reach_enriched_schema_after_meta_data_strip():
+    # The strip must not starve _schema_payload: the uploader's unit/ordinal
+    # declarations still land on the enriched schema columns.
+    ing = make_ingestor(
+        enriched=True,
+        file_options={"column_descriptors": {"a": {"unit": "kg"}}},
+    )
+    enriched = ing._schema_payload({"a": "INT"})
+    assert enriched["a"]["unit"] == "kg"
+    assert "column_descriptors" not in ing._meta_data_payload()
