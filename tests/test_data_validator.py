@@ -8,10 +8,10 @@ import pytest
 
 from tracebloc_ingestor.validators.data_validator import DataValidator
 
-
 # ---------------------------------------------------------------------------
 # validate() top-level flow
 # ---------------------------------------------------------------------------
+
 
 def test_no_schema_passes_with_warning():
     result = DataValidator().validate(pd.DataFrame({"a": [1]}))
@@ -73,7 +73,7 @@ def test_loads_from_json(tmp_path):
 
     Surfaced by an end-to-end cluster ingestion: a 20-record JSON file with
     explicit schema {id INT, age INT, score FLOAT, active BOOL, label
-    VARCHAR(20)} failed with "Data Validator Validator failed: No data found
+    VARCHAR(20)} failed with "Data Validator failed: No data found
     to validate" before any record was read.
     """
     p = tmp_path / "d.json"
@@ -186,9 +186,7 @@ def test_loads_from_json_scalar_array_fails_not_silently_passes(tmp_path):
     """
     p = tmp_path / "scalars.json"
     p.write_text("[1, 2, 3]")
-    result = DataValidator(schema={"id": "INT", "label": "VARCHAR(8)"}).validate(
-        str(p)
-    )
+    result = DataValidator(schema={"id": "INT", "label": "VARCHAR(8)"}).validate(str(p))
     assert not result.is_valid
     assert "No data found" in result.errors[0]
 
@@ -199,9 +197,7 @@ def test_loads_from_json_mixed_array_keeps_only_objects(tmp_path):
     the dict records (bugbot #233)."""
     p = tmp_path / "mixed.json"
     p.write_text('[{"id": 1, "label": "A"}, 42, {"id": 2, "label": "B"}]')
-    result = DataValidator(schema={"id": "INT", "label": "VARCHAR(8)"}).validate(
-        str(p)
-    )
+    result = DataValidator(schema={"id": "INT", "label": "VARCHAR(8)"}).validate(str(p))
     assert result.is_valid, f"expected valid; errors={result.errors}"
     assert result.metadata["rows_checked"] == 2
 
@@ -218,13 +214,9 @@ def test_loads_from_json_jsonl_surfaces_clear_error(tmp_path):
     """
     p = tmp_path / "events.json"
     p.write_text(
-        '{"id":1,"label":"A"}\n'
-        '{"id":2,"label":"B"}\n'
-        '{"id":3,"label":"A"}\n'
+        '{"id":1,"label":"A"}\n' '{"id":2,"label":"B"}\n' '{"id":3,"label":"A"}\n'
     )
-    result = DataValidator(schema={"id": "INT", "label": "VARCHAR(8)"}).validate(
-        str(p)
-    )
+    result = DataValidator(schema={"id": "INT", "label": "VARCHAR(8)"}).validate(str(p))
     assert not result.is_valid
     err = result.errors[0]
     assert "JSONL" in err or "newline-delimited" in err
@@ -392,6 +384,7 @@ def test_dataframe_sparse_schema_field_still_passes():
 # INT / BIGINT
 # ---------------------------------------------------------------------------
 
+
 def test_int_valid():
     df = pd.DataFrame({"n": [1, 2, 3]})
     assert DataValidator(schema={"n": "INT"}).validate(df).is_valid
@@ -420,7 +413,10 @@ def test_bigint_delegates_to_int():
 # FLOAT / DOUBLE / DECIMAL
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("dtype", ["FLOAT", "DOUBLE", "DECIMAL(10,2)", "NUMERIC(8,3)", "NUMERIC"])
+
+@pytest.mark.parametrize(
+    "dtype", ["FLOAT", "DOUBLE", "DECIMAL(10,2)", "NUMERIC(8,3)", "NUMERIC"]
+)
 def test_float_family_valid(dtype):
     # NUMERIC is a MySQL alias for DECIMAL; #190 bugbot caught that the DDL
     # and ingestor type-cast layers accepted NUMERIC but the validator's
@@ -439,6 +435,7 @@ def test_float_non_numeric_fails():
 # ---------------------------------------------------------------------------
 # Missing values are NULL, not "non-numeric" (regression)
 # ---------------------------------------------------------------------------
+
 
 def test_int_with_missing_values_is_valid():
     # NaN/empty in an INT column is a missing value (stored as NULL), not a
@@ -479,6 +476,7 @@ def test_non_numeric_error_points_at_rows_without_leaking_values():
 # ---------------------------------------------------------------------------
 # Non-finite (inf) + realistic messy-data scenarios
 # ---------------------------------------------------------------------------
+
 
 def test_float_infinity_is_rejected():
     # inf survives pd.to_numeric (it is "numeric") but flows through the training
@@ -529,6 +527,7 @@ def test_scientific_notation_is_valid():
 # ---------------------------------------------------------------------------
 # VARCHAR / CHAR / TEXT
 # ---------------------------------------------------------------------------
+
 
 def test_varchar_valid():
     df = pd.DataFrame({"s": ["abc", "de"]})
@@ -614,8 +613,10 @@ def test_issue_188_full_repro_csv(make_csv):
     )
     result = DataValidator(
         schema={
-            "id": "INT", "feat": "FLOAT",
-            "code": "VARCHAR(10)", "label": "VARCHAR(8)",
+            "id": "INT",
+            "feat": "FLOAT",
+            "code": "VARCHAR(10)",
+            "label": "VARCHAR(8)",
         }
     ).validate(str(path))
     assert result.is_valid, f"expected valid; errors={result.errors}"
@@ -626,7 +627,7 @@ def test_issue_188_numeric_scalars_pass_string_family(dtype):
     # All three string-family validators share the same astype(str)!=value
     # over-rejection; the fix is applied uniformly.
     df = pd.DataFrame({"s": ["abc", 100, 200]})  # ints mixed in (CHAR case
-                                                 # is special — see below)
+    # is special — see below)
     if "CHAR(" in dtype:
         # CHAR enforces fixed length, so use values that all stringify to 3.
         df = pd.DataFrame({"s": ["abc", 100, 200]})
@@ -649,6 +650,7 @@ def test_text_valid():
 # ---------------------------------------------------------------------------
 # BOOLEAN across dtypes
 # ---------------------------------------------------------------------------
+
 
 def test_boolean_bool_dtype_valid():
     df = pd.DataFrame({"b": [True, False]})
@@ -698,6 +700,7 @@ def test_boolean_float_invalid_fails():
 # DATE / DATETIME / TIMESTAMP / TIME
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.parametrize("dtype", ["DATE", "DATETIME", "TIMESTAMP", "TIME"])
 def test_date_family_valid(dtype):
     df = pd.DataFrame({"d": ["2024-01-01", "2024-02-02"]})
@@ -737,6 +740,7 @@ def test_date_still_flags_real_bad_value_with_nulls_present():
 # type parsing + auto-detect helper
 # ---------------------------------------------------------------------------
 
+
 def test_constraints_are_stripped_from_type():
     df = pd.DataFrame({"n": [1, 2]})
     # "INT NOT NULL" should resolve to the INT validator.
@@ -760,6 +764,7 @@ def test_detect_column_type(series, expected):
 # ---------------------------------------------------------------------------
 # Streaming / large-file validation (bounded memory, full coverage)
 # ---------------------------------------------------------------------------
+
 
 def test_validate_csv_streams_and_catches_late_chunk(tmp_path):
     # A bad value PAST the first chunk must still be caught — the validator

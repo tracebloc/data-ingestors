@@ -552,7 +552,7 @@ class BaseIngestor(ABC):
                 if not result.is_valid:
                     all_valid = False
                     validation_errors.append(
-                        f"{BOLD}{validator.name} Validator failed: {RESET} \n {RED}"
+                        f"{BOLD}{validator.name} failed: {RESET} \n {RED}"
                     )
                     validation_errors.extend(result.errors)
                     validation_errors.append(f"{RESET}")
@@ -563,12 +563,13 @@ class BaseIngestor(ABC):
                         f"{YELLOW}Validation warning - {validator.name}: {warning}{RESET}"
                     )
                 if result.is_valid:
-                    print(
-                        f"{GREEN}{validator.name} Validator successfully passed{RESET}"
-                    )
+                    # validator.name already ends in "Validator" (e.g. "Data
+                    # Validator"), so don't append the word again — that produced
+                    # "Data Validator Validator successfully passed".
+                    print(f"{GREEN}{validator.name} successfully passed{RESET}")
             except Exception as e:
                 all_valid = False
-                validation_errors.append(f"Validator {validator.name} error: {str(e)}")
+                validation_errors.append(f"{validator.name} error: {str(e)}")
 
         if not all_valid:
             error_summary = "\n".join(validation_errors)
@@ -864,9 +865,7 @@ class BaseIngestor(ABC):
             and not self.unique_id_column
             and self._table_salt is None
         ):
-            self._table_salt = self.database.get_or_create_table_salt(
-                self.table_name
-            )
+            self._table_salt = self.database.get_or_create_table_salt(self.table_name)
 
         if self.table is None:
             # Grouped categories get a composite (group, time) secondary
@@ -1130,8 +1129,7 @@ class BaseIngestor(ABC):
                 elif not label_counts:
                     counts_helper = (
                         "get_label_sequence_counts"
-                        if grouping is not None
-                        and grouping.count_unit == "sequences"
+                        if grouping is not None and grouping.count_unit == "sequences"
                         else "get_label_counts"
                     )
                     raise RuntimeError(
