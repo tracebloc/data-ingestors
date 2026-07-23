@@ -163,11 +163,18 @@ def backfill_datasets(
                 database, api_client, ingestor_id, skip_if_current=skip_if_current
             )
         except Exception as exc:  # noqa: BLE001 — one bad table must not abort the sweep
-            logger.exception(
-                "Metadata backfill failed for ingestor_id=%s", ingestor_id
+            # Record/log the exception TYPE only — never str(exc) or a traceback.
+            # A SQL driver error or backend response body can embed customer cell
+            # values (e.g. categorical vocab), and this runs in a Helm-hook Job
+            # whose output lands in install logs. (bugbot)
+            error_type = type(exc).__name__
+            logger.error(
+                "Metadata backfill failed for ingestor_id=%s (%s)",
+                ingestor_id,
+                error_type,
             )
             result = BackfillResult(
-                ingestor_id, status=STATUS_ERROR, error=str(exc)[:500]
+                ingestor_id, status=STATUS_ERROR, error=error_type
             )
         results.append(result)
         _log_result(result)

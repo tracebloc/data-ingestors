@@ -356,8 +356,13 @@ class APIClient:
             )
             return None
         if response.status_code >= 400:
+            # Status only in the message — NOT response.text. A backend error
+            # body can echo the dataset's metadata (categorical vocab = customer
+            # cell values), and this exception surfaces in the backfill runner's
+            # install-log output. The response object is attached for a caller
+            # that needs to inspect it deliberately. (bugbot)
             raise requests.exceptions.HTTPError(
-                f"HTTP {response.status_code}: {response.text}", response=response
+                f"HTTP {response.status_code}", response=response
             )
         return self._parse_json(response, required=True)
 
@@ -401,8 +406,12 @@ class APIClient:
             timeout=API_TIMEOUT,
         )
         if response.status_code >= 400:
+            # Status only — NOT response.text (see get_dataset_metadata): the
+            # POST body carries this table's categorical vocab, so a backend
+            # error echoing it back would embed customer cell values in the
+            # runner's install-log output. (bugbot)
             raise requests.exceptions.HTTPError(
-                f"HTTP {response.status_code}: {response.text}", response=response
+                f"HTTP {response.status_code}", response=response
             )
         result = self._parse_json(response, required=True)
         logger.info(

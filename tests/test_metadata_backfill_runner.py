@@ -176,5 +176,6 @@ def test_backfill_datasets_continues_past_a_failing_dataset():
     with patch.object(runner, "build_dataset_metadata", return_value=_PAYLOAD):
         results = backfill_datasets(MagicMock(), api, ["a", "b"])
     assert results[0].status == STATUS_ERROR
-    assert results[0].error == "boom"
+    # Exception TYPE only — never the raw message (may embed customer cell values).
+    assert results[0].error == "RuntimeError"
     assert results[1].status == STATUS_OK  # sweep continued
