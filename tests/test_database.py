@@ -1004,3 +1004,28 @@ def test_create_table_rejects_reserved_bookkeeping_tables(reserved):
     db = Database.__new__(Database)
     with pytest.raises(ValueError, match="reserved"):
         db.create_table(reserved, {"feature_0": "FLOAT"})
+
+
+# ---------------------------------------------------------------------------
+# Run journal: enumeration for the metadata backfill sweep
+# ---------------------------------------------------------------------------
+
+
+def test_list_registered_runs_returns_registered_only(db, mock_engine_factory):
+    """The backfill sweep enumerates only REGISTERED runs, one row each, mapped
+    to {ingestor_id, table_name, task}. A NULL task (pre-task-column run) is
+    preserved as None."""
+    _, _, conn = mock_engine_factory
+    conn.execute.return_value.fetchall.return_value = [
+        ("run-a", "ta", "tabular_classification"),
+        ("run-b", "tb", None),
+    ]
+    result = db.list_registered_runs()
+    assert result == [
+        {"ingestor_id": "run-a", "table_name": "ta", "task": "tabular_classification"},
+        {"ingestor_id": "run-b", "table_name": "tb", "task": None},
+    ]
+    select = next(
+        s for s in _executed_sql(conn) if "SELECT ingestor_id, table_name, task" in s
+    )
+    assert "WHERE registered = 1" in select

@@ -862,6 +862,34 @@ class Database:
             )
         return reclaimed
 
+    def list_registered_runs(self) -> List[Dict[str, str]]:
+        """Return the REGISTERED ingest runs journalled on this client, one per
+        dataset: ``[{"ingestor_id", "table_name", "task"}, ...]``.
+
+        The run journal (``record_ingest_started`` / ``mark_ingest_registered``)
+        is the authoritative local list of datasets this edge has ingested and
+        successfully registered with the backend — exactly the set the
+        pre-cutover metadata backfill sweeps. Only ``registered = 1`` rows are
+        returned, so a started-but-never-registered (dead) run is never
+        backfilled. ``task`` is the recorded category (may be NULL on runs
+        journalled before the column existed); the backfill runner re-reads the
+        authoritative category from the backend anyway.
+        """
+        with self.engine.connect() as connection:
+            self._ensure_runs_table(connection)
+            rows = _execute_with_retry(
+                connection,
+                text(
+                    f"SELECT ingestor_id, table_name, task "
+                    f"FROM `{self.RUNS_TABLE}` WHERE registered = 1 "
+                    f"ORDER BY started_at"
+                ),
+            ).fetchall()
+        return [
+            {"ingestor_id": iid, "table_name": tname, "task": task}
+            for (iid, tname, task) in rows
+        ]
+
     def get_label_counts(self, table_name: str, ingestor_id: str) -> Dict[str, int]:
         """
         Return ``{label: row_count}`` for every label inserted by *ingestor_id*.

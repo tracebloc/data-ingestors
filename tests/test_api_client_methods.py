@@ -263,3 +263,85 @@ def test_refresh_token_false_when_reauth_raises():
     client.token = "old_token"
     with patch.object(client, "authenticate", side_effect=RuntimeError("auth down")):
         assert client._refresh_token() is False
+
+
+# ---------------------------------------------------------------------------
+# get_dataset_metadata() — read-by-ingestor_id (backend#1198)
+# ---------------------------------------------------------------------------
+
+
+def test_get_dataset_metadata_success():
+    client = _client()
+    body = {"table_name": "tb", "category": "tabular_classification", "meta_data": {}}
+    with patch.object(client.session, "get", return_value=_resp(200, body)):
+        result = client.get_dataset_metadata("ing-1")
+    assert result == body
+
+
+def test_get_dataset_metadata_404_returns_none():
+    """A 404 (no dataset for this ingestor_id owned by this edge) is a skip
+    signal for the sweep, not an error — return None rather than raise."""
+    client = _client()
+    with patch.object(client.session, "get", return_value=_resp(404, text="nope")):
+        assert client.get_dataset_metadata("missing") is None
+
+
+def test_get_dataset_metadata_http_error_raises():
+    client = _client()
+    with patch.object(client.session, "get", return_value=_resp(500, text="boom")):
+        with pytest.raises(requests.exceptions.RequestException):
+            client.get_dataset_metadata("ing-1")
+
+
+def test_get_dataset_metadata_local_mode():
+    client = _client(EDGE_ENV="local")
+    with patch.object(client.session, "get") as get:
+        assert client.get_dataset_metadata("ing-1") is None
+    get.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# send_metadata_backfill() — upsert recomputed metadata (backend#1166/#1198)
+# ---------------------------------------------------------------------------
+
+
+def test_send_metadata_backfill_success():
+    client = _client()
+    body = {"table_name": "tb", "created": True, "competitions_refolded": 2}
+    with patch.object(client.session, "post", return_value=_resp(201, body)):
+        result = client.send_metadata_backfill("tb", {"x": {"dtype": "int"}}, {})
+    assert result == body
+
+
+def test_send_metadata_backfill_http_error_raises():
+    client = _client()
+    with patch.object(client.session, "post", return_value=_resp(404, text="no table")):
+        with pytest.raises(requests.exceptions.RequestException):
+            client.send_metadata_backfill("tb", {"x": {"dtype": "int"}}, {})
+
+
+def test_send_metadata_backfill_local_mode():
+    client = _client(EDGE_ENV="local")
+    with patch.object(client.session, "post") as post:
+        result = client.send_metadata_backfill("tb", {"x": {"dtype": "int"}}, {})
+    post.assert_not_called()
+    assert result["table_name"] == "tb"
+
+
+def test_send_metadata_backfill_payload_shape():
+    import json as _json
+
+    client = _client()
+    captured = {}
+
+    def _capture(url, **kwargs):
+        captured["url"] = url
+        captured["data"] = kwargs.get("data")
+        return _resp(201, {"table_name": "tb", "created": False, "competitions_refolded": 0})
+
+    with patch.object(client.session, "post", side_effect=_capture):
+        client.send_metadata_backfill("tb", {"x": {"dtype": "int"}}, {"attributes": {}})
+
+    assert captured["url"].endswith("/global_meta/metadata_backfill/tb/")
+    sent = _json.loads(captured["data"])
+    assert sent == {"schema": {"x": {"dtype": "int"}}, "meta_data": {"attributes": {}}}

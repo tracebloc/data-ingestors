@@ -322,6 +322,96 @@ class APIClient:
                 logger.error(f"{RED}Error sending ingest summary: {str(e)[:500]}{RESET}")
             raise
 
+    def get_dataset_metadata(self, ingestor_id: str) -> Optional[Dict[str, Any]]:
+        """Fetch a dataset's backend record by ``ingestor_id`` (backend#1198).
+
+        Returns the core fields — ``table_name`` / ``category`` / ``data_format``
+        / ``intent`` / ``is_competition`` / ``source_dataset_ids`` — plus the
+        currently-stored ``schema`` / ``meta_data``. Backs the pre-cutover
+        backfill runner: ``category`` and ``data_format`` drive the recompute and
+        are not recoverable from the table alone, so the runner reads them here
+        first.
+
+        Returns ``None`` when the backend has no dataset for this ``ingestor_id``
+        owned by this edge (404) so a sweep can skip it rather than crash.
+
+        Raises:
+            requests.exceptions.HTTPError: on any non-404 error status.
+        """
+        if self.config.EDGE_ENV == "local":
+            logger.info(
+                f"Mock: would fetch dataset metadata for ingestor_id={ingestor_id}"
+            )
+            return None
+
+        url = (
+            f"{self.config.API_ENDPOINT}"
+            f"/global_meta/metadata_backfill/by-ingestor/{ingestor_id}/"
+        )
+        response = self._authed_request("GET", url, timeout=API_TIMEOUT)
+        if response.status_code == 404:
+            logger.warning(
+                f"{YELLOW}No backend dataset for ingestor_id={ingestor_id} "
+                f"owned by this edge (404); skipping.{RESET}"
+            )
+            return None
+        if response.status_code >= 400:
+            raise requests.exceptions.HTTPError(
+                f"HTTP {response.status_code}: {response.text}", response=response
+            )
+        return self._parse_json(response, required=True)
+
+    def send_metadata_backfill(
+        self,
+        table_name: str,
+        schema: Dict[str, Any],
+        meta_data: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Upsert recomputed ``{schema, meta_data}`` for a PRE-EXISTING table via
+        the metadata-backfill endpoint (backend#1166/#1198).
+
+        Metadata-only: never creates a dataset (the table must already exist
+        backend-side — 404 otherwise). The POST also propagates the refresh into
+        any competition built from the table (re-fold). Idempotent, so a re-run
+        is a safe overwrite.
+
+        Returns:
+            The backend body — ``{"table_name", "created", "competitions_refolded"}``.
+
+        Raises:
+            requests.exceptions.HTTPError: If the API call fails after retries.
+        """
+        if self.config.EDGE_ENV == "local":
+            logger.info(
+                f"Mock: would backfill metadata for {table_name} "
+                f"({len(schema)} schema column(s))"
+            )
+            return {
+                "table_name": table_name,
+                "created": False,
+                "competitions_refolded": 0,
+            }
+
+        payload = json.dumps({"schema": schema, "meta_data": meta_data or {}})
+        response = self._authed_request(
+            "POST",
+            f"{self.config.API_ENDPOINT}/global_meta/metadata_backfill/{table_name}/",
+            extra_headers={"Content-Type": "application/json"},
+            data=payload,
+            timeout=API_TIMEOUT,
+        )
+        if response.status_code >= 400:
+            raise requests.exceptions.HTTPError(
+                f"HTTP {response.status_code}: {response.text}", response=response
+            )
+        result = self._parse_json(response, required=True)
+        logger.info(
+            f"{GREEN}Backfilled metadata for {table_name}: "
+            f"created={result.get('created')}, "
+            f"competitions_refolded={result.get('competitions_refolded')}{RESET}"
+        )
+        return result
+
     def __del__(self):
         """Cleanup when the client is destroyed"""
         if hasattr(self, "session"):
