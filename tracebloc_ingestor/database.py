@@ -925,14 +925,29 @@ class Database:
             # comes from information_schema on our own DB, and backticks are
             # escaped, so it is not attacker-controlled free text.
             safe_table = table_name.replace("`", "``")
-            with self.engine.connect() as connection:
-                id_rows = _execute_with_retry(
-                    connection,
-                    text(
-                        f"SELECT DISTINCT ingestor_id FROM `{safe_table}` "
-                        f"WHERE ingestor_id IS NOT NULL AND ingestor_id <> ''"
-                    ),
-                ).fetchall()
+            # Per-table guard: a single unreadable table (timeout on a large
+            # unindexed scan, a table dropped mid-sweep, a permissions gap) must
+            # NOT abort discovery — otherwise every other table is skipped and the
+            # sweep's "one bad table can't stop the rollout" guarantee is lost.
+            # Log the table name + exception TYPE only (never str(exc): a driver
+            # message can embed cell values, and this feeds install logs).
+            try:
+                with self.engine.connect() as connection:
+                    id_rows = _execute_with_retry(
+                        connection,
+                        text(
+                            f"SELECT DISTINCT ingestor_id FROM `{safe_table}` "
+                            f"WHERE ingestor_id IS NOT NULL AND ingestor_id <> ''"
+                        ),
+                    ).fetchall()
+            except Exception as exc:  # noqa: BLE001 — skip the table, continue the sweep
+                logger.warning(
+                    "list_dataset_ingestor_ids: skipping table %s — could not read "
+                    "ingestor_ids (%s)",
+                    table_name,
+                    type(exc).__name__,
+                )
+                continue
             for (ingestor_id,) in id_rows:
                 pairs.append({"ingestor_id": ingestor_id, "table_name": table_name})
         return pairs

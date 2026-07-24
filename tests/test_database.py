@@ -1066,3 +1066,28 @@ def test_list_dataset_ingestor_ids_scans_tables_excluding_framework(
     assert not any("`tracebloc_ingest_runs`" in s for s in executed)
     # Per-dataset-table id scans excluded null/empty ids.
     assert any("FROM `ds_one`" in s and "IS NOT NULL" in s for s in executed)
+
+
+def test_list_dataset_ingestor_ids_skips_a_table_that_errors(db, mock_engine_factory):
+    """A single unreadable table (scan timeout / dropped mid-sweep / perms) is
+    skipped and discovery continues — the sweep's 'one bad table can't abort the
+    rollout' guarantee must hold at enumeration time too. (bugbot)"""
+    _, _, conn = mock_engine_factory
+
+    def _result(rows):
+        r = MagicMock()
+        r.fetchall.return_value = rows
+        return r
+
+    conn.execute.side_effect = [
+        _result([("ds_one",), ("ds_bad",), ("ds_two",)]),  # information_schema
+        _result([("i1",)]),  # ds_one
+        RuntimeError("scan timeout"),  # ds_bad — per-table query fails
+        _result([("i2",)]),  # ds_two still scanned
+    ]
+
+    result = db.list_dataset_ingestor_ids()
+    assert result == [
+        {"ingestor_id": "i1", "table_name": "ds_one"},
+        {"ingestor_id": "i2", "table_name": "ds_two"},
+    ]
