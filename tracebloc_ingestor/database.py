@@ -890,6 +890,53 @@ class Database:
             for (iid, tname, task) in rows
         ]
 
+    def list_dataset_ingestor_ids(self) -> List[Dict[str, str]]:
+        """Discover every dataset table directly and return its distinct
+        ``ingestor_id``\\ s: ``[{"ingestor_id", "table_name"}, ...]``.
+
+        This is the enumeration the metadata backfill sweeps by default, in
+        preference to :meth:`list_registered_runs`. The pre-cutover backlog the
+        backfill exists for was ingested BEFORE the run journal existed, so those
+        datasets have no journal row — but their tables still carry the framework
+        ``ingestor_id`` column. Scanning for that column finds them; the journal
+        would miss them entirely.
+
+        A dataset table is any table in this schema with an ``ingestor_id``
+        column, minus the framework bookkeeping tables (the run journal — which
+        also has the column — and the salt store). Only non-null, non-empty
+        ``ingestor_id`` values are returned; a table appended by several runs
+        yields one pair per distinct id (the caller backfills the table once).
+        """
+        framework_tables = {self.SALT_TABLE, self.RUNS_TABLE}
+        with self.engine.connect() as connection:
+            table_rows = _execute_with_retry(
+                connection,
+                text(
+                    "SELECT DISTINCT table_name FROM information_schema.columns "
+                    "WHERE table_schema = DATABASE() AND column_name = 'ingestor_id'"
+                ),
+            ).fetchall()
+
+        pairs: List[Dict[str, str]] = []
+        for (table_name,) in table_rows:
+            if table_name in framework_tables:
+                continue
+            # Identifier interpolated (bound params can't name a table); the name
+            # comes from information_schema on our own DB, and backticks are
+            # escaped, so it is not attacker-controlled free text.
+            safe_table = table_name.replace("`", "``")
+            with self.engine.connect() as connection:
+                id_rows = _execute_with_retry(
+                    connection,
+                    text(
+                        f"SELECT DISTINCT ingestor_id FROM `{safe_table}` "
+                        f"WHERE ingestor_id IS NOT NULL AND ingestor_id <> ''"
+                    ),
+                ).fetchall()
+            for (ingestor_id,) in id_rows:
+                pairs.append({"ingestor_id": ingestor_id, "table_name": table_name})
+        return pairs
+
     def get_label_counts(self, table_name: str, ingestor_id: str) -> Dict[str, int]:
         """
         Return ``{label: row_count}`` for every label inserted by *ingestor_id*.
