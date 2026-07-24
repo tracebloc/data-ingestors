@@ -172,14 +172,24 @@ class ImageResolutionValidator(BaseValidator):
                     metadata={"files_checked": 0},
                 )
 
-            # Auto-detect resolution from first image if not specified
+            # Auto-detect resolution from the first *readable* image if not
+            # specified. Using image_files[0] blindly made auto-detection fail
+            # whenever the first file in (arbitrary) glob order happened to be
+            # corrupt/unreadable — which masked the real floor/uniformity
+            # verdict behind "auto-detection failed" and made the outcome
+            # depend on filesystem ordering. Skip unreadable files and detect
+            # from the first one that yields a resolution; if none do, leave
+            # expected_resolution unset and let _validate_image_resolutions
+            # report the honest "auto-detection failed".
             if auto_detect_resolution and not self.expected_resolution:
-                first_image_resolution = self._get_image_resolution(image_files[0])
-                if first_image_resolution:
-                    self.expected_resolution = first_image_resolution
-                    logger.info(
-                        f"Auto-detected expected resolution: {self.expected_resolution}"
-                    )
+                for candidate in image_files:
+                    candidate_resolution = self._get_image_resolution(candidate)
+                    if candidate_resolution:
+                        self.expected_resolution = candidate_resolution
+                        logger.info(
+                            f"Auto-detected expected resolution: {self.expected_resolution}"
+                        )
+                        break
 
             # Validate image resolutions
             return self._validate_image_resolutions(image_files)
