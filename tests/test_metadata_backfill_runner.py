@@ -147,18 +147,68 @@ def test_backfill_dataset_error_when_record_missing_category():
 # ---------------------------------------------------------------------------
 
 
-def test_backfill_datasets_enumerates_registered_runs_when_ids_omitted():
+def test_backfill_datasets_discovers_tables_when_ids_omitted():
+    # Default enumeration scans dataset tables (covers the pre-cutover backlog),
+    # NOT the runs journal.
     db = MagicMock()
-    db.list_registered_runs.return_value = [
-        {"ingestor_id": "a", "table_name": "ta", "task": "tabular_classification"},
-        {"ingestor_id": "b", "table_name": "tb", "task": "tabular_classification"},
+    db.list_dataset_ingestor_ids.return_value = [
+        {"ingestor_id": "a", "table_name": "ta"},
+        {"ingestor_id": "b", "table_name": "tb"},
     ]
-    api = _api(record=dict(_PLAIN_RECORD))
+    api = MagicMock()
+    api.get_dataset_metadata.side_effect = lambda iid: dict(
+        _PLAIN_RECORD, ingestor_id=iid, table_name={"a": "ta", "b": "tb"}[iid]
+    )
+    api.send_metadata_backfill.side_effect = lambda table, schema, meta=None: {
+        "table_name": table,
+        "created": True,
+        "competitions_refolded": 0,
+    }
     with patch.object(runner, "build_dataset_metadata", return_value=_PAYLOAD):
         results = backfill_datasets(db, api)
-    db.list_registered_runs.assert_called_once()
+    db.list_dataset_ingestor_ids.assert_called_once()
+    db.list_registered_runs.assert_not_called()
     assert [r.ingestor_id for r in results] == ["a", "b"]
     assert all(r.status == STATUS_OK for r in results)
+
+
+def test_backfill_datasets_backfills_a_multi_id_table_once():
+    # A table appended by several ingest runs has multiple ingestor_ids; its
+    # metadata is table-level, so it is backfilled ONCE and the sibling id is
+    # skipped (before any backend call).
+    db = MagicMock()
+    db.list_dataset_ingestor_ids.return_value = [
+        {"ingestor_id": "run1", "table_name": "shared"},
+        {"ingestor_id": "run2", "table_name": "shared"},
+    ]
+    api = _api(record=dict(_PLAIN_RECORD, table_name="shared"))
+    with patch.object(runner, "build_dataset_metadata", return_value=_PAYLOAD):
+        results = backfill_datasets(db, api)
+    assert len(results) == 1  # second id skipped by per-table dedup
+    assert results[0].table_name == "shared"
+    api.send_metadata_backfill.assert_called_once()
+
+
+def test_backfill_datasets_retries_sibling_id_when_first_not_found():
+    # If a table's first ingestor_id 404s, a sibling id is still tried (the table
+    # isn't marked done on not_found).
+    db = MagicMock()
+    db.list_dataset_ingestor_ids.return_value = [
+        {"ingestor_id": "missing", "table_name": "shared"},
+        {"ingestor_id": "good", "table_name": "shared"},
+    ]
+    api = MagicMock()
+    api.get_dataset_metadata.side_effect = lambda iid: (
+        None if iid == "missing" else dict(_PLAIN_RECORD, table_name="shared")
+    )
+    api.send_metadata_backfill.return_value = {
+        "table_name": "shared",
+        "created": True,
+        "competitions_refolded": 0,
+    }
+    with patch.object(runner, "build_dataset_metadata", return_value=_PAYLOAD):
+        results = backfill_datasets(db, api)
+    assert [r.status for r in results] == [STATUS_NOT_FOUND, STATUS_OK]
 
 
 def test_backfill_datasets_continues_past_a_failing_dataset():

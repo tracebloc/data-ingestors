@@ -143,21 +143,46 @@ def backfill_datasets(
     *,
     skip_if_current: bool = True,
 ) -> List[BackfillResult]:
-    """Backfill every dataset in ``ingestor_ids``, or — when ``None`` — every
-    REGISTERED run in this client's ingest journal.
+    """Backfill datasets. With an explicit ``ingestor_ids`` list, one attempt per
+    id; otherwise **discover every dataset table** in the client DB and backfill
+    each — see :meth:`Database.list_dataset_ingestor_ids`.
 
-    Per-dataset guarded: an unexpected failure on one dataset is logged and
-    recorded as an ``error`` result, and the sweep continues to the next (a
-    single bad table can't abort the rollout). Returns one
-    :class:`BackfillResult` per dataset.
+    Table discovery (not the runs journal) is the default because the whole point
+    of the backfill is the PRE-CUTOVER backlog — datasets ingested before the
+    runs journal existed, so they have no journal entry — yet their tables still
+    carry the framework ``ingestor_id`` column. Enumerating tables therefore
+    covers both journalled and pre-journal datasets; the journal is a strict
+    subset.
+
+    A table can carry several ingestor_ids (multiple ingest runs into one table);
+    its metadata is table-level, so a table is backfilled once — the first of its
+    ids the backend resolves wins and the rest are skipped.
+
+    Per-dataset guarded: an unexpected failure on one dataset is logged (type
+    only) and recorded as an ``error`` result; the sweep continues (a single bad
+    table can't abort the rollout). Returns one :class:`BackfillResult` per
+    attempt made.
     """
-    if ingestor_ids is None:
-        ingestor_ids = [run["ingestor_id"] for run in database.list_registered_runs()]
+    if ingestor_ids is not None:
+        # Caller-supplied ids: one attempt each; the table is learned from the
+        # backend GET inside backfill_dataset.
+        items = [(ingestor_id, None) for ingestor_id in ingestor_ids]
+    else:
+        items = [
+            (row["ingestor_id"], row["table_name"])
+            for row in database.list_dataset_ingestor_ids()
+        ]
 
-    logger.info("Metadata backfill: %d dataset(s) to process.", len(ingestor_ids))
+    logger.info("Metadata backfill: %d ingestor_id(s) to process.", len(items))
 
     results: List[BackfillResult] = []
-    for ingestor_id in ingestor_ids:
+    done_tables: set = set()
+    for ingestor_id, table_name in items:
+        # A table's metadata is backfilled once. Skip the remaining ids of a
+        # table already resolved — checked by the ENUMERATED name (no backend
+        # call) so multi-run tables don't re-POST.
+        if table_name is not None and table_name in done_tables:
+            continue
         try:
             result = backfill_dataset(
                 database, api_client, ingestor_id, skip_if_current=skip_if_current
@@ -178,6 +203,15 @@ def backfill_datasets(
             )
         results.append(result)
         _log_result(result)
+        # Mark the table done only on a DEFINITIVE backend resolution (backfilled,
+        # already-current, or a competition we intentionally skip). not_found /
+        # error leave it open so a sibling ingestor_id can still resolve it.
+        if (
+            result.status
+            in (STATUS_OK, STATUS_SKIPPED_CURRENT, STATUS_SKIPPED_COMPETITION)
+            and result.table_name
+        ):
+            done_tables.add(result.table_name)
 
     _log_summary(results)
     return results
