@@ -196,6 +196,37 @@ def test_too_small_result_still_reports_corrupt_files(clean_env, images_dir):
     assert any("broken.jpg" in f for f in result.metadata["invalid_files"])
 
 
+def test_floor_wins_when_corrupt_file_is_first(clean_env, images_dir, monkeypatch):
+    """Order-independence guard: auto-detection must skip an unreadable first
+    file and detect from the first *readable* image. Before the fix, when the
+    corrupt file happened to come first in glob order, auto-detection gave up
+    and the result was 'auto-detection failed' instead of the floor verdict —
+    so the outcome depended on filesystem ordering (green on macOS, red on the
+    Linux CI). This forces the corrupt-first order explicitly."""
+    src, add = images_dir
+    add("tiny.jpg", (8, 8))
+    (src / "images" / "broken.jpg").write_bytes(b"not a real jpeg")
+    clean_env.setenv("SRC_PATH", str(src))
+
+    validator = ImageResolutionValidator()
+    real_get_files = validator._get_image_files
+    # Deterministically place the corrupt file first, whatever glob returns.
+    monkeypatch.setattr(
+        validator,
+        "_get_image_files",
+        lambda *a, **k: sorted(
+            real_get_files(*a, **k),
+            key=lambda p: 0 if p.name == "broken.jpg" else 1,
+        ),
+    )
+
+    result = validator.validate(None)
+    assert not result.is_valid
+    assert "below the minimum size" in result.errors[0]
+    assert "tiny.jpg" in result.errors[0]
+    assert any("broken.jpg" in f for f in result.metadata["invalid_files"])
+
+
 # --- _meets_min_size unit ----------------------------------------------------
 
 
