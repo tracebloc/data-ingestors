@@ -97,9 +97,13 @@ gh run watch --repo tracebloc/data-ingestors \
 
 If the smoke probe inside that workflow fails, the package will not be uploaded. Fix the regression and reopen a new sync PR — do **not** force the upload.
 
-## 5. Tag the release
+## 5. Tag the release (automatic)
 
-After the master publish is green:
+**This step now happens on its own.** Once the step-4 master publish is green, `auto-release-on-master.yml` (chained on `publish-master.yml` via `workflow_run`) reads the single-sourced `__version__`, and — if the `vX.Y.Z` tag doesn't already exist — creates and pushes it on the published master commit, then dispatches `release-image.yml`. So a normal release needs no manual tag: merge the sync PR, watch the master publish go green, and the image + GitHub Release follow automatically.
+
+It's idempotent — if `vX.Y.Z` already exists (a re-run, or a version someone pre-tagged out of band) it's a no-op; the workflow never moves or re-cuts an existing tag.
+
+**Manual fallback.** If the automation is disabled, or you're re-cutting an image for an existing tag, tag by hand after the master publish is green:
 
 ```bash
 git checkout master && git pull --ff-only
@@ -107,7 +111,9 @@ git tag -a v${VERSION} -m "v${VERSION}"
 git push origin v${VERSION}
 ```
 
-That tag push triggers `release-image.yml`, which:
+> **Don't tag from `develop`.** The tag must sit on the master commit that PyPI published, or the signed image's pip-reported version leads the PyPI package until the sync lands (v0.7.6–v0.7.8 were tagged off develop this way). The automation always tags the published master commit; hand-tagging should too.
+
+Either path triggers `release-image.yml`, which:
 
 1. builds the image,
 2. runs the digest-level smoke probes (`_load_schema()` and a bare `tracebloc-ingest` invocation via `--entrypoint`),
