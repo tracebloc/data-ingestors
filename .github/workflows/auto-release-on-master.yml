@@ -1,0 +1,143 @@
+# Close the release loop: tag + image release, automatically, after a
+# develop→master sync publishes the PyPI package.
+#
+# Flow:
+#   merge sync PR → master
+#     → publish-master.yml  (builds sdist/wheel, runs the schema smoke
+#       probe, uploads to PyPI)
+#         → THIS workflow    (only if that publish succeeded)
+#             → tag vX.Y.Z from the single-sourced __version__
+#             → dispatch release-image.yml → signed image + GitHub Release
+#
+# Design notes:
+#
+#   * Chained on `publish-master` via `workflow_run`, not on `push: master`,
+#     so the image release only cuts for a build that actually published
+#     cleanly. publish-master only succeeds if the sdist installs and
+#     schema/ingest.v1.json is present (the v0.3.0-rc1 regression class), so
+#     a packaging break never reaches the image/release step. The PR-level
+#     checks (fr-gate, pii, pytest, e2e) already had to pass for the sync PR
+#     to merge under branch protection — by the time code is on master, the
+#     checks have passed.
+#
+#   * Idempotent on the *artifact*, not just the tag. The tag is pushed
+#     before release-image.yml is dispatched, so "tag exists" alone is not
+#     "release done": a run that pushed the tag but died before/at the
+#     dispatch would leave the tag with no signed image or GitHub Release,
+#     and a naive tag-only skip would exit 0 on re-run and never build it.
+#     So we exit 0 early only when the tag exists AND its GitHub Release
+#     resolves; if the tag exists but the Release is missing, we re-dispatch
+#     release-image.yml against the existing tag (release-image is itself
+#     tag-idempotent — it edits or creates the Release and re-signs the same
+#     digest). We never move or re-cut an existing tag, only create a
+#     missing one.
+#
+#   * We push the tag AND explicitly dispatch release-image.yml, rather than
+#     relying on the tag-push event to trigger it. A tag pushed with the
+#     default GITHUB_TOKEN does NOT trigger another workflow (GitHub's
+#     recursion guard). `workflow_dispatch` and `repository_dispatch` are the
+#     two documented exceptions, so dispatching works under GITHUB_TOKEN with
+#     no PAT. release-image.yml's workflow_dispatch reads `inputs.ref`, which
+#     must already exist on origin — hence tag first, then dispatch.
+#
+# Manual `git push` of a tag and a manual `workflow_dispatch` on
+# release-image.yml both still work as fallbacks; this only automates the
+# common path. Takes effect once it lives on the default branch (master) —
+# workflow_run workflows are read from the default branch.
+
+name: Auto-release on master
+
+on:
+  workflow_run:
+    workflows: ['Publish Master Package to GitHub Packages']
+    types: [completed]
+
+permissions:
+  contents: write # create + push the tag
+  actions: write # dispatch release-image.yml
+
+concurrency:
+  group: auto-release-on-master
+  cancel-in-progress: false
+
+jobs:
+  tag-and-release:
+    # Only after a *successful* master publish. head_branch guards against a
+    # publish run that somehow fired for a non-master ref.
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'master'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout the published master commit
+        uses: actions/checkout@v4
+        with:
+          # Pin to the exact commit publish-master built from, not master's
+          # tip — so the tag lands on the released code even if master moved.
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+
+      - name: Read single-sourced version
+        id: ver
+        run: |
+          set -euo pipefail
+          # Same literal setup.py parses (RELEASING.md: version is
+          # single-sourced in tracebloc_ingestor/__init__.py). Dependency-free
+          # so we don't need setup-python just to read a string.
+          version=$(python3 -c "import re,pathlib; \
+            print(re.search(r'^__version__\s*=\s*[\"\x27]([^\"\x27]+)[\"\x27]', \
+            pathlib.Path('tracebloc_ingestor/__init__.py').read_text(), re.M).group(1))")
+          if [ -z "${version}" ]; then
+            echo "::error::could not parse __version__ from tracebloc_ingestor/__init__.py" >&2
+            exit 1
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${version}" >> "$GITHUB_OUTPUT"
+          echo "Resolved version ${version} → tag v${version}"
+
+      - name: Tag and dispatch image release (idempotent)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.ver.outputs.tag }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+
+          # Does the tag already exist on origin? (Authoritative check — the
+          # remote, not just the local fetch.)
+          tag_exists=false
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+            tag_exists=true
+          fi
+
+          # "Done" = the GitHub Release exists, not merely the tag. The tag is
+          # pushed before release-image.yml is dispatched, so a tag with no
+          # Release means an earlier run pushed the tag but never completed the
+          # image/release step. Only skip when BOTH the tag and its Release are
+          # present; otherwise fall through and (re-)dispatch.
+          if [ "${tag_exists}" = true ] && gh release view "${TAG}" >/dev/null 2>&1; then
+            echo "Tag ${TAG} and its GitHub Release already exist — nothing to release."
+            exit 0
+          fi
+
+          if [ "${tag_exists}" = true ]; then
+            # Never move or re-cut an existing tag (it may point at a commit a
+            # human tagged out of band); just re-drive the image release for it.
+            echo "Tag ${TAG} exists but its GitHub Release is missing — re-dispatching release-image.yml for the existing tag."
+          else
+            git config user.name  "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -a "${TAG}" "${SHA}" -m "${TAG}"
+            git push origin "${TAG}"
+            echo "Pushed ${TAG} at ${SHA}."
+          fi
+
+          # workflow_dispatch runs under GITHUB_TOKEN (recursion-guard
+          # exception), so this actually triggers the image build. Dispatching
+          # against an already-released tag is safe: release-image.yml is
+          # tag-idempotent (edits or creates the Release, re-signs the same
+          # digest).
+          gh workflow run release-image.yml -f ref="${TAG}"
+          echo "Dispatched release-image.yml for ${TAG}."
