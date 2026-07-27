@@ -67,6 +67,10 @@ setup(
         # schema/ingest.v1.json, and dispatches to the right ingestor.
         "console_scripts": [
             "tracebloc-ingest = tracebloc_ingestor.cli.run:main",
+            # One-time pre-cutover metadata backfill (backend#1166/#1198): reads
+            # DB + backend creds from the same env as the ingestor (no
+            # ingest.yaml) and sweeps this client's registered datasets.
+            "tracebloc-backfill = tracebloc_ingestor.metadata_backfill_runner:main",
         ],
     },
     classifiers=[

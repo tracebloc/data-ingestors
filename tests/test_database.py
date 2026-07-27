@@ -1004,3 +1004,90 @@ def test_create_table_rejects_reserved_bookkeeping_tables(reserved):
     db = Database.__new__(Database)
     with pytest.raises(ValueError, match="reserved"):
         db.create_table(reserved, {"feature_0": "FLOAT"})
+
+
+# ---------------------------------------------------------------------------
+# Run journal: enumeration for the metadata backfill sweep
+# ---------------------------------------------------------------------------
+
+
+def test_list_registered_runs_returns_registered_only(db, mock_engine_factory):
+    """The backfill sweep enumerates only REGISTERED runs, one row each, mapped
+    to {ingestor_id, table_name, task}. A NULL task (pre-task-column run) is
+    preserved as None."""
+    _, _, conn = mock_engine_factory
+    conn.execute.return_value.fetchall.return_value = [
+        ("run-a", "ta", "tabular_classification"),
+        ("run-b", "tb", None),
+    ]
+    result = db.list_registered_runs()
+    assert result == [
+        {"ingestor_id": "run-a", "table_name": "ta", "task": "tabular_classification"},
+        {"ingestor_id": "run-b", "table_name": "tb", "task": None},
+    ]
+    select = next(
+        s for s in _executed_sql(conn) if "SELECT ingestor_id, table_name, task" in s
+    )
+    assert "WHERE registered = 1" in select
+
+
+def test_list_dataset_ingestor_ids_scans_tables_excluding_framework(
+    db, mock_engine_factory
+):
+    """Discovers dataset tables via information_schema (tables carrying an
+    ingestor_id column), skips the framework tables (run journal + salt store),
+    and returns each table's distinct non-null ingestor_id."""
+    _, _, conn = mock_engine_factory
+
+    def _result(rows):
+        r = MagicMock()
+        r.fetchall.return_value = rows
+        return r
+
+    # 1st execute: information_schema table list (includes a framework table).
+    # then one execute per NON-framework table, in returned order.
+    conn.execute.side_effect = [
+        _result([("ds_one",), ("tracebloc_ingest_runs",), ("ds_two",)]),
+        _result([("i1",), ("i2",)]),  # ds_one distinct ids
+        _result([("i3",)]),  # ds_two distinct ids
+    ]
+
+    result = db.list_dataset_ingestor_ids()
+    assert result == [
+        {"ingestor_id": "i1", "table_name": "ds_one"},
+        {"ingestor_id": "i2", "table_name": "ds_one"},
+        {"ingestor_id": "i3", "table_name": "ds_two"},
+    ]
+
+    executed = _executed_sql(conn)
+    # Discovery query hit information_schema for the ingestor_id column.
+    assert any("information_schema.columns" in s and "ingestor_id" in s for s in executed)
+    # The framework run-journal table was skipped — never SELECTed as a dataset.
+    assert not any("`tracebloc_ingest_runs`" in s for s in executed)
+    # Per-dataset-table id scans excluded null/empty ids.
+    assert any("FROM `ds_one`" in s and "IS NOT NULL" in s for s in executed)
+
+
+def test_list_dataset_ingestor_ids_skips_a_table_that_errors(db, mock_engine_factory):
+    """A single unreadable table (scan timeout / dropped mid-sweep / perms) is
+    skipped and discovery continues — the sweep's 'one bad table can't abort the
+    rollout' guarantee must hold at enumeration time too. (bugbot)"""
+    _, _, conn = mock_engine_factory
+
+    def _result(rows):
+        r = MagicMock()
+        r.fetchall.return_value = rows
+        return r
+
+    conn.execute.side_effect = [
+        _result([("ds_one",), ("ds_bad",), ("ds_two",)]),  # information_schema
+        _result([("i1",)]),  # ds_one
+        RuntimeError("scan timeout"),  # ds_bad — per-table query fails
+        _result([("i2",)]),  # ds_two still scanned
+    ]
+
+    result = db.list_dataset_ingestor_ids()
+    assert result == [
+        {"ingestor_id": "i1", "table_name": "ds_one"},
+        {"ingestor_id": "i2", "table_name": "ds_two"},
+    ]

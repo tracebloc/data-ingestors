@@ -611,6 +611,70 @@ def test_validate_data_validator_exception_raises():
 
 
 # ---------------------------------------------------------------------------
+# validator label normalization (#396 Bugbot: log labels drop suffix)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "name, expected",
+    [
+        # Already ends in "Validator" — must NOT double it.
+        ("Data Validator", "Data Validator"),
+        # Case-insensitive on the existing suffix.
+        ("Pascal VOC XML validator", "Pascal VOC XML validator"),
+        # Missing the suffix — must gain it.
+        ("Ingestable Records", "Ingestable Records Validator"),
+        ("Text Content", "Text Content Validator"),
+        ("BIO Label", "BIO Label Validator"),
+        ("Keypoint Annotation", "Keypoint Annotation Validator"),
+        # Surrounding whitespace is stripped before deciding.
+        ("  Data Validator  ", "Data Validator"),
+    ],
+)
+def test_validator_label_normalizes(name, expected):
+    assert base_mod._validator_label(name) == expected
+
+
+def test_validate_data_success_line_keeps_suffix_when_missing(capsys):
+    # A name that does NOT end in "Validator" (e.g. "Ingestable Records") must
+    # keep the suffix in its "successfully passed" line.
+    ing = make_ingestor(category=None)
+    v = MagicMock()
+    v.name = "Ingestable Records"
+    v.validate.return_value = ValidationResult(True, [], [], {})
+    with patch.object(base_mod, "map_validators", return_value=[v]):
+        assert ing.validate_data("src") is True
+    out = capsys.readouterr().out
+    assert "Ingestable Records Validator successfully passed" in out
+
+
+def test_validate_data_success_line_does_not_double_suffix(capsys):
+    # A name that already ends in "Validator" (e.g. "Data Validator") must not
+    # double the word.
+    ing = make_ingestor(category=None)
+    v = MagicMock()
+    v.name = "Data Validator"
+    v.validate.return_value = ValidationResult(True, [], [], {})
+    with patch.object(base_mod, "map_validators", return_value=[v]):
+        assert ing.validate_data("src") is True
+    out = capsys.readouterr().out
+    assert "Data Validator successfully passed" in out
+    assert "Data Validator Validator" not in out
+
+
+def test_validate_data_failure_message_keeps_suffix_when_missing():
+    # The error-append line normalizes too, so a suffix-less name isn't stripped.
+    ing = make_ingestor(category=None)
+    v = MagicMock()
+    v.name = "Ingestable Records"
+    v.validate.return_value = ValidationResult(False, ["nope"], [], {})
+    with patch.object(base_mod, "map_validators", return_value=[v]):
+        with pytest.raises(ValueError) as exc:
+            ing.validate_data("src")
+    assert "Ingestable Records Validator failed" in str(exc.value)
+
+
+# ---------------------------------------------------------------------------
 # ingest (full flow, Session patched)
 # ---------------------------------------------------------------------------
 

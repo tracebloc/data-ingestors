@@ -137,6 +137,20 @@ def _rows_state_clause(inserted_records: int) -> str:
     return "no rows were ingested, so nothing was left in the database"
 
 
+def _validator_label(name: str) -> str:
+    """Human-readable label for a validator's preflight log/error lines.
+
+    Validator ``.name`` values are inconsistent: some already end in
+    "Validator" (e.g. "Data Validator") while many do not (e.g. "Ingestable
+    Records", "Text Content", "BIO Label", "Keypoint Annotation"). Normalize at
+    the log site so every label reads "<Name> Validator" exactly once —
+    appending the word only when it's missing, so suffixed names don't double
+    ("Data Validator Validator") and unsuffixed names don't drop it.
+    """
+    name = (name or "").strip()
+    return name if name.lower().endswith("validator") else f"{name} Validator"
+
+
 # NOTE: _TABULAR_FAMILY_CATEGORIES and _FILE_BEARING_CATEGORIES are imported
 # above from modalities.registry (derived from the per-category ModalitySpec
 # flags — backend#796 P3a). The ``self.category in <set>`` checks throughout
@@ -545,14 +559,15 @@ class BaseIngestor(ABC):
         validation_errors = []
 
         for validator in validators:
+            label = _validator_label(validator.name)
             try:
-                logger.info(f"{CYAN}Running validator: {validator.name}{RESET}")
+                logger.info(f"{CYAN}Running validator: {label}{RESET}")
                 result = validator.validate(source)
 
                 if not result.is_valid:
                     all_valid = False
                     validation_errors.append(
-                        f"{BOLD}{validator.name} Validator failed: {RESET} \n {RED}"
+                        f"{BOLD}{label} failed: {RESET} \n {RED}"
                     )
                     validation_errors.extend(result.errors)
                     validation_errors.append(f"{RESET}")
@@ -560,15 +575,17 @@ class BaseIngestor(ABC):
                 # Log warnings if any
                 for warning in result.warnings:
                     logger.warning(
-                        f"{YELLOW}Validation warning - {validator.name}: {warning}{RESET}"
+                        f"{YELLOW}Validation warning - {label}: {warning}{RESET}"
                     )
                 if result.is_valid:
-                    print(
-                        f"{GREEN}{validator.name} Validator successfully passed{RESET}"
-                    )
+                    # Normalize the label so it always reads "<Name> Validator"
+                    # exactly once: names that already end in "Validator" (e.g.
+                    # "Data Validator") don't double, and names that don't (e.g.
+                    # "Ingestable Records") keep the suffix.
+                    print(f"{GREEN}{label} successfully passed{RESET}")
             except Exception as e:
                 all_valid = False
-                validation_errors.append(f"Validator {validator.name} error: {str(e)}")
+                validation_errors.append(f"{label} error: {str(e)}")
 
         if not all_valid:
             error_summary = "\n".join(validation_errors)
@@ -864,9 +881,7 @@ class BaseIngestor(ABC):
             and not self.unique_id_column
             and self._table_salt is None
         ):
-            self._table_salt = self.database.get_or_create_table_salt(
-                self.table_name
-            )
+            self._table_salt = self.database.get_or_create_table_salt(self.table_name)
 
         if self.table is None:
             # Grouped categories get a composite (group, time) secondary
@@ -1130,8 +1145,7 @@ class BaseIngestor(ABC):
                 elif not label_counts:
                     counts_helper = (
                         "get_label_sequence_counts"
-                        if grouping is not None
-                        and grouping.count_unit == "sequences"
+                        if grouping is not None and grouping.count_unit == "sequences"
                         else "get_label_counts"
                     )
                     raise RuntimeError(
