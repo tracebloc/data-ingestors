@@ -20,9 +20,17 @@
 #     to merge under branch protection — by the time code is on master, the
 #     checks have passed.
 #
-#   * Idempotent on the tag. If vX.Y.Z already exists (a re-run, or a
-#     version someone pre-tagged out of band), we log and exit 0 — we never
-#     move or re-cut an existing tag.
+#   * Idempotent on the *artifact*, not just the tag. The tag is pushed
+#     before release-image.yml is dispatched, so "tag exists" alone is not
+#     "release done": a run that pushed the tag but died before/at the
+#     dispatch would leave the tag with no signed image or GitHub Release,
+#     and a naive tag-only skip would exit 0 on re-run and never build it.
+#     So we exit 0 early only when the tag exists AND its GitHub Release
+#     resolves; if the tag exists but the Release is missing, we re-dispatch
+#     release-image.yml against the existing tag (release-image is itself
+#     tag-idempotent — it edits or creates the Release and re-signs the same
+#     digest). We never move or re-cut an existing tag, only create a
+#     missing one.
 #
 #   * We push the tag AND explicitly dispatch release-image.yml, rather than
 #     relying on the tag-push event to trigger it. A tag pushed with the
@@ -97,20 +105,39 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Never re-cut an existing tag. Check the remote (authoritative),
-          # not just the local fetch.
+          # Does the tag already exist on origin? (Authoritative check — the
+          # remote, not just the local fetch.)
+          tag_exists=false
           if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
-            echo "Tag ${TAG} already exists on origin — version unchanged or pre-tagged. Nothing to release."
+            tag_exists=true
+          fi
+
+          # "Done" = the GitHub Release exists, not merely the tag. The tag is
+          # pushed before release-image.yml is dispatched, so a tag with no
+          # Release means an earlier run pushed the tag but never completed the
+          # image/release step. Only skip when BOTH the tag and its Release are
+          # present; otherwise fall through and (re-)dispatch.
+          if [ "${tag_exists}" = true ] && gh release view "${TAG}" >/dev/null 2>&1; then
+            echo "Tag ${TAG} and its GitHub Release already exist — nothing to release."
             exit 0
           fi
 
-          git config user.name  "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "${TAG}" "${SHA}" -m "${TAG}"
-          git push origin "${TAG}"
-          echo "Pushed ${TAG} at ${SHA}."
+          if [ "${tag_exists}" = true ]; then
+            # Never move or re-cut an existing tag (it may point at a commit a
+            # human tagged out of band); just re-drive the image release for it.
+            echo "Tag ${TAG} exists but its GitHub Release is missing — re-dispatching release-image.yml for the existing tag."
+          else
+            git config user.name  "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -a "${TAG}" "${SHA}" -m "${TAG}"
+            git push origin "${TAG}"
+            echo "Pushed ${TAG} at ${SHA}."
+          fi
 
           # workflow_dispatch runs under GITHUB_TOKEN (recursion-guard
-          # exception), so this actually triggers the image build.
+          # exception), so this actually triggers the image build. Dispatching
+          # against an already-released tag is safe: release-image.yml is
+          # tag-idempotent (edits or creates the Release, re-signs the same
+          # digest).
           gh workflow run release-image.yml -f ref="${TAG}"
           echo "Dispatched release-image.yml for ${TAG}."
