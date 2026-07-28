@@ -223,6 +223,7 @@ class APIClient:
         schema: Dict[str, Any],
         samples: List[Dict[str, Any]],
         meta_data: Optional[Dict[str, Any]] = None,
+        physical_table: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Send a single ingest summary to the backend, creating the UserDataSet in one
@@ -239,6 +240,12 @@ class APIClient:
             category: TaskCategory value, e.g. "image_classification"
             schema: Column schema written to GlobalMetaData
             samples: Small list of representative records shown in the UI
+            physical_table: RFC-0003 D16 (tracebloc/backend#1205) — the
+                per-ingestion physical table (``ds_<ingestor_id>``) this run
+                wrote into, reported so the backend persists the handle
+                (tracebloc/backend#1206). ``None`` (legacy shared-table
+                ingests) omits the field entirely, keeping the payload
+                byte-identical to today's.
 
         Returns:
             ``{"dataset_id": ..., "dataset_key": ...}``
@@ -254,19 +261,20 @@ class APIClient:
             return {"dataset_id": "mock_dataset_id", "dataset_key": "mock_dataset_key"}
 
         try:
-            payload = json.dumps(
-                {
-                    "ingestor_id": ingestor_id,
-                    "labels": labels,
-                    "dataset_title": dataset_title,
-                    "data_format": data_format,
-                    "data_intent": data_intent,
-                    "category": category,
-                    "schema": schema,
-                    "samples": samples,
-                    "meta_data": meta_data or {},
-                }
-            )
+            payload_fields = {
+                "ingestor_id": ingestor_id,
+                "labels": labels,
+                "dataset_title": dataset_title,
+                "data_format": data_format,
+                "data_intent": data_intent,
+                "category": category,
+                "schema": schema,
+                "samples": samples,
+                "meta_data": meta_data or {},
+            }
+            if physical_table:
+                payload_fields["physical_table"] = physical_table
+            payload = json.dumps(payload_fields)
             logger.info(
                 f"Sending ingest summary for {table_name}: "
                 f"{len(labels)} label(s), {sum(labels.values())} total rows"

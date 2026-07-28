@@ -218,6 +218,7 @@ class Database:
         table_name: str,
         schema: Dict[str, str],
         index_columns: Optional[List[str]] = None,
+        must_not_exist: bool = False,
     ):
         """
         Creates a table if it doesn't exist, or returns existing table
@@ -225,6 +226,13 @@ class Database:
         Args:
             table_name: Name of the table
             schema: Dictionary defining the table schema
+            must_not_exist: RFC-0003 D16/D19 (tracebloc/backend#1205) —
+                per-ingestion tables are immutable, so reusing or reflecting
+                an existing table is a contract violation, never a
+                convenience. When True, an existing table (cached or in the
+                database) raises instead of being returned. Callers pass the
+                per-ingestion flag here; legacy shared-table ingests keep the
+                reflect/append behavior below.
             index_columns: Optional list of schema columns to compose into a
                 secondary (non-unique) index. Used by the sequence-grouped
                 categories to create the composite ``(sequence_id,
@@ -307,11 +315,27 @@ class Database:
 
         # Return existing table if already created
         if table_name in self.tables:
+            if must_not_exist:
+                raise ValueError(
+                    f"Table '{table_name}' already exists but was created as "
+                    f"a per-ingestion table (RFC-0003 D16: one immutable "
+                    f"table per ingest run, append disabled). This should be "
+                    f"impossible for a fresh ds_<uuid4> name; a collision "
+                    f"means ingestor_id reuse within one process."
+                )
             return self.tables[table_name]
 
         # Check if table exists in database
         inspector = inspect(self.engine)
         if table_name in inspector.get_table_names():
+            if must_not_exist:
+                raise ValueError(
+                    f"Table '{table_name}' already exists in the database, "
+                    f"but per-ingestion tables are immutable (RFC-0003 D16/"
+                    f"D19 — one table per ingest run, append disabled). A "
+                    f"leftover ds_ table under a fresh uuid4 ingestor_id "
+                    f"should be impossible; drop it and re-run."
+                )
             # Reflect existing table using MetaData
             self.metadata.reflect(self.engine, only=[table_name])
             table = self.metadata.tables[table_name]

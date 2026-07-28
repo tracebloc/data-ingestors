@@ -300,6 +300,21 @@ class BaseIngestor(ABC):
         self.engine: Engine = database.engine
         self.api_client = api_client
         self.table_name = table_name
+        # RFC-0003 D16/D19 (tracebloc/backend#1205): under per-ingestion
+        # storage every run writes its own immutable table ds_<ingestor_id>;
+        # ``table_name`` stays the user-facing dataset label (summary URL
+        # segment, staging dirs, table lock, default title). The row store —
+        # create/insert/count/schema/journal/compensating-delete — sees ONLY
+        # ``physical_table_name``. Flag off => both names are the label and
+        # behavior is byte-for-byte today's. The ``is True`` comparison is
+        # deliberate: test doubles use bare MagicMocks for config, and a
+        # truthy Mock must not silently flip the storage model.
+        self.per_ingestion_tables = (
+            database.config.PER_INGESTION_TABLES is True
+        )
+        self.physical_table_name = (
+            f"ds_{self.ingestor_id}" if self.per_ingestion_tables else table_name
+        )
         self.schema = schema
         self.unique_id_column = unique_id_column
         self.label_column = label_column
@@ -881,7 +896,9 @@ class BaseIngestor(ABC):
             and not self.unique_id_column
             and self._table_salt is None
         ):
-            self._table_salt = self.database.get_or_create_table_salt(self.table_name)
+            self._table_salt = self.database.get_or_create_table_salt(
+                self.physical_table_name
+            )
 
         if self.table is None:
             # Grouped categories get a composite (group, time) secondary
@@ -894,7 +911,10 @@ class BaseIngestor(ABC):
                 else None
             )
             self.table = self.database.create_table(
-                self.table_name, self._table_schema, index_columns=index_columns
+                self.physical_table_name,
+                self._table_schema,
+                index_columns=index_columns,
+                must_not_exist=self.per_ingestion_tables,
             )
 
         # Reconcile-on-start (backend#1028 item 2): a prior attempt that died
@@ -911,11 +931,13 @@ class BaseIngestor(ABC):
         # this run's own counts are unaffected because every summary query
         # is scoped to its ingestor_id.
         try:
-            self.database.reclaim_dead_run_rows(self.table_name, self.ingestor_id)
+            self.database.reclaim_dead_run_rows(
+                self.physical_table_name, self.ingestor_id
+            )
         except Exception as reclaim_error:
             logger.critical(
                 f"Orphan-row reconciliation failed for table "
-                f"{self.table_name!r}: {redaction.safe_db_error(reclaim_error)}. "
+                f"{self.physical_table_name!r}: {redaction.safe_db_error(reclaim_error)}. "
                 f"Continuing the ingest — rows left by a previous hard-killed "
                 f"run may remain in the table (backend#1028)."
             )
@@ -927,7 +949,7 @@ class BaseIngestor(ABC):
         # now, before any row lands, than to insert rows the journal never
         # heard about.
         self.database.record_ingest_started(
-            self.table_name, self.ingestor_id, self.category
+            self.physical_table_name, self.ingestor_id, self.category
         )
 
         batch = []
@@ -1096,7 +1118,7 @@ class BaseIngestor(ABC):
                     partial_ids = sorted(partial_id_set)
                     if partial_ids and stats["inserted_records"]:
                         removed = self.database.delete_sequences(
-                            self.table_name,
+                            self.physical_table_name,
                             self.ingestor_id,
                             partial_ids,
                             group_column=grouping.group_column,
@@ -1121,7 +1143,7 @@ class BaseIngestor(ABC):
                 # standard row counts like every non-grouped category.
                 if grouping is not None and grouping.count_unit == "sequences":
                     label_counts = self.database.get_label_sequence_counts(
-                        self.table_name,
+                        self.physical_table_name,
                         self.ingestor_id,
                         group_column=grouping.group_column,
                     )
@@ -1134,7 +1156,7 @@ class BaseIngestor(ABC):
                     )
                 else:
                     label_counts = self.database.get_label_counts(
-                        self.table_name, self.ingestor_id
+                        self.physical_table_name, self.ingestor_id
                     )
 
                 if not stats["inserted_records"]:
@@ -1158,13 +1180,15 @@ class BaseIngestor(ABC):
                     )
                 else:
                     samples = self.database.get_samples(
-                        self.table_name, self.ingestor_id
+                        self.physical_table_name, self.ingestor_id
                     )
                     dataset_title = (
                         self.api_client.config.TITLE
                         or f"{self.table_name} - {self.ingestor_id[:8]}"
                     )
-                    schema_dict = self.database.get_table_schema(self.table_name)
+                    schema_dict = self.database.get_table_schema(
+                        self.physical_table_name
+                    )
 
                     if self.category in _NLP_CATEGORIES:
                         text_profile = compute_text_profile(self.database.config)
@@ -1196,11 +1220,16 @@ class BaseIngestor(ABC):
                     # except-branch undoes this flip (mark_ingest_unregistered)
                     # so reclaim can still recover the rows.
                     self.database.mark_ingest_registered(
-                        self.table_name, self.ingestor_id
+                        self.physical_table_name, self.ingestor_id
                     )
 
                     self.api_client.send_ingest_summary(
                         table_name=self.table_name,
+                        physical_table=(
+                            self.physical_table_name
+                            if self.per_ingestion_tables
+                            else None
+                        ),
                         ingestor_id=self.ingestor_id,
                         labels=label_counts,
                         dataset_title=dataset_title,
@@ -1261,13 +1290,13 @@ class BaseIngestor(ABC):
                     # mask the original error or skip the delete.
                     try:
                         self.database.mark_ingest_unregistered(
-                            self.table_name, self.ingestor_id
+                            self.physical_table_name, self.ingestor_id
                         )
                     except Exception as journal_reset_error:
                         logger.critical(
                             f"Failed to reset the run journal to unregistered "
                             f"for ingestor_id={self.ingestor_id!r} in table "
-                            f"{self.table_name!r}: "
+                            f"{self.physical_table_name!r}: "
                             f"{redaction.safe_db_error(journal_reset_error)}. "
                             f"If the compensating delete also fails, these "
                             f"rows may not be reclaimed automatically "
@@ -1275,7 +1304,7 @@ class BaseIngestor(ABC):
                         )
                     try:
                         deleted = self.database.delete_by_ingestor_id(
-                            self.table_name, self.ingestor_id
+                            self.physical_table_name, self.ingestor_id
                         )
                         logger.error(
                             f"Compensating delete removed {deleted} "
@@ -1287,7 +1316,7 @@ class BaseIngestor(ABC):
                         logger.critical(
                             f"Compensating delete FAILED for "
                             f"ingestor_id={self.ingestor_id!r} in table "
-                            f"{self.table_name!r}: "
+                            f"{self.physical_table_name!r}: "
                             f"{redaction.safe_db_error(cleanup_error)}. "
                             f"{stats.get('inserted_records', 0)} unregistered "
                             "row(s) remain orphaned (#227)."
@@ -1324,7 +1353,7 @@ class BaseIngestor(ABC):
         failure accounting; built from the run's database / table. A fresh
         instance per access is fine — it just holds those refs."""
         return BatchWriter(
-            self.database, self.api_client, self.table_name, self.ingestor_id
+            self.database, self.api_client, self.physical_table_name, self.ingestor_id
         )
 
     def _log_summary(self, summary: IngestionSummary):
