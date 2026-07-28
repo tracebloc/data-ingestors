@@ -85,6 +85,45 @@ def test_flag_on_physical_name_is_hex_of_ingestor_id():
     assert ing.table_name == "my_dataset"
 
 
+def test_flag_on_rejects_file_bearing_categories():
+    """v1 boundary (Bugbot): the flag isolates the row store only — assets of
+    file-bearing categories still land under the shared label tree, where a
+    later same-label ingest would overwrite an earlier dataset's files. Fail
+    at construction, before any validation or DDL; per-dataset file isolation
+    ships with tracebloc/client-runtime#203 phase 2."""
+    from tracebloc_ingestor.utils.constants import TaskCategory
+
+    database = MagicMock(name="Database")
+    database.config.PER_INGESTION_TABLES = True
+    with pytest.raises(ValueError, match="file-bearing"):
+        CSVIngestor(
+            database=database,
+            api_client=MagicMock(),
+            table_name="imgs",
+            schema={"filename": "VARCHAR(255)", "label": "VARCHAR(50)"},
+            label_column="label",
+            category=TaskCategory.IMAGE_CLASSIFICATION,
+        )
+
+
+def test_flag_on_accepts_row_only_categories():
+    """Tabular / time-series families — the RFC-0003 v1 rollout target —
+    construct normally under the flag."""
+    from tracebloc_ingestor.utils.constants import TaskCategory
+
+    database = MagicMock(name="Database")
+    database.config.PER_INGESTION_TABLES = True
+    ing = CSVIngestor(
+        database=database,
+        api_client=MagicMock(),
+        table_name="rows",
+        schema={"feature": "FLOAT", "label": "VARCHAR(50)"},
+        label_column="label",
+        category=TaskCategory.TABULAR_CLASSIFICATION,
+    )
+    assert ing.physical_table_name.startswith("ds_")
+
+
 def test_truthy_mock_config_does_not_flip_the_storage_model():
     """Bare MagicMock config (the fixture default across this suite) must
     read as flag OFF — a truthy Mock silently flipping every mocked test
