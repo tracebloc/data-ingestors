@@ -301,19 +301,28 @@ class BaseIngestor(ABC):
         self.api_client = api_client
         self.table_name = table_name
         # RFC-0003 D16/D19 (tracebloc/backend#1205): under per-ingestion
-        # storage every run writes its own immutable table ds_<ingestor_id>;
-        # ``table_name`` stays the user-facing dataset label (summary URL
-        # segment, staging dirs, table lock, default title). The row store —
-        # create/insert/count/schema/journal/compensating-delete — sees ONLY
-        # ``physical_table_name``. Flag off => both names are the label and
-        # behavior is byte-for-byte today's. The ``is True`` comparison is
-        # deliberate: test doubles use bare MagicMocks for config, and a
-        # truthy Mock must not silently flip the storage model.
+        # storage every run writes its own immutable table — named
+        # ds_<uuid4().hex> (35 chars), a pure function of ingestor_id.
+        # HEX, not the hyphenated uuid (D3 amendment on backend#1204): the
+        # trainer's strict table grammar (_SQL_IDENTIFIER_RE) and this
+        # package's own TableNameValidator both forbid hyphens in TABLE
+        # names, and loosening two security validators would be worse than
+        # deriving a hyphen-free name. ingestor_id itself keeps its
+        # hyphenated format everywhere. ``table_name`` stays the user-facing
+        # dataset label (summary URL segment, staging dirs, table lock,
+        # default title). The row store — create/insert/count/schema/journal/
+        # compensating-delete — sees ONLY ``physical_table_name``. Flag off
+        # => both names are the label and behavior is byte-for-byte today's.
+        # The ``is True`` comparison is deliberate: test doubles use bare
+        # MagicMocks for config, and a truthy Mock must not silently flip
+        # the storage model.
         self.per_ingestion_tables = (
             database.config.PER_INGESTION_TABLES is True
         )
         self.physical_table_name = (
-            f"ds_{self.ingestor_id}" if self.per_ingestion_tables else table_name
+            f"ds_{uuid.UUID(self.ingestor_id).hex}"
+            if self.per_ingestion_tables
+            else table_name
         )
         self.schema = schema
         self.unique_id_column = unique_id_column

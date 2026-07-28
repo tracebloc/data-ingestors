@@ -241,8 +241,9 @@ class APIClient:
             schema: Column schema written to GlobalMetaData
             samples: Small list of representative records shown in the UI
             physical_table: RFC-0003 D16 (tracebloc/backend#1205) — the
-                per-ingestion physical table (``ds_<ingestor_id>``) this run
-                wrote into, reported so the backend persists the handle
+                per-ingestion physical table (``ds_<uuid4().hex>``, derived
+                from ingestor_id) this run wrote into, reported so the
+                backend persists the handle
                 (tracebloc/backend#1206). ``None`` (legacy shared-table
                 ingests) omits the field entirely, keeping the payload
                 byte-identical to today's.

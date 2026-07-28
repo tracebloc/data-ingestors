@@ -219,10 +219,11 @@ class Config:
     @property
     def PER_INGESTION_TABLES(self) -> bool:
         """RFC-0003 D16/D19 (tracebloc/backend#1205): when true, every ingest
-        run creates its own immutable physical table ``ds_<ingestor_id>``
-        instead of appending to the label-named shared table, and reports the
-        handle in the ingest summary (``physical_table``) so the backend can
-        persist it (tracebloc/backend#1206).
+        run creates its own immutable physical table ``ds_<uuid4().hex>``
+        (derived from ingestor_id; hex because SQL table grammars forbid
+        hyphens) instead of appending to the label-named shared table, and
+        reports the handle in the ingest summary (``physical_table``) so the
+        backend can persist it (tracebloc/backend#1206).
 
         Defaults to **off** — today's shared-table behavior, byte for byte.
         Flipping it is coordinated with the backend resolution path and the

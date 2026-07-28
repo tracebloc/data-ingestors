@@ -320,7 +320,7 @@ class Database:
                     f"Table '{table_name}' already exists but was created as "
                     f"a per-ingestion table (RFC-0003 D16: one immutable "
                     f"table per ingest run, append disabled). This should be "
-                    f"impossible for a fresh ds_<uuid4> name; a collision "
+                    f"impossible for a fresh ds_<uuid4 hex> name; a collision "
                     f"means ingestor_id reuse within one process."
                 )
             return self.tables[table_name]
@@ -333,7 +333,7 @@ class Database:
                     f"Table '{table_name}' already exists in the database, "
                     f"but per-ingestion tables are immutable (RFC-0003 D16/"
                     f"D19 — one table per ingest run, append disabled). A "
-                    f"leftover ds_ table under a fresh uuid4 ingestor_id "
+                    f"leftover ds_ table under a fresh uuid4-derived name "
                     f"should be impossible; drop it and re-run."
                 )
             # Reflect existing table using MetaData

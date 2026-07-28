@@ -10,6 +10,7 @@ ingest summary carries the physical handle so the backend can persist it
 """
 
 import json
+import uuid
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -70,12 +71,16 @@ def test_flag_off_physical_name_is_the_label():
     assert ing.table_name == "my_dataset"
 
 
-def test_flag_on_physical_name_is_ds_ingestor_id():
+def test_flag_on_physical_name_is_hex_of_ingestor_id():
     ing = _make_ingestor(per_ingestion=True)
     assert ing.per_ingestion_tables is True
-    assert ing.physical_table_name == f"ds_{ing.ingestor_id}"
-    # 'ds_' + uuid4 = 39 chars, inside MySQL's 64-char identifier cap.
-    assert len(ing.physical_table_name) == 39
+    # ds_<uuid4().hex>: a pure function of ingestor_id, hyphen-free because
+    # SQL table grammars (trainer _SQL_IDENTIFIER_RE, this package's
+    # TableNameValidator) forbid hyphens — D3 amendment on backend#1204.
+    assert ing.physical_table_name == f"ds_{uuid.UUID(ing.ingestor_id).hex}"
+    assert "-" not in ing.physical_table_name
+    # 'ds_' + 32 hex chars = 35, inside MySQL's 64-char identifier cap.
+    assert len(ing.physical_table_name) == 35
     # The label survives untouched for the user-facing surfaces.
     assert ing.table_name == "my_dataset"
 
