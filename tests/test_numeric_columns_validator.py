@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
 
 from tracebloc_ingestor.validators.numeric_columns_validator import (
     NumericColumnsValidator,

@@ -35,7 +35,7 @@ from tracebloc_ingestor.cli.conventions import (
 )
 from tracebloc_ingestor.ingestors.base import _FILE_BEARING_CATEGORIES
 from tracebloc_ingestor.modalities import spec_for
-from tracebloc_ingestor.utils.constants import DataFormat, TaskCategory
+from tracebloc_ingestor.utils.constants import DataFormat
 from tracebloc_ingestor.utils.validators_mapping import map_validators
 
 

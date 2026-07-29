@@ -16,7 +16,7 @@ types-requests
 types-urllib3
 
 # Linting / formatting
-black>=23.0.0
+black>=26,<27  # keep in step with the pre-commit hook (26.3.1) — same 2026 stable style
 isort>=5.12.0
 flake8>=6.0.0
 

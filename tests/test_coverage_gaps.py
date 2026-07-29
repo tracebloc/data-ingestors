@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import importlib
 import logging
-import sys
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
@@ -73,7 +72,8 @@ def test_build_ingestor_unknown_source_type_raises():
 # validators/base: BaseValidator helpers
 # ===========================================================================
 
-from tracebloc_ingestor.validators.base import BaseValidator, ValidationResult
+# E402: deliberate per-section import — the unit under test lives with its tests.
+from tracebloc_ingestor.validators.base import BaseValidator  # noqa: E402
 
 
 class _Concrete(BaseValidator):
@@ -148,7 +148,8 @@ def test_mlm_with_schema_adds_data_validator():
 # data_validator: edge branches
 # ===========================================================================
 
-from tracebloc_ingestor.validators.data_validator import DataValidator
+# E402: deliberate per-section import — the unit under test lives with its tests.
+from tracebloc_ingestor.validators.data_validator import DataValidator  # noqa: E402
 
 
 def test_data_validator_load_non_csv_returns_none():
@@ -190,7 +191,10 @@ def test_data_validator_date_exception(monkeypatch):
 # duplicate_validator: exception fallbacks
 # ===========================================================================
 
-from tracebloc_ingestor.validators.duplicate_validator import DuplicateValidator
+# E402: deliberate per-section import — the unit under test lives with its tests.
+from tracebloc_ingestor.validators.duplicate_validator import (  # noqa: E402
+    DuplicateValidator,
+)
 
 
 def test_duplicate_validate_exception(monkeypatch):
@@ -385,7 +389,8 @@ def test_image_validator_list_with_non_path_item():
 # api/client: error-response branches + LoggingRetry
 # ===========================================================================
 
-from tracebloc_ingestor.api.client import APIClient, LoggingRetry
+# E402: deliberate per-section import — the unit under test lives with its tests.
+from tracebloc_ingestor.api.client import APIClient, LoggingRetry  # noqa: E402
 
 
 def _client(**ov):
@@ -433,7 +438,8 @@ def test_send_ingest_summary_error_with_response_text():
 # file_transfer: copy-failure except branches
 # ===========================================================================
 
-from tracebloc_ingestor import file_transfer
+# E402: deliberate per-section import — the unit under test lives with its tests.
+from tracebloc_ingestor import file_transfer  # noqa: E402
 
 
 @pytest.fixture

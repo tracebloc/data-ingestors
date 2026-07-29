@@ -1,6 +1,7 @@
 from typing import List, Dict, Any, Optional
 import os
-import requests, json
+import requests
+import json
 import logging
 from requests.adapters import HTTPAdapter
 from requests.packages.urllib3.util.retry import Retry
