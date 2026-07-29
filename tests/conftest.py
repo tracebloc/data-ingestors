@@ -9,9 +9,8 @@ shell environment can't leak into a run.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, Optional, Sequence
 from unittest.mock import MagicMock
 
 import pandas as pd

@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import os
 
-import pytest
 
 from tracebloc_ingestor import file_transfer
 from tracebloc_ingestor.config import Config

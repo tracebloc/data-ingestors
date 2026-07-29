@@ -4,7 +4,6 @@ This module provides validation to check if the destination directory exists,
 raising errors if it does to prevent accidental overwrites.
 """
 
-import os
 from pathlib import Path
 from typing import Any, List, Optional
 import logging

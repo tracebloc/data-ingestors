@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pandas as pd
-import pytest
 
 from tracebloc_ingestor.validators.time_format_validator import TimeFormatValidator
 from tracebloc_ingestor.validators.time_ordered_validator import TimeOrderedValidator

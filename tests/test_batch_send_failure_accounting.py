@@ -33,7 +33,7 @@ import requests
 from tracebloc_ingestor.config import Config
 from tracebloc_ingestor.api.client import APIClient
 from tracebloc_ingestor.ingestors import base as base_mod
-from tracebloc_ingestor.ingestors.base import BaseIngestor, IngestionSummary
+from tracebloc_ingestor.ingestors.base import BaseIngestor
 
 
 # ---------------------------------------------------------------------------

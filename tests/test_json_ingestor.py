@@ -274,7 +274,6 @@ def test_read_data_streams_array_does_not_materialise_whole_file(tmp_path):
     ``next()`` returns without reading the trailing records first).
     """
     import ijson as _ijson
-    import os
 
     # Write a moderate-size array so the test is fast but the streaming
     # behaviour is observable. We assert by checking that ijson.items is

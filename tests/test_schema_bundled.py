@@ -29,8 +29,6 @@ from __future__ import annotations
 
 import importlib
 
-import pytest
-
 
 def test_schema_subpackage_is_importable():
     """The marker __init__.py exists and the subpackage imports cleanly.

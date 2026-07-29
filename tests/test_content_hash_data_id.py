@@ -7,7 +7,6 @@ duplicating them. The per-table salt keeps ids unlinkable across tables and
 never leaves the cluster.
 """
 
-import json
 
 import pytest
 

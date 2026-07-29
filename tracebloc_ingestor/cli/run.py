@@ -42,7 +42,7 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, NoReturn, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 import yaml
 from jsonschema import Draft7Validator, ValidationError

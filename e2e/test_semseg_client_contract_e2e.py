@@ -33,7 +33,6 @@ from pathlib import Path
 
 import mysql.connector
 import pandas as pd
-import pytest
 import yaml
 
 from tracebloc_ingestor.cli import run

@@ -20,7 +20,6 @@ import requests
 from tracebloc_ingestor.api import client as client_mod
 from tracebloc_ingestor.api.client import APIClient
 from tracebloc_ingestor.config import Config
-from tracebloc_ingestor.utils.constants import TaskCategory
 
 
 class _Program:

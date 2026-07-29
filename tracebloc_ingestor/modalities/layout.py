@@ -27,8 +27,9 @@ than independent logic:
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 # Bump when the contract's SHAPE changes (fields added/removed/reinterpreted),
 # not when a task's values change — those are caught by the drift test.
@@ -166,8 +167,6 @@ def build_layout_contract() -> Dict[str, Any]:
 # Path of the committed, machine-readable contract the CLI vendors + mirrors.
 # Kept next to ingest.v1.json (both are the CLI's contract surface).
 def contract_path() -> "os.PathLike[str]":
-    import os
-
     return os.path.join(
         os.path.dirname(os.path.dirname(__file__)), "schema", "layout.v1.json"
     )
