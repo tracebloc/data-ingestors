@@ -1,0 +1,15 @@
+# Ruff configuration for the org code-quality gate (tracebloc/.github
+# code-quality.yml, adopted repo-wide via tracebloc/backend#1303). The shared
+# workflow uses a repo's own ruff config when one exists, so keep the
+# selection identical to the org default: the real-bug families only
+# (pyflakes + the pycodestyle errors), no formatting-opinion rules.
+
+[lint]
+select = ["E4", "E7", "E9", "F"]
+
+[lint.per-file-ignores]
+# templates/ ships byte-exact, user-facing sample scripts — pre-commit's
+# end-of-file-fixer excludes them for the same reason. They must never be
+# rewritten to satisfy lint; their only findings are unused imports (F401),
+# which are part of the copy-me template surface.
+"templates/**" = ["F401"]

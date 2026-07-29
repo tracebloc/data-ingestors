@@ -10,8 +10,7 @@ import json
 import logging
 import re
 from pathlib import Path
-from typing import Any, List, Dict, Optional, Union
-from datetime import datetime
+from typing import Any, Dict, Optional
 
 import numpy as np
 from ..utils import redaction
@@ -969,7 +968,7 @@ class DataValidator(BaseValidator):
                 errors.append(
                     f"Column '{column_name}' contains {invalid_dates} invalid date values"
                 )
-        except:
+        except Exception:
             errors.append(f"Column '{column_name}' contains invalid date values")
 
         return {"is_valid": len(errors) == 0, "errors": errors, "warnings": warnings}

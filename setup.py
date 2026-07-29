@@ -1,5 +1,4 @@
 from setuptools import setup, find_packages
-import os
 import re
 
 # read the contents of your README file

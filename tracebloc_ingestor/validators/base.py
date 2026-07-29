@@ -5,13 +5,17 @@ for implementing data validation before ingestion.
 """
 
 from abc import ABC, abstractmethod
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, TYPE_CHECKING
 from dataclasses import dataclass
 from pathlib import Path
 import json
 import logging
 
 from tqdm import tqdm
+
+if TYPE_CHECKING:  # pragma: no cover
+    # Typing-only: pandas stays a lazy runtime import (see _load_data).
+    import pandas as pd
 
 from tracebloc_ingestor.config import Config
 

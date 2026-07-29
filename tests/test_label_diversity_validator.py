@@ -9,7 +9,6 @@ landed in MySQL. Issue #251.
 from __future__ import annotations
 
 import pandas as pd
-import pytest
 
 from tracebloc_ingestor.validators.label_diversity_validator import (
     LabelDiversityValidator,

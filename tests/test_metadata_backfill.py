@@ -15,7 +15,6 @@ from __future__ import annotations
 from collections import Counter
 from decimal import Decimal
 
-import pytest
 from sqlalchemy import (
     Column,
     Float,

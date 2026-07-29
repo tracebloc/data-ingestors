@@ -6,7 +6,7 @@ match the corresponding annotation keypoint names.
 """
 
 import logging
-from typing import Any, List, Optional
+from typing import Any, List
 
 import pandas as pd
 

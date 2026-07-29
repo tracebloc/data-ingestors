@@ -14,7 +14,6 @@ import datetime
 
 from unittest.mock import MagicMock
 
-import pandas as pd
 
 from tracebloc_ingestor.ingestors.csv_ingestor import CSVIngestor
 from tracebloc_ingestor.utils.constants import TaskCategory
