@@ -44,6 +44,7 @@ class Config:
         "LOG_LEVEL",
         "CATEGORICAL_MIN_COUNT",
         "EMIT_ENRICHED_SCHEMA",
+        "PER_INGESTION_TABLES",
     })
 
     # Env values (case-insensitive) that read as boolean true; anything else
@@ -214,6 +215,28 @@ class Config:
         if ov is not _MISSING:
             return ov if isinstance(ov, int) else LogLevel.get_level_code(ov)
         return LogLevel.get_level_code(os.environ.get("LOG_LEVEL", "WARNING"))
+
+    @property
+    def PER_INGESTION_TABLES(self) -> bool:
+        """RFC-0003 D16/D19 (tracebloc/backend#1205): when true, every ingest
+        run creates its own immutable physical table ``ds_<uuid4().hex>``
+        (derived from ingestor_id; hex because SQL table grammars forbid
+        hyphens) instead of appending to the label-named shared table, and
+        reports the handle in the ingest summary (``physical_table``) so the
+        backend can persist it (tracebloc/backend#1206).
+
+        Defaults to **off** — today's shared-table behavior, byte for byte.
+        Flipping it is coordinated with the backend resolution path and the
+        training read path (tracebloc/backend#1208); an edge flipped early
+        would ingest datasets the current training path cannot locate.
+        """
+        ov = self._override("PER_INGESTION_TABLES")
+        if ov is not _MISSING:
+            return ov if isinstance(ov, bool) else str(ov).strip().lower() in self._TRUE_STRINGS
+        env = os.environ.get("PER_INGESTION_TABLES")
+        if env is None:
+            return False
+        return env.strip().lower() in self._TRUE_STRINGS
 
     @property
     def EMIT_ENRICHED_SCHEMA(self) -> bool:
