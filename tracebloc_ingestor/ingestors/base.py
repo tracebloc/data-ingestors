@@ -924,6 +924,10 @@ class BaseIngestor(ABC):
             and not self.unique_id_column
             and self._table_salt is None
         ):
+            # Per-ingestion mode mints a fresh salt row per run (each
+            # immutable table gets its own salt); the I6 delete sweep
+            # (tracebloc/backend#1209) reaps salt rows together with their
+            # ds_ tables, so they don't accumulate indefinitely.
             self._table_salt = self.database.get_or_create_table_salt(
                 self.physical_table_name
             )
@@ -959,6 +963,11 @@ class BaseIngestor(ABC):
         # this run's own counts are unaffected because every summary query
         # is scoped to its ingestor_id.
         try:
+            # Under per-ingestion tables this is a guaranteed no-op (the
+            # table was created fresh this run; a retry is a NEW table, so
+            # reclaim never protects per-ingestion runs); dead-run husk
+            # tables are I6's sweep instead (tracebloc/backend#1209). Kept
+            # unconditional to preserve a single code path for legacy.
             self.database.reclaim_dead_run_rows(
                 self.physical_table_name, self.ingestor_id
             )

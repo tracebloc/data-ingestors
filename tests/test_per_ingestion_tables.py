@@ -19,6 +19,8 @@ from tracebloc_ingestor import database as db_mod
 from tracebloc_ingestor.api.client import APIClient
 from tracebloc_ingestor.config import Config
 from tracebloc_ingestor.database import Database
+from tracebloc_ingestor.ingestors import base as base_mod
+from tracebloc_ingestor.ingestors.base import BaseIngestor
 from tracebloc_ingestor.ingestors.csv_ingestor import CSVIngestor
 
 
@@ -222,3 +224,72 @@ def test_summary_payload_omits_physical_table_by_default():
     """Legacy payload stays byte-identical: no key at all, not a null."""
     payload = _send_and_capture(_client())
     assert "physical_table" not in payload
+
+
+# -- flag-ON end-to-end (review #1, Saqlain) ---------------------------------
+
+
+class _EndToEndIngestor(BaseIngestor):
+    """Concrete BaseIngestor whose read_data yields preset records --
+    mirrors tests/test_ingestor_base.FakeIngestor, kept local so this file
+    stays self-contained."""
+
+    def __init__(self, records, **kwargs):
+        self._records = records
+        super().__init__(**kwargs)
+
+    def read_data(self, source):
+        yield from self._records
+
+
+def test_flag_on_threads_the_physical_name_end_to_end():
+    """The connective tissue in ``_ingest_with_lock`` -- not just the units:
+    a full flag-ON ingest must hand ``physical_table_name`` to EVERY row-store
+    call (salt, create, reclaim, journal, counts, samples, schema, batch
+    insert) while the summary keeps the label as its URL identity and carries
+    the handle in the payload. A regression that passed ``self.table_name``
+    to any one of these would pass the unit tests and fail only here."""
+    db = MagicMock(name="Database")
+    db.get_or_create_table_salt.return_value = "0" * 64
+    db.create_table.return_value = MagicMock(name="table")
+    db.insert_batch.return_value = ([1, 2], [])  # ids, db_failures
+    db.get_table_schema.return_value = {"a": "INT"}
+    db.get_label_counts.return_value = {"cat": 2}
+    db.get_samples.return_value = []
+    db.config.PER_INGESTION_TABLES = True
+    api = MagicMock(name="APIClient")
+    api.send_ingest_summary.return_value = {"dataset_id": 1, "dataset_key": "k"}
+
+    ing = _EndToEndIngestor(
+        [{"a": "1", "filename": "f1"}],
+        database=db,
+        api_client=api,
+        table_name="tbl",
+        schema={"a": "INT"},
+        intent="train",
+        category=None,
+    )
+    with patch.object(base_mod, "Session") as Sess:
+        Sess.return_value.__enter__.return_value = MagicMock()
+        ing.ingest("src", batch_size=10)
+
+    phys = ing.physical_table_name
+    assert phys == f"ds_{uuid.UUID(ing.ingestor_id).hex}"
+
+    # Row store: every table-taking call got the physical name.
+    db.get_or_create_table_salt.assert_called_once_with(phys)
+    db.create_table.assert_called_once_with(
+        phys, {"a": "INT"}, index_columns=None, must_not_exist=True
+    )
+    db.reclaim_dead_run_rows.assert_called_once_with(phys, ing.ingestor_id)
+    db.record_ingest_started.assert_called_once_with(phys, ing.ingestor_id, None)
+    db.get_label_counts.assert_called_once_with(phys, ing.ingestor_id)
+    db.get_samples.assert_called_once_with(phys, ing.ingestor_id)
+    db.get_table_schema.assert_called_once_with(phys)
+    db.mark_ingest_registered.assert_called_once_with(phys, ing.ingestor_id)
+    assert db.insert_batch.call_args.args[0] == phys
+
+    # Summary: the label stays the URL identity; the handle rides the payload.
+    summary_kwargs = api.send_ingest_summary.call_args.kwargs
+    assert summary_kwargs["table_name"] == "tbl"
+    assert summary_kwargs["physical_table"] == phys
