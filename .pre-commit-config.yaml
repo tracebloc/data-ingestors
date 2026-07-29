@@ -1,0 +1,23 @@
+# File used for configuring project pre-commit hooks.
+# Layer 0: an optional local lint guard — CI remains the enforcement layer.
+# Mirrors the org pattern in tracebloc/backend.
+repos:
+- repo: https://github.com/psf/black
+  rev: 26.3.1
+  hooks:
+  - id: black
+    args: [
+      --check
+    ]
+- repo: https://github.com/pre-commit/pre-commit-hooks
+  rev: v4.1.0
+  hooks:
+  - id: check-json
+  - id: check-xml
+  - id: check-yaml
+  - id: debug-statements
+  - id: end-of-file-fixer
+    # templates/ ships user-facing sample files byte-for-byte — never rewrite.
+    exclude: ^templates/
+default_language_version:
+  python: python3.11
