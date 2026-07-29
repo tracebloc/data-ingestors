@@ -1,0 +1,14 @@
+name: FR pass comment
+
+# Per-repo caller. Listens for /fr-pass comments and advances kanban items
+# from "FR on dev" → "Ready for staging" or "FR on staging" → "Ready for prod".
+# All logic lives in tracebloc/.github/.github/workflows/fr-pass-comment.yml.
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  advance:
+    uses: tracebloc/.github/.github/workflows/fr-pass-comment.yml@main
+    secrets: inherit
