@@ -19,5 +19,3 @@ repos:
   - id: end-of-file-fixer
     # templates/ ships user-facing sample files byte-for-byte — never rewrite.
     exclude: ^templates/
-default_language_version:
-  python: python3.11
