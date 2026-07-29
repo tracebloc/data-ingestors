@@ -1,0 +1,22 @@
+name: Code quality
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+
+# Supersede the previous run when a branch is pushed again. Measured:
+# workflows missing this stack ~10-minute duplicate runs per push.
+concurrency:
+  group: code-quality-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    uses: tracebloc/.github/.github/workflows/code-quality.yml@main
+    with:
+      python: true          # repos with Python
+      shell: true           # repos with shell scripts
+      # soft-fail: false    # flip once the backlog is clear
