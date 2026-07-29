@@ -215,3 +215,9 @@ Maintainers: see [RELEASING.md](RELEASING.md) for the release procedure.
 Apache 2.0 — see [LICENSE](LICENSE).
 
 **Questions?** [support@tracebloc.io](mailto:support@tracebloc.io) or [open an issue](https://github.com/tracebloc/data-ingestors/issues).
+
+## Pre-commit
+
+Optional but recommended: `pip install pre-commit && pre-commit install` sets up the git hooks from [`.pre-commit-config.yaml`](.pre-commit-config.yaml).
+The hooks run automatically on each commit, only on the files you touch.
+They are a fast local guard — CI remains the guarantee.
