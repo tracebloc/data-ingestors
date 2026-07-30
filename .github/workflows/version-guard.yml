@@ -1,0 +1,38 @@
+# The ingestor image builds ONLY on a vX.Y.Z tag (release-image.yml), and the
+# tag is cut from __version__. So a package change merged without bumping
+# __version__ never reaches a released image — which is exactly how the D16
+# ds_<hex> write path (#408) sat unreleased: it merged to develop, everyone
+# assumed it shipped, but no version bump meant no tag and no image. This gate
+# makes the bump non-optional for package-source changes.
+name: Version guard
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  require-version-bump:
+    name: package change ⇒ __version__ bump
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Require a __version__ bump when the package changes
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          changed="$(git diff --name-only "${BASE_SHA}...HEAD")"
+          if ! printf '%s\n' "$changed" | grep -qE '^tracebloc_ingestor/'; then
+            echo "No tracebloc_ingestor/ change in this PR — guard N/A."
+            exit 0
+          fi
+          if git diff "${BASE_SHA}...HEAD" -- tracebloc_ingestor/__init__.py | grep -qE '^\+__version__'; then
+            echo "Package changed and __version__ was bumped. ✓"
+            exit 0
+          fi
+          echo "::error::tracebloc_ingestor/ changed but __version__ (tracebloc_ingestor/__init__.py) was NOT bumped. The ingestor image builds only on a vX.Y.Z tag, so an unbumped change never reaches a released image (this is how the D16 ds_<hex> write path #408 sat unreleased). Bump __version__ in this PR."
+          exit 1
