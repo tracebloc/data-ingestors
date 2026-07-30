@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
 
 from tracebloc_ingestor.config import Config
 from tracebloc_ingestor.utils.validators_mapping import map_validators

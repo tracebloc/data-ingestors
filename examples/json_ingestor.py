@@ -7,7 +7,6 @@ that normalizes data types and formats.
 
 import logging
 from pathlib import Path
-from typing import Dict, Any
 
 from tracebloc_ingestor import Config, Database, APIClient, JSONIngestor
 from tracebloc_ingestor.utils.logging import setup_logging

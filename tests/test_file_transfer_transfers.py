@@ -7,7 +7,6 @@ source resolution helpers, and the multi-file map_file_transfer branches.
 
 from __future__ import annotations
 
-import os
 
 import pytest
 

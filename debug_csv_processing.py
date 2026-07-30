@@ -8,7 +8,6 @@ how the CSV data is being processed and identifying potential issues.
 
 import pandas as pd
 import logging
-from pathlib import Path
 import re
 
 # Setup logging
@@ -144,7 +143,7 @@ def diagnose_csv_issues(csv_path):
                 "feature_018",
             ]
             available_cols = [col for col in test_cols if col in df.columns]
-            subset_df = df[available_cols]
+            df[available_cols]  # exercise subset selection; result unused
             print(f"   ✅ Column subset selection works: {len(available_cols)} columns")
         except Exception as e:
             print(f"   ❌ Column subset selection failed: {e}")
@@ -152,7 +151,7 @@ def diagnose_csv_issues(csv_path):
         try:
             # Test column renaming
             rename_dict = {col: col.strip() for col in df.columns}
-            renamed_df = df.rename(columns=rename_dict)
+            df.rename(columns=rename_dict)  # exercise renaming; result unused
             print("   ✅ Column renaming works")
         except Exception as e:
             print(f"   ❌ Column renaming failed: {e}")

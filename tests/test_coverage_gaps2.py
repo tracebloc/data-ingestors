@@ -297,7 +297,10 @@ def test_json_ingest_method_propagates_error():
 # XML validator: sub-element branches (called directly on crafted elements)
 # ===========================================================================
 
-from tracebloc_ingestor.validators.xml_validator import PascalVOCXMLValidator
+# E402: deliberate per-section import — the unit under test lives with its tests.
+from tracebloc_ingestor.validators.xml_validator import (  # noqa: E402
+    PascalVOCXMLValidator,
+)
 
 
 def _obj(

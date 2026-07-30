@@ -23,7 +23,6 @@ These tests pin the three classes of input that need to be handled:
 
 from __future__ import annotations
 
-import pytest
 
 from tracebloc_ingestor.file_transfer import _has_extension
 

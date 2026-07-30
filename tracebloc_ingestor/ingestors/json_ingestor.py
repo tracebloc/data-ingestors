@@ -16,6 +16,12 @@ import ijson
 import pandas as pd
 
 from ..utils import redaction
+from .base import BaseIngestor
+from ..database import Database
+from ..api.client import APIClient
+from ..utils.constants import RESET, RED, YELLOW
+from ..utils import label_policy as label_policy_module
+from ..utils import coercion
 
 
 def _peek_json_shape(path: Path) -> Optional[str]:
@@ -57,12 +63,6 @@ def _peek_json_shape(path: Path) -> Optional[str]:
                 return None
     return None
 
-from .base import BaseIngestor
-from ..database import Database
-from ..api.client import APIClient
-from ..utils.constants import RESET, RED, YELLOW
-from ..utils import label_policy as label_policy_module
-from ..utils import coercion
 
 logger = logging.getLogger(__name__)
 

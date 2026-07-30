@@ -21,7 +21,6 @@ This file's job is to lock the shape of the YAML surface in isolation.
 from __future__ import annotations
 
 import json
-from copy import deepcopy
 from pathlib import Path
 
 import pytest
