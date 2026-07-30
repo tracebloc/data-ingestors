@@ -83,11 +83,11 @@ jobs:
           # let `-f ref=0.7.9` clear the gate and then die in checkout instead.
           case "$REF" in
             v*) ;;
-            *) echo "::error::ref '$REF' must be a tag of the form vX.Y.Z (leading v required)" >&2; exit 1 ;;
+            *) echo "::error::ref '$REF' must be a tag of the form vX.Y.Z (leading v required)"; exit 1 ;;
           esac
           version="${REF#v}"
           if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.]+)?$'; then
-            echo "::error::ref '$REF' is not a vX.Y.Z tag" >&2
+            echo "::error::ref '$REF' is not a vX.Y.Z tag"
             exit 1
           fi
 
@@ -114,7 +114,7 @@ jobs:
               sleep 20
             fi
           done
-          echo "::error::tracebloc-ingestor ${version} never appeared on PyPI (10 min). Refusing to publish an image for a version that did not publish - check the 'Publish Master Package' run for this commit, then re-drive this workflow with: gh workflow run release-image.yml -f ref=${REF}" >&2
+          echo "::error::tracebloc-ingestor ${version} never appeared on PyPI (10 min). Refusing to publish an image for a version that did not publish - check the 'Publish Master Package' run for this commit, then re-drive this workflow with: gh workflow run release-image.yml -f ref=${REF}"
           exit 1
 
   release:
@@ -193,7 +193,7 @@ jobs:
           REF: ${{ inputs.ref || github.ref_name }}
         run: |
           if [ -z "${TAGS//[[:space:]]/}" ]; then
-            echo "::error::docker/metadata-action produced no tags for ref '${REF}'. Aborting before the build silently pushes nothing." >&2
+            echo "::error::docker/metadata-action produced no tags for ref '${REF}'. Aborting before the build silently pushes nothing."
             exit 1
           fi
           echo "Tags to publish:"
