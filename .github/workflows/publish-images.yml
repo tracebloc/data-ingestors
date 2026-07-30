@@ -1,0 +1,265 @@
+# Internal ingestor image channels: :dev and :stg (backend#1360).
+#
+# WHY THIS EXISTS: the ingestor image used to be a prod-release-only artifact.
+# `release-image.yml` builds it only from a `vX.Y.Z` tag and gates on the
+# version being on PyPI, and PyPI publishes only from master -- so testing a
+# proposed ingestor change on a dev or staging edge required a full production
+# release. On 2026-07-30 that cost a prod PyPI publish, a `skip-fr-gate`
+# override and a manual workflow dispatch just to validate one change.
+#
+# Every other component already has per-environment channels
+# (client-runtime `publish-images.yml`, tracebloc-engine `docker-build.yml`):
+#   develop -> :dev    staging -> :stg    master/tag -> :prod-equivalent
+# This closes the same gap for the ingestor.
+#
+# DELIBERATELY NOT IN THIS FILE:
+#   * master / `vX.Y.Z` builds -- prod stays entirely in `release-image.yml`,
+#     untouched, so the cosign identity customers verify against
+#     (`release-image.yml@refs/tags/v.*`) keeps its exact meaning. A branch
+#     build here can never reach the semver tags, the GitHub Release, or the
+#     PyPI gate.
+#   * The PyPI `verify-published` gate. That is a RELEASE-POLICY lockstep
+#     ("never ship an image for a version that did not also publish to
+#     PyPI"), not a build dependency -- the Dockerfile builds from source
+#     (`pip wheel .`, "ships the exact code being released, not whatever is
+#     on PyPI"). `:dev`/`:stg` are not releases, so the policy does not apply.
+#   * cosign signatures / SBOM / provenance. Internal channels are unsigned on
+#     purpose: it keeps exactly one signed trust root (the prod tags) rather
+#     than two with different identities. Do not pin `:dev`/`:stg` in a
+#     customer-facing chart default.
+#
+# Native per-arch runners, NOT QEMU: client-runtime measured the emulated
+# arm64 leg as the bulk of its ~13 min build, and today's QEMU-based
+# `release-image` run for v0.8.0 took ~25 min. Building each arch on its own
+# native runner in parallel and merging the manifest makes multi-arch cost
+# about the same wall-clock as amd64 alone -- so dev edges on Apple Silicon
+# or arm64 nodes still get a pullable image without paying an emulation tax
+# on every develop push (the amd64-only ImagePullBackOff class, client#186).
+
+name: Publish internal images
+
+on:
+  push:
+    branches: [develop, staging]
+    # Only rebuild when something that lands in the image changes. A docs- or
+    # workflow-only push should not spend two runners.
+    paths:
+      - 'tracebloc_ingestor/**'
+      - 'schema/**'
+      - 'Dockerfile'
+      - 'docker-entrypoint.sh'
+      - 'requirements.txt'
+      - 'setup.py'
+      - '.github/workflows/publish-images.yml'
+  # No channel input: the channel is derived solely from the ref, so it can
+  # never disagree with the code being built. An earlier revision took a
+  # `channel` choice, which (a) skipped the develop/staging allowlist when set,
+  # letting a dispatch from master publish master code to :dev, and (b)
+  # preselected `dev` in the UI, so a dispatch from staging silently defaulted
+  # to the wrong channel (Bugbot, #422). Dispatch still works -- pick the ref
+  # (develop or staging) in the Run-workflow dialog.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write   # push to ghcr.io
+
+concurrency:
+  # One in-flight build per channel; a newer push supersedes an older one
+  # since the channel tag is a moving pointer anyway.
+  group: publish-images-${{ github.ref_name }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: tracebloc/ingestor
+
+jobs:
+  resolve:
+    name: Resolve channel
+    runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.channel.outputs.tag }}
+    steps:
+      - name: Map branch to channel tag
+        id: channel
+        env:
+          # Via env, never interpolated into the script (R8).
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          # The ref is the ONLY source of the channel -- there is no input that
+          # could disagree with it, so the code built and the tag published
+          # always match. Any ref other than develop/staging is refused, on
+          # both the push and the dispatch path.
+          case "$REF_NAME" in
+            develop) tag="dev" ;;
+            staging) tag="stg" ;;
+            *)
+              echo "::error::refusing to publish an internal channel from '$REF_NAME' - this workflow handles develop/staging only; prod images come from release-image.yml on a vX.Y.Z tag." >&2
+              exit 1
+              ;;
+          esac
+          # Belt and braces: never let this workflow mint a prod-looking tag.
+          case "$tag" in
+            dev|stg) ;;
+            *) echo "::error::channel '$tag' is not an internal channel (dev|stg)" >&2; exit 1 ;;
+          esac
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Publishing internal channel: $tag"
+
+  build:
+    name: Build (${{ matrix.platform.arch }})
+    needs: resolve
+    runs-on: ${{ matrix.platform.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/${{ matrix.platform.arch }}
+          # Single platform per runner, so no provenance attestation: the
+          # merged index then contains exactly amd64 + arm64 with no
+          # unknown/unknown entries.
+          provenance: false
+          cache-from: type=gha,scope=ingestor-${{ matrix.platform.arch }}
+          cache-to: type=gha,mode=max,scope=ingestor-${{ matrix.platform.arch }}
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+
+      - name: Smoke-test the built image
+        # Every other publisher runs this probe (release-image.yml,
+        # publish-master.yml, publish-dev.yml) and it exists for a real
+        # regression: v0.3.0-rc1 shipped without tracebloc_ingestor/schema/
+        # because the directory had no __init__.py and find_packages() silently
+        # dropped it. Without the probe, that class of packaging break would
+        # land on every edge testing these channels -- which defeats the point
+        # of having them.
+        #
+        # Run per-arch, natively, against the digest just pushed. That digest
+        # is unreferenced until the merge job creates the channel tag, so a
+        # failure here means :dev/:stg keeps pointing at the last good image
+        # rather than a broken one. (The prod path probes a single arch after a
+        # QEMU build; probing each arch on its own runner is strictly stronger.)
+        env:
+          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          docker run --rm --entrypoint python "${IMAGE}@${DIGEST}" \
+            -c "from tracebloc_ingestor.cli.run import _load_schema; print(_load_schema()['title'])"
+          # The CLI has no --help: main() expects INGEST_CONFIG and says so.
+          output=$(docker run --rm --entrypoint tracebloc-ingest "${IMAGE}@${DIGEST}" 2>&1 || true)
+          echo "$output"
+          echo "$output" | grep -q "INGEST_CONFIG"
+
+      - name: Export digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DIGEST:-}" ]; then
+            echo "::error::build produced no digest" >&2
+            exit 1
+          fi
+          mkdir -p "${{ runner.temp }}/digests"
+          touch "${{ runner.temp }}/digests/${DIGEST#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ matrix.platform.arch }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    name: Merge manifest
+    needs: [resolve, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digests-*
+          merge-multiple: true
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create and push the multi-arch manifest
+        working-directory: ${{ runner.temp }}/digests
+        env:
+          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          TAG: ${{ needs.resolve.outputs.tag }}
+        run: |
+          set -euo pipefail
+          count=$(find . -maxdepth 1 -type f | wc -l | tr -d ' ')
+          if [ "$count" -lt 2 ]; then
+            echo "::error::expected 2 per-arch digests, found $count - refusing to publish a partial (single-arch) index. An amd64-only channel tag ImagePullBackOffs on arm64 kubelets (client#186)." >&2
+            exit 1
+          fi
+          # shellcheck disable=SC2046  # intentional word splitting: one arg per digest file
+          docker buildx imagetools create -t "${IMAGE}:${TAG}" \
+            $(printf "${IMAGE}@sha256:%s " *)
+
+      - name: Verify the published index is multi-arch
+        env:
+          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          TAG: ${{ needs.resolve.outputs.tag }}
+        run: |
+          set -euo pipefail
+          out=$(docker buildx imagetools inspect "${IMAGE}:${TAG}")
+          echo "$out"
+          for arch in amd64 arm64; do
+            printf '%s' "$out" | grep -q "linux/${arch}" || {
+              echo "::error::published ${IMAGE}:${TAG} is missing linux/${arch}" >&2
+              exit 1
+            }
+          done
+          echo "OK: ${IMAGE}:${TAG} carries linux/amd64 + linux/arm64"
+
+      - name: Summary
+        env:
+          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          TAG: ${{ needs.resolve.outputs.tag }}
+        run: |
+          {
+            echo "### Published \`${IMAGE}:${TAG}\`"
+            echo ""
+            echo "Internal channel image (unsigned, not PyPI-gated). Point a dev/staging edge at it with:"
+            echo ""
+            echo '```yaml'
+            echo "images:"
+            echo "  ingestor:"
+            echo "    tag: \"${TAG}\""
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
