@@ -40,11 +40,85 @@ env:
   IMAGE_NAME: tracebloc/ingestor
 
 concurrency:
-  group: release-image-${{ github.ref }}
+  # Key on the TAG, not github.ref: on workflow_dispatch github.ref is
+  # refs/heads/master, so a manual re-drive landed in a different group from
+  # the tag-triggered run and the two raced. Both push :X.Y.Z/:X.Y/:X from
+  # independent non-reproducible builds, and because the train pushes a bare
+  # tag with no Release both take the `gh release create` branch — so one 422s
+  # *after* it has already pushed and cosign-signed an image. Reachable in
+  # practice now: the verify gate below can hold for ten minutes, and
+  # RELEASING.md tells operators to dispatch when a run looks stuck.
+  group: release-image-${{ inputs.ref || github.ref_name }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # Only cut an image for a version that actually published. The old chain got
+  # this implicitly: auto-release-on-master.yml ran on a *successful*
+  # publish-master (sdist install + schema probe) and only then tagged and
+  # dispatched. The release tag now comes from the release train
+  # (tracebloc/backend#1345), which pushes it right after the promotion merge
+  # while publish-master is still running — so the guarantee has to be stated
+  # explicitly here instead of inherited from the trigger.
+  verify-published:
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    # One unauthenticated curl to a public URL needs nothing. Without this it
+    # inherits contents/packages/id-token/attestations write from the workflow
+    # block, and an OIDC token minted here would carry the release-image.yml
+    # workflow_ref — the exact identity the cosign command in the header tells
+    # consumers to trust. Splitting the gate into its own job is what makes
+    # dropping the scopes free.
+    permissions: {}
+    steps:
+      - name: Wait for this version on PyPI
+        id: check
+        env:
+          REF: ${{ inputs.ref || github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          # Require the leading v and digits-only components. The previous
+          # glob accepted "1x.2y.3junk" (the * matched dots and letters) while
+          # its own error said "not a vX.Y.Z tag", and stripping an optional v
+          # let `-f ref=0.7.9` clear the gate and then die in checkout instead.
+          case "$REF" in
+            v*) ;;
+            *) echo "::error::ref '$REF' must be a tag of the form vX.Y.Z (leading v required)"; exit 1 ;;
+          esac
+          version="${REF#v}"
+          if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.]+)?$'; then
+            echo "::error::ref '$REF' is not a vX.Y.Z tag"
+            exit 1
+          fi
+
+          # publish-master.yml uploads to PyPI on the master push; the tag can
+          # land first, and PyPI's CDN lags a little behind an upload. Poll
+          # rather than race, and FAIL CLOSED: no published sdist means no
+          # image, which is the whole point of this gate.
+          #
+          # curl gets explicit timeouts: it has no default, so a peer that
+          # accepts the connection and never replies hangs the step until
+          # timeout-minutes kills it -- which loses the one diagnostic this
+          # gate exists to print. --retry rides out a transient 5xx so it
+          # cannot be mistaken for a genuine 404 on the last attempt.
+          attempts=30
+          for attempt in $(seq 1 "$attempts"); do
+            if curl -fsS -o /dev/null \
+                 --connect-timeout 10 --max-time 30 --retry 2 --retry-connrefused \
+                 "https://pypi.org/pypi/tracebloc-ingestor/${version}/json"; then
+              echo "tracebloc-ingestor ${version} is on PyPI - proceeding to build the image."
+              exit 0
+            fi
+            if [ "$attempt" -lt "$attempts" ]; then
+              echo "  attempt ${attempt}/${attempts}: ${version} not on PyPI yet, waiting 20s"
+              sleep 20
+            fi
+          done
+          echo "::error::tracebloc-ingestor ${version} never appeared on PyPI (10 min). Refusing to publish an image for a version that did not publish - check the 'Publish Master Package' run for this commit, then re-drive this workflow with: gh workflow run release-image.yml -f ref=${REF}"
+          exit 1
+
   release:
+    needs: verify-published
     timeout-minutes: 30
     runs-on: ubuntu-latest
 
@@ -119,7 +193,7 @@ jobs:
           REF: ${{ inputs.ref || github.ref_name }}
         run: |
           if [ -z "${TAGS//[[:space:]]/}" ]; then
-            echo "::error::docker/metadata-action produced no tags for ref '${REF}'. Aborting before the build silently pushes nothing." >&2
+            echo "::error::docker/metadata-action produced no tags for ref '${REF}'. Aborting before the build silently pushes nothing."
             exit 1
           fi
           echo "Tags to publish:"
