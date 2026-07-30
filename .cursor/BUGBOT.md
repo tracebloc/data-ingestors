@@ -21,9 +21,10 @@ Three properties shape most real defects here:
 
 Release flow: this repo rides the org release train `develop → staging → master`. A develop
 push publishes a dev pre-release (`publish-dev.yml`), a master push publishes the package
-(`publish-master.yml`), and a `vX.Y.Z` tag builds the signed multi-arch image + GitHub
-Release (`release-image.yml`). Package and image release independently; `RELEASING.md`
-documents how they stay aligned.
+(`publish-master.yml`), and a `vX.Y.Z` tag — pushed by the train, not by this repo — builds
+the signed multi-arch image + GitHub Release (`release-image.yml`). The package can ship
+without the image, but not the reverse: `release-image.yml` gates on the version being on
+PyPI first. `RELEASING.md` documents how they stay aligned.
 
 ## Always flag
 

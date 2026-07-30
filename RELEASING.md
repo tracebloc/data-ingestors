@@ -12,7 +12,9 @@ How to cut a new release of `tracebloc-ingestor` (PyPI package) and `ghcr.io/tra
 
 Each publisher runs the schema-load smoke probe (`tracebloc_ingestor.cli.run._load_schema()`) before publishing. If the bundled `schema/ingest.v1.json` ever goes missing from the artifact (the v0.3.0-rc1 bug), the workflow aborts and nothing ships.
 
-The image and the PyPI package release **independently**. A tag without a version bump produces an image whose pip-reported version lags. A `master` merge without a tag produces a PyPI release with no image. Doing the bump *inside* the sync PR (step 2) keeps them aligned.
+The PyPI package can release without the image, but **not the other way round**: `release-image.yml` opens with a `verify-published` gate that polls PyPI for the exact version in the tag and fails closed if it never appears, so an image is only ever cut for a version that actually published. A `master` merge without a tag still produces a PyPI release with no image. Doing the bump *inside* the sync PR (step 2) keeps them aligned.
+
+Note the gate proves the version *string* is on PyPI, not that the tagged commit is the one that uploaded it. On the release-train path those are the same commit; a hand-cut tag on some other commit would still clear the gate.
 
 ## Pre-flight
 
@@ -97,13 +99,15 @@ gh run watch --repo tracebloc/data-ingestors \
 
 If the smoke probe inside that workflow fails, the package will not be uploaded. Fix the regression and reopen a new sync PR — do **not** force the upload.
 
-## 5. Tag the release (automatic)
+## 5. Tag the release (automatic — the release train does it)
 
-**This step now happens on its own.** Once the step-4 master publish is green, `auto-release-on-master.yml` (chained on `publish-master.yml` via `workflow_run`) reads the single-sourced `__version__`, and — if the `vX.Y.Z` tag doesn't already exist — creates and pushes it on the published master commit, then dispatches `release-image.yml`. So a normal release needs no manual tag: merge the sync PR, watch the master publish go green, and the image + GitHub Release follow automatically.
+**This step now happens on its own, from outside this repo.** The [release train](https://github.com/tracebloc/release-train) reads the single-sourced `__version__` on the prod hop and pushes `vX.Y.Z` on the commit it just merged. That tag push starts `release-image.yml`, which waits for the version on PyPI and then builds the signed image + GitHub Release. So a normal release needs no manual tag: merge the sync PR, watch the master publish go green, and the image follows.
 
-It's idempotent — if `vX.Y.Z` already exists (a re-run, or a version someone pre-tagged out of band) it's a no-op; the workflow never moves or re-cuts an existing tag.
+The tag is cut by the train's token (which acts as Lukas), **not** by `github-actions[bot]`. That is deliberate — this repo's `Protect v* release tags` ruleset does not let the bot bypass tag creation, so the previous repo-local `auto-release-on-master.yml` would have failed on the first real release; it was retired in favour of the train (tracebloc/backend#1345). A bot-pushed tag also would not have started `release-image.yml` at all, whereas the train's does.
 
-**Manual fallback.** If the automation is disabled, or you're re-cutting an image for an existing tag, tag by hand after the master publish is green:
+If the version already has a tag the train skips it, and it refuses to go backwards (a version file below the latest released tag is a hard stop).
+
+**Manual fallback.** If the train is unavailable, or you're re-cutting an image for an existing tag, tag by hand after the master publish is green — from an account in `release-managers`, since the ruleset blocks everyone else:
 
 ```bash
 git checkout master && git pull --ff-only
@@ -217,3 +221,5 @@ gh workflow run release-image.yml --repo tracebloc/data-ingestors \
 | `release-image.yml` smoke step fails with `INGEST_CONFIG` not in output | `tracebloc-ingest` console script not installed (broken `entry_points` in setup.py) or `main()` raises at import time. | Run the second smoke probe locally against the digest with `--entrypoint tracebloc-ingest`. |
 | Image workflow ran but no image was pushed | `docker/metadata-action` produced zero tags (the `inputs.ref` / `github.ref` mismatch class of bug). | Re-run via `gh workflow run release-image.yml -f ref=v${VERSION}`. The `Verify tags were produced` step exists exactly to catch this and fail loudly. |
 | Cosign verify fails after a successful release | OIDC certificate identity changed (someone moved the workflow file). | Update the `--certificate-identity-regexp` to match the new path. |
+| `release-image.yml` sits in `verify-published` for minutes, then fails with `never appeared on PyPI` | The version in the tag was never uploaded — usually `publish-master.yml` failed (check its run for this commit), or the tag was cut on a commit whose version differs from what published. | Fix the publish, then re-drive with `gh workflow run release-image.yml -f ref=v${VERSION}`. Do **not** bypass the gate: an image for an unpublished version is exactly what it exists to prevent. |
+| A tag exists but no image or Release was ever produced | The `release-image.yml` run for that tag failed or was cancelled. Nothing re-drives it automatically — `push: tags` cannot re-fire for an existing ref, and the ruleset blocks delete-and-re-push. | Re-drive it by hand: `gh workflow run release-image.yml -f ref=v${VERSION}`. It's safe to repeat — the run edits or creates the Release and re-signs the same digest. |
