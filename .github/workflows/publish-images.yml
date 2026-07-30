@@ -51,13 +51,14 @@ on:
       - 'requirements.txt'
       - 'setup.py'
       - '.github/workflows/publish-images.yml'
+  # No channel input: the channel is derived solely from the ref, so it can
+  # never disagree with the code being built. An earlier revision took a
+  # `channel` choice, which (a) skipped the develop/staging allowlist when set,
+  # letting a dispatch from master publish master code to :dev, and (b)
+  # preselected `dev` in the UI, so a dispatch from staging silently defaulted
+  # to the wrong channel (Bugbot, #422). Dispatch still works -- pick the ref
+  # (develop or staging) in the Run-workflow dialog.
   workflow_dispatch:
-    inputs:
-      channel:
-        description: 'Channel tag to publish (dev or stg). Defaults to the branch mapping.'
-        required: false
-        type: choice
-        options: [dev, stg]
 
 permissions:
   contents: read
@@ -66,7 +67,7 @@ permissions:
 concurrency:
   # One in-flight build per channel; a newer push supersedes an older one
   # since the channel tag is a moving pointer anyway.
-  group: publish-images-${{ inputs.channel || github.ref_name }}
+  group: publish-images-${{ github.ref_name }}
   cancel-in-progress: true
 
 env:
@@ -85,21 +86,20 @@ jobs:
         env:
           # Via env, never interpolated into the script (R8).
           REF_NAME: ${{ github.ref_name }}
-          INPUT_CHANNEL: ${{ inputs.channel }}
         run: |
           set -euo pipefail
-          if [ -n "${INPUT_CHANNEL:-}" ]; then
-            tag="$INPUT_CHANNEL"
-          else
-            case "$REF_NAME" in
-              develop) tag="dev" ;;
-              staging) tag="stg" ;;
-              *)
-                echo "::error::refusing to publish an internal channel from '$REF_NAME' - this workflow handles develop/staging only; prod images come from release-image.yml on a vX.Y.Z tag." >&2
-                exit 1
-                ;;
-            esac
-          fi
+          # The ref is the ONLY source of the channel -- there is no input that
+          # could disagree with it, so the code built and the tag published
+          # always match. Any ref other than develop/staging is refused, on
+          # both the push and the dispatch path.
+          case "$REF_NAME" in
+            develop) tag="dev" ;;
+            staging) tag="stg" ;;
+            *)
+              echo "::error::refusing to publish an internal channel from '$REF_NAME' - this workflow handles develop/staging only; prod images come from release-image.yml on a vX.Y.Z tag." >&2
+              exit 1
+              ;;
+          esac
           # Belt and braces: never let this workflow mint a prod-looking tag.
           case "$tag" in
             dev|stg) ;;
@@ -147,6 +147,32 @@ jobs:
           cache-from: type=gha,scope=ingestor-${{ matrix.platform.arch }}
           cache-to: type=gha,mode=max,scope=ingestor-${{ matrix.platform.arch }}
           outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+
+      - name: Smoke-test the built image
+        # Every other publisher runs this probe (release-image.yml,
+        # publish-master.yml, publish-dev.yml) and it exists for a real
+        # regression: v0.3.0-rc1 shipped without tracebloc_ingestor/schema/
+        # because the directory had no __init__.py and find_packages() silently
+        # dropped it. Without the probe, that class of packaging break would
+        # land on every edge testing these channels -- which defeats the point
+        # of having them.
+        #
+        # Run per-arch, natively, against the digest just pushed. That digest
+        # is unreferenced until the merge job creates the channel tag, so a
+        # failure here means :dev/:stg keeps pointing at the last good image
+        # rather than a broken one. (The prod path probes a single arch after a
+        # QEMU build; probing each arch on its own runner is strictly stronger.)
+        env:
+          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          docker run --rm --entrypoint python "${IMAGE}@${DIGEST}" \
+            -c "from tracebloc_ingestor.cli.run import _load_schema; print(_load_schema()['title'])"
+          # The CLI has no --help: main() expects INGEST_CONFIG and says so.
+          output=$(docker run --rm --entrypoint tracebloc-ingest "${IMAGE}@${DIGEST}" 2>&1 || true)
+          echo "$output"
+          echo "$output" | grep -q "INGEST_CONFIG"
 
       - name: Export digest
         env:
