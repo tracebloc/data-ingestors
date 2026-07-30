@@ -96,14 +96,14 @@ jobs:
             develop) tag="dev" ;;
             staging) tag="stg" ;;
             *)
-              echo "::error::refusing to publish an internal channel from '$REF_NAME' - this workflow handles develop/staging only; prod images come from release-image.yml on a vX.Y.Z tag." >&2
+              echo "::error::refusing to publish an internal channel from '$REF_NAME' - this workflow handles develop/staging only; prod images come from release-image.yml on a vX.Y.Z tag."
               exit 1
               ;;
           esac
           # Belt and braces: never let this workflow mint a prod-looking tag.
           case "$tag" in
             dev|stg) ;;
-            *) echo "::error::channel '$tag' is not an internal channel (dev|stg)" >&2; exit 1 ;;
+            *) echo "::error::channel '$tag' is not an internal channel (dev|stg)"; exit 1 ;;
           esac
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "Publishing internal channel: $tag"
@@ -180,7 +180,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "${DIGEST:-}" ]; then
-            echo "::error::build produced no digest" >&2
+            echo "::error::build produced no digest"
             exit 1
           fi
           mkdir -p "${{ runner.temp }}/digests"
@@ -224,7 +224,7 @@ jobs:
           set -euo pipefail
           count=$(find . -maxdepth 1 -type f | wc -l | tr -d ' ')
           if [ "$count" -lt 2 ]; then
-            echo "::error::expected 2 per-arch digests, found $count - refusing to publish a partial (single-arch) index. An amd64-only channel tag ImagePullBackOffs on arm64 kubelets (client#186)." >&2
+            echo "::error::expected 2 per-arch digests, found $count - refusing to publish a partial (single-arch) index. An amd64-only channel tag ImagePullBackOffs on arm64 kubelets (client#186)."
             exit 1
           fi
           # shellcheck disable=SC2046  # intentional word splitting: one arg per digest file
@@ -241,7 +241,7 @@ jobs:
           echo "$out"
           for arch in amd64 arm64; do
             printf '%s' "$out" | grep -q "linux/${arch}" || {
-              echo "::error::published ${IMAGE}:${TAG} is missing linux/${arch}" >&2
+              echo "::error::published ${IMAGE}:${TAG} is missing linux/${arch}"
               exit 1
             }
           done
