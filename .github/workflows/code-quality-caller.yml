@@ -3,6 +3,14 @@ name: Code quality
 on:
   pull_request:
     types: [opened, reopened, synchronize, ready_for_review]
+  # Manual whole-tree scan (gitleaks baseline etc.) -- runs every enabled
+  # job in all-files mode instead of a PR diff.
+  workflow_dispatch:
+    inputs:
+      all-files:
+        description: "Scan the whole repo, not a diff"
+        type: boolean
+        default: true
 
 # Supersede the previous run when a branch is pushed again. Measured:
 # workflows missing this stack ~10-minute duplicate runs per push.
@@ -19,4 +27,7 @@ jobs:
     with:
       python: true          # repos with Python
       shell: true           # repos with shell scripts
-      # soft-fail: false    # flip once the backlog is clear
+      # The gate is armed: findings fail the job. Backlog cleared to zero
+      # fleet-wide + advisory soak done (backend#1303).
+      soft-fail: false
+      all-files: ${{ inputs.all-files || false }}
