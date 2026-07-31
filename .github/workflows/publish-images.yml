@@ -96,7 +96,7 @@ jobs:
           # code. Same class as the client-runtime#213 finding, where the
           # equivalent gap could reach :prod. Require a real branch first.
           if [ "$REF_TYPE" != "branch" ]; then
-            echo "::error::refusing to publish an internal channel from a $REF_TYPE ref ('$REF_NAME'): channels are bound to the develop/staging BRANCHES, and a tag of the same name would otherwise map to a channel. Re-run selecting the develop or staging branch." >&2
+            echo "::error::refusing to publish an internal channel from a $REF_TYPE ref ('$REF_NAME'): channels are bound to the develop/staging BRANCHES, and a tag of the same name would otherwise map to a channel. Re-run selecting the develop or staging branch."
             exit 1
           fi
           # The ref is the ONLY source of the channel -- there is no input that
