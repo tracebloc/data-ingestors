@@ -31,3 +31,4 @@ jobs:
       # fleet-wide + advisory soak done (backend#1303).
       soft-fail: false
       all-files: ${{ inputs.all-files || false }}
+      gitleaks-baseline: .gitleaks-baseline.json
