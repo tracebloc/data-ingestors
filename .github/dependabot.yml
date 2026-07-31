@@ -44,19 +44,10 @@ updates:
         applies-to: security-updates
         update-types: ["minor"]
 
-  # Docker base images
-  - package-ecosystem: "docker"
-    directory: "/"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 0
-    labels:
-      - "work-type:tech-debt"
-      - "dependencies"
-    groups:
-      docker-patches:
-        applies-to: security-updates
-        update-types: ["patch"]
-      docker-minor:
-        applies-to: security-updates
-        update-types: ["minor"]
+# NOTE — no `docker` block on purpose.
+# Dependabot SECURITY updates do not cover the Docker ecosystem: `docker` is not a
+# GitHub Advisory Database ecosystem at all (the /advisories API rejects it), so
+# base images can only be bumped by VERSION updates. With version updates disabled
+# here (`open-pull-requests-limit: 0`), a docker block would open zero PRs while
+# implying the base images were covered. Base-image CVEs need an image scanner
+# (trivy/grype) in CI, not Dependabot — tracked separately.
