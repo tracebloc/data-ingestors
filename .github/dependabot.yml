@@ -1,0 +1,53 @@
+# Dependabot config — security updates only.
+# `open-pull-requests-limit: 0` disables version updates; security updates have a separate
+# (built-in) limit of 10 and continue to fire when an advisory drops.
+# Labels and grouping defined here apply to security-update PRs.
+# Every group splits by update-type so a grouped PR never mixes patch with minor/major —
+# the auto-merge workflow gates on the PR-wide update-type (patch only).
+#
+# Mirrors the backend pilot (backend#577), which ran 2026-07-23 -> 2026-07-31 and produced
+# exactly one PR. Ecosystems and directories here come from a scan of this repo's tree.
+
+version: 2
+updates:
+  # Python — primary stack
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 0
+    labels:
+      - "work-type:tech-debt"
+      - "dependencies"
+    groups:
+      python-patches:
+        applies-to: security-updates
+        update-types: ["patch"]
+      python-minor:
+        applies-to: security-updates
+        update-types: ["minor"]
+
+  # GitHub Actions used in workflows
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 0
+    labels:
+      - "work-type:tech-debt"
+      - "dependencies"
+    groups:
+      actions-patches:
+        applies-to: security-updates
+        update-types: ["patch"]
+      actions-minor:
+        applies-to: security-updates
+        update-types: ["minor"]
+
+# NOTE — no `docker` block on purpose.
+# Dependabot SECURITY updates do not cover the Docker ecosystem: `docker` is not a
+# GitHub Advisory Database ecosystem at all (the /advisories API rejects it), so
+# base images can only be bumped by VERSION updates. With version updates disabled
+# here (`open-pull-requests-limit: 0`), a docker block would open zero PRs while
+# implying the base images were covered. Base-image CVEs need an image scanner
+# (trivy/grype) in CI, not Dependabot — tracked separately.
