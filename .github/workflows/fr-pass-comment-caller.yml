@@ -1,7 +1,14 @@
 name: FR pass comment
 
 # Per-repo caller. Listens for /fr-pass comments and advances kanban items
-# from "FR on dev" → "Ready for staging" or "FR on staging" → "Ready for prod".
+# from "FR on staging" → "Ready for prod" — the single functional-review gate.
+#
+# RFC-BACKEND-1405 D6 retired the dev-side review: "On dev" is set automatically
+# when the release train merges to develop, so there is no "FR on dev" column and
+# nothing for /fr-pass to advance before staging. The reusable has only ever
+# implemented the staging hop; this comment described a transition that does not
+# exist.
+#
 # All logic lives in tracebloc/.github/.github/workflows/fr-pass-comment.yml.
 
 on:
