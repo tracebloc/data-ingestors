@@ -7,6 +7,7 @@ supporting both binary data and file-based image processing.
 
 import logging
 import os
+import re
 import shutil
 from typing import Any, Dict, Optional
 
@@ -665,5 +666,81 @@ def _reclaim_source(cfg: Config) -> bool:
     logger.info(
         f"{GREEN}Reclaimed staged source {src_real} after a verified, clean "
         f"load — no duplicate copy left on the PVC (#346).{RESET}"
+    )
+    return True
+
+
+# A per-ingestion physical handle: ``ds_`` + uuid4 hex (35 chars). Same grammar
+# the ingestor derives (BaseIngestor.physical_table_name) and the client-runtime
+# husk sweep matches — used here to PROVE a dest dir is a throwaway per-ingestion
+# handle before removing it, never a user label dir.
+_DS_HANDLE_RE = re.compile(r"^ds_[0-9a-f]{32}$")
+
+
+def reclaim_dest_tree(cfg: Optional[Config] = None) -> bool:
+    """Best-effort removal of THIS run's per-ingestion DEST_PATH tree after a
+    FAILED file-bearing ingest (#437 follow-up — data-ingestors#439).
+
+    Under PER_INGESTION_TABLES the file tree is keyed on the run's unique
+    ``ds_<hex>`` handle (``config.set_dest_table``), so — unlike the flag-off
+    label tree, which a same-label re-run overwrites — a failed run's assets are
+    NEVER overwritten (the retry mints a fresh handle) and nothing else reclaims
+    them: a lasting PVC leak for image-sized payloads. The graceful-failure path
+    (``BaseIngestor._ingest_with_lock``'s compensating-delete branch) calls this
+    to remove them. Hard kills (OOMKilled/SIGKILL) bypass that branch; those
+    orphans are the edge-side husk sweep's job, exactly like the DB husk tables.
+
+    SAFETY — opt-in, provable: delete DEST_PATH only when its basename is a
+    ``ds_<hex>`` handle (``_DS_HANDLE_RE`` — the per-ingestion pattern, never a
+    user label) AND it resolves to a DIRECT child of STORAGE_PATH. A flag-off
+    label dir, a user's mounted dataset dir, or the storage root is always left
+    untouched. Paths are ``realpath``-resolved before the check and the delete,
+    so a symlinked PVC mount cannot slip a non-handle target past the gate.
+
+    Best-effort: ANY error is logged + swallowed (returns False) so a cleanup
+    failure can never mask the ingest's original error.
+
+    Returns ``True`` iff a per-ingestion dest tree was removed.
+    """
+    cfg = cfg or config
+    try:
+        return _reclaim_dest_tree(cfg)
+    except Exception as e:
+        try:
+            logger.warning(
+                f"{YELLOW}Could not reclaim the failed run's dest tree "
+                f"(DEST_PATH={cfg.DEST_PATH!r}): {e}. Left in place — a manual "
+                f"cleanup or the husk sweep can remove it.{RESET}"
+            )
+        except Exception:
+            pass  # a broken logger must not fail the failure path either
+        return False
+
+
+def _reclaim_dest_tree(cfg: Config) -> bool:
+    """The guarded dest-tree reclaim decision + delete (contract: see
+    ``reclaim_dest_tree``). Split out so the wrapper can best-effort the WHOLE
+    thing — a raise anywhere here must never propagate to the ingest."""
+    dest = cfg.DEST_PATH
+    storage = cfg.STORAGE_PATH
+    if not dest or not storage or not os.path.isdir(dest):
+        return False
+    dest_real = os.path.realpath(dest)
+    storage_real = os.path.realpath(storage)
+    # Must be a DIRECT ds_<hex> child of STORAGE_PATH — never a flag-off label
+    # dir, a user dataset dir, the storage root, or anything outside it.
+    if os.path.dirname(dest_real) != storage_real:
+        logger.info(
+            f"{YELLOW}Not reclaiming dest {dest_real}: not a direct child of "
+            f"STORAGE_PATH {storage_real} — left in place.{RESET}"
+        )
+        return False
+    if not _DS_HANDLE_RE.match(os.path.basename(dest_real)):
+        # flag-off label tree (overwritten on re-run) or any non-handle dir
+        return False
+    shutil.rmtree(dest_real)
+    logger.info(
+        f"{GREEN}Reclaimed the failed per-ingestion run's file tree {dest_real} "
+        f"— no orphaned payload left on the PVC (#437 follow-up).{RESET}"
     )
     return True

@@ -25,7 +25,7 @@ from ..utils import redaction
 from ..utils.columns import resolve_column
 from ..utils.correlation import resolve_correlation_id
 from ..utils.validators_mapping import map_validators
-from ..file_transfer import map_file_transfer, reclaim_source
+from ..file_transfer import map_file_transfer, reclaim_dest_tree, reclaim_source
 from ..text_profile import compute_text_profile
 from ..schema_inference import canonical_dtype
 from ..reporting import ConsoleRenderer
@@ -316,33 +316,26 @@ class BaseIngestor(ABC):
         # The ``is True`` comparison is deliberate: test doubles use bare
         # MagicMocks for config, and a truthy Mock must not silently flip
         # the storage model.
-        self.per_ingestion_tables = (
-            database.config.PER_INGESTION_TABLES is True
-        )
+        self.per_ingestion_tables = database.config.PER_INGESTION_TABLES is True
         self.physical_table_name = (
             f"ds_{uuid.UUID(self.ingestor_id).hex}"
             if self.per_ingestion_tables
             else table_name
         )
-        # v1 boundary (Bugbot on the PR): the flag isolates the ROW STORE
-        # only. File-bearing categories also persist assets under the shared
-        # label tree (STORAGE_PATH/<label>), where a later same-label ingest
-        # would overwrite an earlier dataset's files while both ds_ tables
-        # keep referencing them — silent cross-dataset corruption. The file
-        # tree's isolation unit moves to the same handle with the
-        # per-dataset-mount work (tracebloc/client-runtime#203 phase 2);
-        # until then, refuse loudly instead of corrupting quietly. Row-only
-        # categories (tabular / time-series families) are the RFC-0003 v1
-        # rollout target and are unaffected.
-        if self.per_ingestion_tables and category in _FILE_BEARING_CATEGORIES:
-            raise ValueError(
-                f"PER_INGESTION_TABLES does not support file-bearing "
-                f"category {category!r} yet: assets would land in the shared "
-                f"label tree and be overwritten by a later ingest under the "
-                f"same label (per-dataset file isolation ships with "
-                f"tracebloc/client-runtime#203 phase 2). Run this ingest "
-                f"with the flag off."
-            )
+        # Under PER_INGESTION_TABLES the file tree keys on the SAME physical
+        # ds_<hex> handle as the row store, not the shared label tree: point
+        # DEST_PATH — which every file-copy primitive, the text profiler, the
+        # duplicate validator, and the source-reclaim path all read off this
+        # run's config — at the handle, so file-bearing assets land in
+        # STORAGE_PATH/ds_<hex>/. That matches the per-dataset scoped mount
+        # (client-runtime#203) and the engine's get_dataset_path resolution
+        # (tracebloc-engine#569), closing the #203-phase-2 file half. It lifts
+        # the earlier refusal: a same-label re-ingest now writes to its OWN
+        # handle instead of overwriting an earlier dataset's files. Flag off =>
+        # set_dest_table is never called and DEST_PATH stays
+        # STORAGE_PATH/<label>, byte-for-byte today's behavior.
+        if self.per_ingestion_tables:
+            self.database.config.set_dest_table(self.physical_table_name)
         self.schema = schema
         self.unique_id_column = unique_id_column
         self.label_column = label_column
@@ -609,9 +602,7 @@ class BaseIngestor(ABC):
 
                 if not result.is_valid:
                     all_valid = False
-                    validation_errors.append(
-                        f"{BOLD}{label} failed: {RESET} \n {RED}"
-                    )
+                    validation_errors.append(f"{BOLD}{label} failed: {RESET} \n {RED}")
                     validation_errors.extend(result.errors)
                     validation_errors.append(f"{RESET}")
 
@@ -1358,6 +1349,29 @@ class BaseIngestor(ABC):
                             f"{stats.get('inserted_records', 0)} unregistered "
                             "row(s) remain orphaned (#227)."
                         )
+                # Per-ingestion file trees are keyed on this run's UNIQUE
+                # ds_<hex> handle, so — unlike the flag-off label tree that a
+                # same-label re-run overwrites — a failed run's file-bearing
+                # assets are never overwritten (a retry mints a fresh handle)
+                # and nothing else reclaims them: a lasting PVC leak
+                # (data-ingestors#439). Remove them — but ONLY when the dataset
+                # did NOT register, mirroring the row compensating-delete's
+                # `not dataset_registered` guard above. A LATE failure after a
+                # successful send_ingest_summary leaves the backend pointing at
+                # this ds_<hex>, so deleting its files would be permanent asset
+                # loss for a LIVE dataset (Bugbot). NOT gated on
+                # inserted_records — files can land before any row does. Flag
+                # off is a safe no-op (reclaim_dest_tree only matches a ds_<hex>
+                # basename, never a label dir). Best-effort inside the helper,
+                # so it can't mask the original error. Hard kills (OOMKilled/
+                # SIGKILL) bypass this branch; those orphans are the edge-side
+                # husk sweep's job, exactly like the DB husk tables.
+                if (
+                    self.per_ingestion_tables
+                    and self.category in _FILE_BEARING_CATEGORIES
+                    and not dataset_registered
+                ):
+                    reclaim_dest_tree(self.database.config)
                 raise e
 
         # Reclaim the staged source tree now that the load is fully verified
