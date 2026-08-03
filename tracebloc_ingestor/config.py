@@ -16,7 +16,6 @@ import os
 
 from .utils.constants import LogLevel
 
-
 # Sentinel signalling \"caller did not pass this field as an override\".
 # Distinguishes the absent case from an explicit ``Field=None``, which
 # tests use to *suppress* a value (e.g. ``BACKEND_TOKEN=None``).
@@ -35,17 +34,28 @@ class Config:
 
     # Whitelist of valid override keys. A typo at the call site raises
     # immediately rather than silently no-op'ing.
-    _ENV_FIELDS = frozenset({
-        "DB_HOST", "DB_PORT", "DB_USER", "DB_PASSWORD", "DB_NAME",
-        "BATCH_SIZE",
-        "EDGE_ENV",
-        "BACKEND_TOKEN", "CLIENT_USERNAME", "CLIENT_PASSWORD",
-        "SRC_PATH", "LABEL_FILE", "TABLE_NAME", "TITLE",
-        "LOG_LEVEL",
-        "CATEGORICAL_MIN_COUNT",
-        "EMIT_ENRICHED_SCHEMA",
-        "PER_INGESTION_TABLES",
-    })
+    _ENV_FIELDS = frozenset(
+        {
+            "DB_HOST",
+            "DB_PORT",
+            "DB_USER",
+            "DB_PASSWORD",
+            "DB_NAME",
+            "BATCH_SIZE",
+            "EDGE_ENV",
+            "BACKEND_TOKEN",
+            "CLIENT_USERNAME",
+            "CLIENT_PASSWORD",
+            "SRC_PATH",
+            "LABEL_FILE",
+            "TABLE_NAME",
+            "TITLE",
+            "LOG_LEVEL",
+            "CATEGORICAL_MIN_COUNT",
+            "EMIT_ENRICHED_SCHEMA",
+            "PER_INGESTION_TABLES",
+        }
+    )
 
     # Env values (case-insensitive) that read as boolean true; anything else
     # (including unset) is false.
@@ -125,7 +135,11 @@ class Config:
     @property
     def DB_NAME(self) -> str:
         ov = self._override("DB_NAME")
-        return ov if ov is not _MISSING else os.environ.get("DB_NAME", "training_test_datasets")
+        return (
+            ov
+            if ov is not _MISSING
+            else os.environ.get("DB_NAME", "training_test_datasets")
+        )
 
     @property
     def BATCH_SIZE(self) -> int:
@@ -200,8 +214,29 @@ class Config:
         return ov if ov is not _MISSING else os.environ.get("TABLE_NAME", "")
 
     @property
+    def DEST_TABLE(self) -> str:
+        """The directory the file tree lands in under STORAGE_PATH. Defaults to
+        the dataset label (``TABLE_NAME``); when PER_INGESTION_TABLES is on the
+        ingestor injects the physical ``ds_<hex>`` handle via ``set_dest_table``
+        so file-bearing assets key on the SAME isolation unit as the row store,
+        the SQL grant, and the scoped mount (RFC-0003 D9 phase 2 / D16 —
+        client-runtime#203, tracebloc-engine#569). Not a user env field: the
+        only writer is ``set_dest_table``."""
+        ov = self._override("DEST_TABLE")
+        return ov if ov is not _MISSING else self.TABLE_NAME
+
+    @property
     def DEST_PATH(self) -> str:
-        return os.path.join(self.STORAGE_PATH, self.TABLE_NAME)
+        return os.path.join(self.STORAGE_PATH, self.DEST_TABLE)
+
+    def set_dest_table(self, physical_table_name: str) -> None:
+        """Point the file tree (``DEST_PATH``) at an explicit physical-table
+        directory. The ingestor calls this once, after it derives the
+        per-ingestion ``ds_<hex>`` handle, so file-bearing assets land under the
+        same handle as the row store instead of the shared label tree (#203
+        phase 2). Flag-off ingests never call it, so ``DEST_TABLE`` stays the
+        label and behavior is byte-for-byte today's."""
+        self._overrides["DEST_TABLE"] = physical_table_name
 
     @property
     def TITLE(self) -> Optional[str]:
@@ -232,7 +267,11 @@ class Config:
         """
         ov = self._override("PER_INGESTION_TABLES")
         if ov is not _MISSING:
-            return ov if isinstance(ov, bool) else str(ov).strip().lower() in self._TRUE_STRINGS
+            return (
+                ov
+                if isinstance(ov, bool)
+                else str(ov).strip().lower() in self._TRUE_STRINGS
+            )
         env = os.environ.get("PER_INGESTION_TABLES")
         if env is None:
             return False
@@ -254,7 +293,11 @@ class Config:
         """
         ov = self._override("EMIT_ENRICHED_SCHEMA")
         if ov is not _MISSING:
-            return ov if isinstance(ov, bool) else str(ov).strip().lower() in self._TRUE_STRINGS
+            return (
+                ov
+                if isinstance(ov, bool)
+                else str(ov).strip().lower() in self._TRUE_STRINGS
+            )
         env = os.environ.get("EMIT_ENRICHED_SCHEMA")
         if env is not None and env.strip() != "":
             return env.strip().lower() in self._TRUE_STRINGS
