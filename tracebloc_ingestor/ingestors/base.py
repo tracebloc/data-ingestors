@@ -25,7 +25,7 @@ from ..utils import redaction
 from ..utils.columns import resolve_column
 from ..utils.correlation import resolve_correlation_id
 from ..utils.validators_mapping import map_validators
-from ..file_transfer import map_file_transfer, reclaim_source
+from ..file_transfer import map_file_transfer, reclaim_dest_tree, reclaim_source
 from ..text_profile import compute_text_profile
 from ..schema_inference import canonical_dtype
 from ..reporting import ConsoleRenderer
@@ -1349,6 +1349,29 @@ class BaseIngestor(ABC):
                             f"{stats.get('inserted_records', 0)} unregistered "
                             "row(s) remain orphaned (#227)."
                         )
+                # Per-ingestion file trees are keyed on this run's UNIQUE
+                # ds_<hex> handle, so — unlike the flag-off label tree that a
+                # same-label re-run overwrites — a failed run's file-bearing
+                # assets are never overwritten (a retry mints a fresh handle)
+                # and nothing else reclaims them: a lasting PVC leak
+                # (data-ingestors#439). Remove them — but ONLY when the dataset
+                # did NOT register, mirroring the row compensating-delete's
+                # `not dataset_registered` guard above. A LATE failure after a
+                # successful send_ingest_summary leaves the backend pointing at
+                # this ds_<hex>, so deleting its files would be permanent asset
+                # loss for a LIVE dataset (Bugbot). NOT gated on
+                # inserted_records — files can land before any row does. Flag
+                # off is a safe no-op (reclaim_dest_tree only matches a ds_<hex>
+                # basename, never a label dir). Best-effort inside the helper,
+                # so it can't mask the original error. Hard kills (OOMKilled/
+                # SIGKILL) bypass this branch; those orphans are the edge-side
+                # husk sweep's job, exactly like the DB husk tables.
+                if (
+                    self.per_ingestion_tables
+                    and self.category in _FILE_BEARING_CATEGORIES
+                    and not dataset_registered
+                ):
+                    reclaim_dest_tree(self.database.config)
                 raise e
 
         # Reclaim the staged source tree now that the load is fully verified

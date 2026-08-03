@@ -195,9 +195,12 @@ def test_process_record_generates_content_hash_data_id_by_default():
     assert len(data_id) == 64 and all(c in "0123456789abcdef" for c in data_id)
     # deterministic: a fresh ingestor with the same salt reproduces the id
     again = make_ingestor(category=None, label_column="a")
-    assert again.process_record(
-        {"a": "cat", "filename": "x", "extension": ".jpg"}
-    )["data_id"] == data_id
+    assert (
+        again.process_record({"a": "cat", "filename": "x", "extension": ".jpg"})[
+            "data_id"
+        ]
+        == data_id
+    )
 
 
 def test_process_record_uses_unique_id_column():
@@ -230,11 +233,18 @@ def test_process_record_reads_label_by_configured_key():
     a mismatched key it reads None — this is why the ingestor must resolve the
     label column to the real header before processing (see the
     _resolve_label_column + end-to-end tests below)."""
-    ing = make_ingestor(label_column="label", schema={"a": "INT", "label": "VARCHAR(10)"}, category=None)
+    ing = make_ingestor(
+        label_column="label", schema={"a": "INT", "label": "VARCHAR(10)"}, category=None
+    )
     # exact key -> label present
-    assert ing.process_record({"a": "1", "label": "cat", "filename": "f"})["label"] == "cat"
+    assert (
+        ing.process_record({"a": "1", "label": "cat", "filename": "f"})["label"]
+        == "cat"
+    )
     # mismatched-case key with the SAME configured name -> None (the bug)
-    assert ing.process_record({"a": "1", "Label": "cat", "filename": "f"})["label"] is None
+    assert (
+        ing.process_record({"a": "1", "Label": "cat", "filename": "f"})["label"] is None
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -245,14 +255,16 @@ def test_process_record_reads_label_by_configured_key():
 @pytest.mark.parametrize(
     "columns,expected",
     [
-        (["a", "Label"], "Label"),      # case mismatch -> real header
+        (["a", "Label"], "Label"),  # case mismatch -> real header
         (["a", " label "], " label "),  # whitespace mismatch -> raw header
-        (["a", "label"], "label"),       # exact -> unchanged
-        (["a", "b"], "label"),           # absent -> configured name untouched
+        (["a", "label"], "label"),  # exact -> unchanged
+        (["a", "b"], "label"),  # absent -> configured name untouched
     ],
 )
 def test_resolve_label_column(columns, expected):
-    ing = make_ingestor(label_column="label", schema={"a": "INT", "label": "VARCHAR(10)"})
+    ing = make_ingestor(
+        label_column="label", schema={"a": "INT", "label": "VARCHAR(10)"}
+    )
     ing._resolve_label_column(columns)
     assert ing.label_column == expected
 
@@ -285,9 +297,10 @@ def test_ingest_label_case_mismatch_survives_to_db():
         ing.ingest("src", batch_size=10)
     ing.database.insert_batch.assert_called()
     _table, batch = ing.database.insert_batch.call_args.args
-    assert [r.get("label") for r in batch] == ["cat", "dog"], (
-        f"labels nulled by case mismatch: {[r.get('label') for r in batch]}"
-    )
+    assert [r.get("label") for r in batch] == [
+        "cat",
+        "dog",
+    ], f"labels nulled by case mismatch: {[r.get('label') for r in batch]}"
 
 
 def test_ingest_label_resolves_on_later_record_for_sparse_json():
@@ -296,8 +309,8 @@ def test_ingest_label_resolves_on_later_record_for_sparse_json():
     or a mis-cased label on every subsequent row would still null. The first
     (label-less) record legitimately gets None; the second resolves 'Label'."""
     records = [
-        {"a": "1", "filename": "f1"},                   # no label key at all
-        {"a": "2", "Label": "dog", "filename": "f2"},   # mis-cased label
+        {"a": "1", "filename": "f1"},  # no label key at all
+        {"a": "2", "Label": "dog", "filename": "f2"},  # mis-cased label
     ]
     ing = make_ingestor(
         records=records,
@@ -311,9 +324,10 @@ def test_ingest_label_resolves_on_later_record_for_sparse_json():
         Sess.return_value.__enter__.return_value = MagicMock()
         ing.ingest("src", batch_size=10)
     _table, batch = ing.database.insert_batch.call_args.args
-    assert [r.get("label") for r in batch] == [None, "dog"], (
-        f"expected [None, 'dog']; got {[r.get('label') for r in batch]}"
-    )
+    assert [r.get("label") for r in batch] == [
+        None,
+        "dog",
+    ], f"expected [None, 'dog']; got {[r.get('label') for r in batch]}"
 
 
 def test_process_record_strips_whitespace_from_string_label():
@@ -512,9 +526,7 @@ def test_process_record_omits_mask_id_for_non_semseg_categories():
 def test_process_batch_success():
     ing = make_ingestor()
     session = MagicMock()
-    ids, db_failures = ing._batch_writer._process(
-        [{"data_id": "a"}], session
-    )
+    ids, db_failures = ing._batch_writer._process([{"data_id": "a"}], session)
     assert ids == [1, 2]
     assert db_failures == []
 
@@ -523,9 +535,7 @@ def test_process_batch_no_ids_skips_api():
     ing = make_ingestor()
     ing.database.insert_batch.return_value = ([], [{"err": "x"}])
     session = MagicMock()
-    ids, db_failures = ing._batch_writer._process(
-        [{"data_id": "a"}], session
-    )
+    ids, db_failures = ing._batch_writer._process([{"data_id": "a"}], session)
     assert ids == []
     assert db_failures == [{"err": "x"}]
 
@@ -1599,6 +1609,57 @@ def test_late_failure_after_registration_never_deletes():
     ing.database.delete_by_ingestor_id.assert_not_called()
 
 
+def test_failed_per_ingestion_file_ingest_reclaims_dest_tree():
+    """A per-ingestion file-bearing run that fails BEFORE registration reclaims
+    its ds_<hex> file tree (data-ingestors#439): a retry mints a fresh handle,
+    so nothing else would ever overwrite or reclaim it."""
+    from tracebloc_ingestor.utils.constants import TaskCategory
+
+    ing = make_ingestor(
+        records=[{"a": "1", "filename": "f1"}],
+        category=TaskCategory.IMAGE_CLASSIFICATION,
+        label_column="a",
+    )
+    ing.per_ingestion_tables = True
+    ing.physical_table_name = "ds_" + "a" * 32
+    ing.api_client.send_ingest_summary.side_effect = RuntimeError("backend rejected")
+    with patch.object(base_mod, "reclaim_dest_tree") as reclaim:
+        _ingest_expecting(ing, RuntimeError)
+    reclaim.assert_called_once_with(ing.database.config)
+
+
+def test_late_failure_after_registration_never_reclaims_dest_tree():
+    """The dataset_registered guard for FILES: a failure AFTER a successful
+    send_ingest_summary must NOT reclaim the now-registered dataset's ds_<hex>
+    tree — the backend points at it, so deleting would be permanent asset loss
+    (Bugbot). Mutation check: dropping `and not dataset_registered` fails this."""
+    from tracebloc_ingestor.utils.constants import TaskCategory
+
+    ing = make_ingestor(
+        records=[{"a": "1", "filename": "f1"}],
+        category=TaskCategory.IMAGE_CLASSIFICATION,
+        label_column="a",
+    )
+    ing.per_ingestion_tables = True
+    ing.physical_table_name = "ds_" + "a" * 32
+    with patch.object(base_mod, "Session") as Sess, patch.object(
+        ing, "validate_data", return_value=True
+    ), patch.object(
+        ing, "_log_summary", side_effect=RuntimeError("render blew up")
+    ), patch.object(
+        base_mod,
+        "map_file_transfer",
+        side_effect=lambda c, r, o, cfg=None, source_record=None: r,
+    ), patch.object(
+        base_mod, "reclaim_dest_tree"
+    ) as reclaim:
+        Sess.return_value.__enter__.return_value = MagicMock()
+        with pytest.raises(RuntimeError):
+            ing.ingest("src", batch_size=10)
+    ing.api_client.send_ingest_summary.assert_called_once()
+    reclaim.assert_not_called()
+
+
 # ── backend#1028 item 2: orphan-row reconciliation on start ──────────────────
 # The #227 compensating delete only runs on a CAUGHT failure. A hard kill
 # (OOMKilled / SIGKILL mid-ingest) bypasses it, leaving the dead run's rows in
@@ -1633,9 +1694,7 @@ def test_reconcile_and_start_journal_run_before_first_insert():
     )
     names = [name for name, _, _ in ing.database.mock_calls]
     assert names.index("create_table") < names.index("reclaim_dead_run_rows")
-    assert names.index("reclaim_dead_run_rows") < names.index(
-        "record_ingest_started"
-    )
+    assert names.index("reclaim_dead_run_rows") < names.index("record_ingest_started")
     assert names.index("record_ingest_started") < names.index("insert_batch")
 
 
@@ -1655,9 +1714,7 @@ def test_successful_registration_marks_journal_registered_before_send():
         ing.table_name, ing.ingestor_id
     )
     seq = [c[0] for c in parent.mock_calls]
-    assert seq.index("db.mark_ingest_registered") < seq.index(
-        "api.send_ingest_summary"
-    )
+    assert seq.index("db.mark_ingest_registered") < seq.index("api.send_ingest_summary")
 
 
 def test_failed_registration_undoes_optimistic_flip_and_deletes(caplog):
@@ -1667,9 +1724,7 @@ def test_failed_registration_undoes_optimistic_flip_and_deletes(caplog):
     registered entry no reconcile pass would clean. The #227 delete still
     fires (rows are not registered)."""
     ing = make_ingestor(records=[{"a": "1"}], label_column="a")
-    ing.api_client.send_ingest_summary.side_effect = RuntimeError(
-        "backend rejected"
-    )
+    ing.api_client.send_ingest_summary.side_effect = RuntimeError("backend rejected")
     with patch.object(base_mod, "Session") as Sess, patch.object(
         ing, "validate_data", return_value=True
     ):
@@ -1718,9 +1773,7 @@ def test_journal_reset_failure_never_masks_original_error(caplog):
     import logging
 
     ing = make_ingestor(records=[{"a": "1"}], label_column="a")
-    ing.api_client.send_ingest_summary.side_effect = RuntimeError(
-        "backend rejected"
-    )
+    ing.api_client.send_ingest_summary.side_effect = RuntimeError("backend rejected")
     ing.database.mark_ingest_unregistered.side_effect = Exception("journal down")
     with caplog.at_level(logging.CRITICAL):
         with patch.object(base_mod, "Session") as Sess, patch.object(
@@ -1733,8 +1786,7 @@ def test_journal_reset_failure_never_masks_original_error(caplog):
         ing.table_name, ing.ingestor_id
     )
     assert any(
-        "reset the run journal to unregistered" in r.message
-        for r in caplog.records
+        "reset the run journal to unregistered" in r.message for r in caplog.records
     )
 
 
@@ -1751,9 +1803,7 @@ def test_reclaim_failure_never_blocks_the_ingest(caplog):
         _run_happy_ingest(ing)  # must NOT raise
     ing.database.insert_batch.assert_called()
     ing.database.record_ingest_started.assert_called_once()
-    assert any(
-        "Orphan-row reconciliation failed" in r.message for r in caplog.records
-    )
+    assert any("Orphan-row reconciliation failed" in r.message for r in caplog.records)
 
 
 def test_zero_record_run_journals_start_but_not_registered():
@@ -1784,7 +1834,5 @@ def test_objdet_content_hash_constructor_warns(caplog):
 
     caplog.clear()
     with caplog.at_level(logging.WARNING):
-        make_ingestor(
-            category=TaskCategory.OBJECT_DETECTION, data_id_strategy="uuid"
-        )
+        make_ingestor(category=TaskCategory.OBJECT_DETECTION, data_id_strategy="uuid")
     assert not any("collapse" in r.getMessage() for r in caplog.records)
