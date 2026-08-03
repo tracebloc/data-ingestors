@@ -10,6 +10,7 @@ ingest summary carries the physical handle so the backend can persist it
 """
 
 import json
+import os
 import uuid
 from unittest.mock import MagicMock, patch
 
@@ -23,7 +24,6 @@ from tracebloc_ingestor.ingestors import base as base_mod
 from tracebloc_ingestor.ingestors.base import BaseIngestor
 from tracebloc_ingestor.ingestors.csv_ingestor import CSVIngestor
 
-
 # ── Config flag ──────────────────────────────────────────────────────────────
 
 
@@ -34,8 +34,16 @@ def test_flag_defaults_off(monkeypatch):
 
 @pytest.mark.parametrize(
     "raw,expected",
-    [("1", True), ("true", True), ("YES", True), ("on", True),
-     ("0", False), ("", False), ("no", False), ("off", False)],
+    [
+        ("1", True),
+        ("true", True),
+        ("YES", True),
+        ("on", True),
+        ("0", False),
+        ("", False),
+        ("no", False),
+        ("off", False),
+    ],
 )
 def test_flag_env_parsing(monkeypatch, raw, expected):
     monkeypatch.setenv("PER_INGESTION_TABLES", raw)
@@ -44,9 +52,14 @@ def test_flag_env_parsing(monkeypatch, raw, expected):
 
 def test_flag_override_beats_env(monkeypatch):
     monkeypatch.setenv("PER_INGESTION_TABLES", "1")
-    assert Config(EDGE_ENV="local", PER_INGESTION_TABLES=False).PER_INGESTION_TABLES is False
+    assert (
+        Config(EDGE_ENV="local", PER_INGESTION_TABLES=False).PER_INGESTION_TABLES
+        is False
+    )
     monkeypatch.delenv("PER_INGESTION_TABLES", raising=False)
-    assert Config(EDGE_ENV="local", PER_INGESTION_TABLES=True).PER_INGESTION_TABLES is True
+    assert (
+        Config(EDGE_ENV="local", PER_INGESTION_TABLES=True).PER_INGESTION_TABLES is True
+    )
 
 
 # ── Ingestor naming ─────────────────────────────────────────────────────────
@@ -87,25 +100,40 @@ def test_flag_on_physical_name_is_hex_of_ingestor_id():
     assert ing.table_name == "my_dataset"
 
 
-def test_flag_on_rejects_file_bearing_categories():
-    """v1 boundary (Bugbot): the flag isolates the row store only — assets of
-    file-bearing categories still land under the shared label tree, where a
-    later same-label ingest would overwrite an earlier dataset's files. Fail
-    at construction, before any validation or DDL; per-dataset file isolation
-    ships with tracebloc/client-runtime#203 phase 2."""
+def test_flag_on_file_bearing_injects_the_handle():
+    """#203 phase 2: file-bearing categories are no longer refused under the
+    flag. The file tree now keys on the physical ``ds_<hex>`` handle instead of
+    the shared label tree — so a same-label re-ingest writes to its OWN handle
+    and can't overwrite an earlier dataset's files — which the ingestor sets by
+    pointing DEST_PATH at the handle via ``set_dest_table``."""
     from tracebloc_ingestor.utils.constants import TaskCategory
 
     database = MagicMock(name="Database")
     database.config.PER_INGESTION_TABLES = True
-    with pytest.raises(ValueError, match="file-bearing"):
-        CSVIngestor(
-            database=database,
-            api_client=MagicMock(),
-            table_name="imgs",
-            schema={"filename": "VARCHAR(255)", "label": "VARCHAR(50)"},
-            label_column="label",
-            category=TaskCategory.IMAGE_CLASSIFICATION,
-        )
+    ing = CSVIngestor(  # no longer raises
+        database=database,
+        api_client=MagicMock(),
+        table_name="imgs",
+        schema={"filename": "VARCHAR(255)", "label": "VARCHAR(50)"},
+        label_column="label",
+        category=TaskCategory.IMAGE_CLASSIFICATION,
+    )
+    # the file tree is pointed at the same ds_<hex> handle as the row store
+    assert ing.physical_table_name.startswith("ds_")
+    database.config.set_dest_table.assert_called_once_with(ing.physical_table_name)
+
+
+def test_dest_path_keys_on_injected_handle():
+    """DEST_PATH defaults to STORAGE_PATH/<label>; ``set_dest_table`` repoints it
+    at an explicit physical handle (the #203-phase-2 file-isolation unit)
+    without touching TABLE_NAME (the user-facing label)."""
+    cfg = Config(EDGE_ENV="local", TABLE_NAME="my_label")
+    assert cfg.DEST_PATH == os.path.join(cfg.STORAGE_PATH, "my_label")
+    handle = "ds_" + "a" * 32
+    cfg.set_dest_table(handle)
+    assert cfg.DEST_TABLE == handle
+    assert cfg.DEST_PATH == os.path.join(cfg.STORAGE_PATH, handle)
+    assert cfg.TABLE_NAME == "my_label"  # label untouched
 
 
 def test_flag_on_accepts_row_only_categories():
@@ -203,13 +231,21 @@ def _client():
 def _send_and_capture(client, **extra):
     """POST a summary against a mocked transport; return the JSON payload."""
     with patch.object(
-        client.session, "post",
+        client.session,
+        "post",
         return_value=_resp(201, {"dataset_id": 1, "dataset_key": "k"}),
     ) as post:
         client.send_ingest_summary(
-            table_name="my_dataset", ingestor_id="ing-1", labels={"cat": 2},
-            dataset_title="T", data_format="tabular", data_intent="train",
-            category="tabular_classification", schema={}, samples=[], **extra,
+            table_name="my_dataset",
+            ingestor_id="ing-1",
+            labels={"cat": 2},
+            dataset_title="T",
+            data_format="tabular",
+            data_intent="train",
+            category="tabular_classification",
+            schema={},
+            samples=[],
+            **extra,
         )
         _, kwargs = post.call_args
     return json.loads(kwargs["data"])
