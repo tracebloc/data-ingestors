@@ -91,7 +91,7 @@ jobs:
             exit 1
           fi
 
-          # publish-master.yml uploads to PyPI on the master push; the tag can
+          # publish-main.yml uploads to PyPI on the prod-branch push; the tag can
           # land first, and PyPI's CDN lags a little behind an upload. Poll
           # rather than race, and FAIL CLOSED: no published sdist means no
           # image, which is the whole point of this gate.
@@ -114,7 +114,7 @@ jobs:
               sleep 20
             fi
           done
-          echo "::error::tracebloc-ingestor ${version} never appeared on PyPI (10 min). Refusing to publish an image for a version that did not publish - check the 'Publish Master Package' run for this commit, then re-drive this workflow with: gh workflow run release-image.yml -f ref=${REF}"
+          echo "::error::tracebloc-ingestor ${version} never appeared on PyPI (10 min). Refusing to publish an image for a version that did not publish - check the 'Publish Package to PyPI (prod)' run for this commit, then re-drive this workflow with: gh workflow run release-image.yml -f ref=${REF}"
           exit 1
 
   release:

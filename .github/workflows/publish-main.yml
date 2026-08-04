@@ -7,17 +7,33 @@ on:
 
 concurrency:
   group: publish-main-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # push to the prod branch is the only trigger, so there is never a PR run to
+  # cancel; a publish in flight must not be cancelled anyway. State it plainly.
+  cancel-in-progress: false
+
+# Least privilege: this job publishes to PyPI with PYPI_API_TOKEN, not with the
+# workflow token, so it needs nothing beyond reading the checked-out source.
+permissions:
+  contents: read
 
 jobs:
   publish:
     timeout-minutes: 20
     runs-on: ubuntu-latest
+    # NOT gated behind a required-reviewer environment, deliberately. release-image.yml
+    # (tag-triggered) has a verify-published job that polls PyPI for this version for
+    # ~10 minutes and FAILS CLOSED, and its image build `needs` it -- so a manual
+    # approval that held this upload past 10 minutes would break the image build on
+    # every release (Bugbot, backend#1427). The push to the prod branch is already a
+    # train-gated, reviewed promotion, so a second human approval here is redundant as
+    # well as harmful. The remaining risk -- a long-lived PyPI token in a public repo's
+    # repo secrets -- is best closed by PyPI Trusted Publishing (OIDC), which removes
+    # the token entirely with no blocking step; flagged for follow-up, not a settings pass.
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
@@ -41,10 +57,18 @@ jobs:
         run: |
           python -c "from tracebloc_ingestor.cli.run import _load_schema; print(_load_schema()['title'])"
 
-      - name: Publish to GitHub Packages
+      - name: Publish to production PyPI
+        # This step was named "Publish to GitHub Packages", but `twine upload`
+        # with no --repository-url targets upload.pypi.org -- so every push to
+        # the prod branch published to PRODUCTION PyPI while claiming otherwise
+        # (backend#1427). The target is now explicit and the step is named for
+        # what it does. --skip-existing makes the step idempotent: a re-run
+        # after a partial upload (wheel landed, sdist hit a transient error), or a
+        # push that did not bump the version, becomes a green no-op instead of a
+        # permanent HTTP 400 "File already exists" with no clean re-run path.
         run: |
           python -m pip install twine
-          twine upload dist/*
+          twine upload --skip-existing --repository-url https://upload.pypi.org/legacy/ dist/*
         env:
           TWINE_USERNAME: '__token__'
           TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
