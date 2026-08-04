@@ -6,9 +6,9 @@ name: E2E ingestion
 
 on:
   pull_request:
-    branches: [develop, master, main]
+    branches: [develop, main]
   push:
-    branches: [develop, master, main]
+    branches: [develop, main]
 
 permissions:
   contents: read
