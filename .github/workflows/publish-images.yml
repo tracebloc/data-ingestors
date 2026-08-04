@@ -86,8 +86,19 @@ jobs:
         env:
           # Via env, never interpolated into the script (R8).
           REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
         run: |
           set -euo pipefail
+          # A git tag's ref_name is indistinguishable from a branch's:
+          # refs/tags/develop and refs/heads/develop both yield "develop". Since
+          # workflow_dispatch can run from a tag, without this a tag named
+          # develop/staging would publish an internal channel from unreviewed
+          # code. Same class as the client-runtime#213 finding, where the
+          # equivalent gap could reach :prod. Require a real branch first.
+          if [ "$REF_TYPE" != "branch" ]; then
+            echo "::error::refusing to publish an internal channel from a $REF_TYPE ref ('$REF_NAME'): channels are bound to the develop/staging BRANCHES, and a tag of the same name would otherwise map to a channel. Re-run selecting the develop or staging branch."
+            exit 1
+          fi
           # The ref is the ONLY source of the channel -- there is no input that
           # could disagree with it, so the code built and the tag published
           # always match. Any ref other than develop/staging is refused, on

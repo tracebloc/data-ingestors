@@ -351,3 +351,63 @@ def test_user_dir_skip_stays_quiet(tmp_path, monkeypatch):
     cfg = _cfg(userdir, storage, table="cats_dogs_train")
     assert file_transfer.reclaim_source(cfg) is False
     assert calls["info"] == 1 and calls["warning"] == 0  # deliberate, quiet
+
+
+# ---------------------------------------------------------------------------
+# reclaim_dest_tree — a FAILED per-ingestion run's dest tree (#437 / #439)
+# ---------------------------------------------------------------------------
+# Flag-on file trees key on a UNIQUE ds_<hex> handle, so a failed run's assets
+# are never overwritten by a retry (fresh handle) and nothing else reclaims
+# them. reclaim_dest_tree removes them on the failure path — but ONLY when it
+# can prove the dir is a ds_<hex> handle directly under STORAGE_PATH.
+
+_HANDLE = "ds_" + "a" * 32
+
+
+def _dest_cfg(storage, dest_table):
+    """Config whose DEST_PATH = storage/<dest_table> (set_dest_table override)."""
+    cfg = Config(TABLE_NAME="my_label")
+    cfg.STORAGE_PATH = str(storage)
+    cfg.set_dest_table(dest_table)
+    return cfg
+
+
+def test_reclaim_dest_removes_per_ingestion_handle_tree(tmp_path):
+    storage = tmp_path / "shared"
+    dest = storage / _HANDLE
+    dest.mkdir(parents=True)
+    (dest / "img.jpg").write_bytes(b"x")
+    assert file_transfer.reclaim_dest_tree(_dest_cfg(storage, _HANDLE)) is True
+    assert not dest.exists()
+
+
+def test_reclaim_dest_leaves_flag_off_label_tree(tmp_path):
+    # flag off: DEST_PATH = storage/<label>; the basename is not a ds_<hex>
+    # handle, so it must be LEFT (a same-label re-run overwrites it instead).
+    storage = tmp_path / "shared"
+    dest = storage / "my_label"
+    dest.mkdir(parents=True)
+    (dest / "img.jpg").write_bytes(b"x")
+    cfg = Config(TABLE_NAME="my_label")
+    cfg.STORAGE_PATH = str(storage)  # DEST_TABLE defaults to the label
+    assert file_transfer.reclaim_dest_tree(cfg) is False
+    assert dest.exists()
+
+
+def test_reclaim_dest_refuses_handle_not_direct_child_of_storage(tmp_path):
+    # a ds_<hex>-named dir nested deeper than a direct child is left alone
+    # (defense-in-depth: DEST_PATH must resolve to STORAGE_PATH/<handle>).
+    storage = tmp_path / "shared"
+    nested = storage / "sub" / _HANDLE
+    nested.mkdir(parents=True)
+    assert (
+        file_transfer.reclaim_dest_tree(_dest_cfg(storage, f"sub/{_HANDLE}")) is False
+    )
+    assert nested.exists()
+
+
+def test_reclaim_dest_noop_when_dest_missing(tmp_path):
+    # best-effort: a nonexistent DEST_PATH is a quiet no-op, never an error
+    storage = tmp_path / "shared"
+    storage.mkdir()
+    assert file_transfer.reclaim_dest_tree(_dest_cfg(storage, _HANDLE)) is False
