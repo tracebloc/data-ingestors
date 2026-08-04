@@ -1,12 +1,12 @@
-name: Publish Master Package to GitHub Packages
+name: Publish Package to PyPI (prod)
 
 on:
   push:
     branches:
-      - master
+      - main
 
 concurrency:
-  group: publish-master-${{ github.ref }}
+  group: publish-main-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
