@@ -93,7 +93,12 @@ _TIME_UNITS = ("days", "weeks", "months", "years")
 # place the backend reads them (dataset_validators reads
 # ``meta_data.attributes``). Shipping the raw keys beside the canonical
 # copies duplicated them at meta_data top level (bugbot on #383, both
-# rounds).
+# rounds). ``time_column`` is bridged purely to CONFIGURE a preflight
+# validator — TimeToEventValidator's column, or the fixed-timestamp reject for
+# TSF/TSC (#441) — not as dataset metadata; the survival facts that DO belong on
+# the wire (time_unit / event_indicator) ride ``attributes`` above, so the raw
+# time_column must be stripped too (cursor bugbot — it had leaked onto TTE's
+# payload since the original bridge).
 _META_DATA_INTERNAL_KEYS = frozenset(
     {
         "schema",
@@ -105,6 +110,7 @@ _META_DATA_INTERNAL_KEYS = frozenset(
         "time_unit",
         "event_indicator",
         "positive_definition",
+        "time_column",
     }
 )
 
