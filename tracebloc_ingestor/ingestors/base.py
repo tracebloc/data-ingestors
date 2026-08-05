@@ -41,6 +41,7 @@ from .table_lock import TableLock
 # (and their None/unknown -> False semantics are preserved).
 from ..modalities.registry import (
     FILE_BEARING_CATEGORIES as _FILE_BEARING_CATEGORIES,
+    FIXED_TIME_COLUMN_BY_CATEGORY,
     NLP_CATEGORIES as _NLP_CATEGORIES,
     REGISTRY as _MODALITY_REGISTRY,
     TABULAR_FAMILY_CATEGORIES as _TABULAR_FAMILY_CATEGORIES,
@@ -92,7 +93,12 @@ _TIME_UNITS = ("days", "weeks", "months", "years")
 # place the backend reads them (dataset_validators reads
 # ``meta_data.attributes``). Shipping the raw keys beside the canonical
 # copies duplicated them at meta_data top level (bugbot on #383, both
-# rounds).
+# rounds). ``time_column`` is bridged purely to CONFIGURE a preflight
+# validator — TimeToEventValidator's column, or the fixed-timestamp reject for
+# TSF/TSC (#441) — not as dataset metadata; the survival facts that DO belong on
+# the wire (time_unit / event_indicator) ride ``attributes`` above, so the raw
+# time_column must be stripped too (cursor bugbot — it had leaked onto TTE's
+# payload since the original bridge).
 _META_DATA_INTERNAL_KEYS = frozenset(
     {
         "schema",
@@ -104,6 +110,7 @@ _META_DATA_INTERNAL_KEYS = frozenset(
         "time_unit",
         "event_indicator",
         "positive_definition",
+        "time_column",
     }
 )
 
@@ -551,6 +558,23 @@ class BaseIngestor(ABC):
         # "No data found" (validators read UTF-8 and swallow decode errors).
         # Catch it once here with a clear, actionable message.
         preflight.check_csv_encoding(source)
+
+        # Pre-flight: for the fixed-time-column categories (TSF / TSC) the time
+        # column is always the physical ``timestamp`` and a config ``time_column``
+        # is never consumed — so a value pointing anywhere else (a typo, or a
+        # real-but-wrong column) is silently ignored while rows land ordered by
+        # ``timestamp`` (#441). Reject it up front. The configured value rides
+        # file_options (conventions.resolve bridges the top-level shorthand there
+        # for the time-series family). FIXED_TIME_COLUMN_BY_CATEGORY returns None
+        # for time_to_event_prediction (its time_column IS honored, validated
+        # exactly by TimeToEventValidator) and for every non-time-series category,
+        # making this a no-op there. ``.get`` (not spec_for) tolerates a
+        # None/unknown category from direct callers / tests.
+        preflight.check_time_column(
+            self.file_options.get("time_column"),
+            FIXED_TIME_COLUMN_BY_CATEGORY.get(self.category),
+            self.category,
+        )
 
         # Pass the configured label_column through (without permanently
         # mutating file_options / metadata) so label-aware validators like

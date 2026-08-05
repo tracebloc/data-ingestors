@@ -600,6 +600,57 @@ def test_validate_data_no_validators_passes():
     assert ing.validate_data("src") is True
 
 
+def test_validate_data_rejects_nonhonored_time_column_for_tsf():
+    # End-to-end through validate_data: for time_series_forecasting a config
+    # time_column is never honored (rows order by the fixed `timestamp`), so any
+    # non-`timestamp` value aborts BEFORE any validators/DB writes — the #441
+    # silent-accept can't happen. map_validators patched to [] isolates the
+    # preflight; source is a non-file string (the check reads config, not the CSV).
+    from tracebloc_ingestor.utils.constants import TaskCategory
+
+    ing = make_ingestor(
+        category=TaskCategory.TIME_SERIES_FORECASTING,
+        file_options={"time_column": "nonexistent_col"},
+    )
+    with patch.object(base_mod, "map_validators", return_value=[]):
+        with pytest.raises(ValueError, match="nonexistent_col"):
+            ing.validate_data("src")
+
+
+def test_validate_data_rejects_real_but_wrong_time_column_for_tsf():
+    # saadqbal's subcase: a real column that isn't `timestamp` is the same
+    # silent-accept, and is rejected too.
+    from tracebloc_ingestor.utils.constants import TaskCategory
+
+    ing = make_ingestor(
+        category=TaskCategory.TIME_SERIES_FORECASTING,
+        file_options={"time_column": "temp_c"},
+    )
+    with patch.object(base_mod, "map_validators", return_value=[]):
+        with pytest.raises(ValueError, match="temp_c"):
+            ing.validate_data("src")
+
+
+def test_validate_data_allows_fixed_time_column_and_skips_tte(tmp_path):
+    from tracebloc_ingestor.utils.constants import TaskCategory
+
+    # `time_column: timestamp` (the fixed name) passes the preflight for TSF...
+    tsf = make_ingestor(
+        category=TaskCategory.TIME_SERIES_FORECASTING,
+        file_options={"time_column": "timestamp"},
+    )
+    # ...and time_to_event_prediction is NOT gated here (its time_column is
+    # honored + validated exactly by TimeToEventValidator), so even a bad name
+    # sails through the preflight.
+    tte = make_ingestor(
+        category=TaskCategory.TIME_TO_EVENT_PREDICTION,
+        file_options={"time_column": "whatever"},
+    )
+    with patch.object(base_mod, "map_validators", return_value=[]):
+        assert tsf.validate_data("src") is True
+        assert tte.validate_data("src") is True
+
+
 def test_validate_data_raises_when_validator_fails():
     ing = make_ingestor(category=None)
     bad = MagicMock()
@@ -937,6 +988,45 @@ def test_check_csv_encoding_rejects_nul_byte(tmp_path):
     bad.write_bytes(b"id,name\n1,a\x00b\n2,ok\n")
     with pytest.raises(ValueError, match="NUL byte"):
         preflight.check_csv_encoding(str(bad))
+
+
+# ---------------------------------------------------------------------------
+# time_column pre-flight (validate_data) — #441
+# ---------------------------------------------------------------------------
+
+
+def test_check_time_column_rejects_typo_for_fixed_category():
+    # A time_column pointing at a name that isn't the fixed physical column is
+    # never honored (TSF/TSC always order by `timestamp`) — reject the #441 repro.
+    with pytest.raises(ValueError, match="nonexistent_col"):
+        preflight.check_time_column(
+            "nonexistent_col", "timestamp", "time_series_forecasting"
+        )
+
+
+def test_check_time_column_rejects_real_but_wrong_column_for_fixed_category():
+    # saadqbal's subcase: a REAL column that just isn't the fixed one (e.g.
+    # `temp_c`) is the same silent-accept — the field is decorative here, so an
+    # existence check would give false confidence. It must be rejected too.
+    with pytest.raises(ValueError, match="temp_c"):
+        preflight.check_time_column("temp_c", "timestamp", "time_series_forecasting")
+
+
+def test_check_time_column_accepts_the_fixed_column():
+    # The fixed column itself passes, case-/whitespace-insensitively.
+    preflight.check_time_column("timestamp", "timestamp", "time_series_forecasting")
+    preflight.check_time_column("Timestamp", "timestamp", "time_series_classification")
+
+
+def test_check_time_column_noop_when_unset_or_configurable_category():
+    # No-op when time_column is unset (category default), and when fixed_column
+    # is None — the time_to_event_prediction case, whose time_column IS honored
+    # and validated exactly by TimeToEventValidator, plus every non-time-series
+    # category. A bad name must NOT raise here in those cases.
+    preflight.check_time_column(None, "timestamp", "time_series_forecasting")  # unset
+    preflight.check_time_column("", "timestamp", "time_series_forecasting")  # empty
+    preflight.check_time_column("anything", None, "time_to_event_prediction")  # TTE
+    preflight.check_time_column("anything", None, "tabular_classification")
 
 
 # ---------------------------------------------------------------------------
