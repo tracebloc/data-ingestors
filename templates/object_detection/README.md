@@ -62,12 +62,27 @@ object_detection/
 ### XML Annotations
 - XML files should be placed in the `data/annotations/` directory
 - Each XML file should follow the Pascal VOC format
-- File naming convention: `{image_name}.xml`
+- File naming convention: `{image_name}.xml`, where `{image_name}` is the image's
+  **stem** (its name with no extension). The annotation for `images/image1.jpg` is
+  `annotations/image1.xml`.
 
 ### CSV Labels File
 The CSV file contains the following columns:
 - `object_id`: Unique identifier for each object (format: `{image_name}_obj_{index}`)
-- `filename`: Image filename (with or without extension — the configured extension is appended if missing)
+- `filename`: Image filename. Accepted **with or without an extension** — `image1`
+  and `image1.jpg` are equivalent. The two sidecar files are resolved from it
+  independently:
+  - **Image** — the configured extension is appended when the stem has none
+    (`image1` → `images/image1.jpg`); an extension already present is kept.
+  - **Annotation** — always resolved from the **stem** as `<image_name>.xml`, so
+    both `image1` and `image1.jpg` pair with `annotations/image1.xml`. A
+    `filename` carrying `.jpg` does **not** make the ingestor look for
+    `annotations/image1.jpg`; the image extension is swapped for `.xml`.
+
+  > If a run reports 0 committed rows with "Source file not found:
+  > `annotations/…`", it's almost always a real missing/mis-stemmed annotation —
+  > not the `filename` extension. Object detection is atomic: a record commits
+  > only when **both** the image and its `<stem>.xml` copy successfully.
 - `image_label`: Class label of the object
 - `object_count`: Number of objects in the image (always 1 for individual objects)
 
