@@ -101,6 +101,14 @@ TIME_TO_EVENT_CATEGORIES: FrozenSet[str] = frozenset(
     }
 )
 
+# Categories that accept a top-level `time_column` and bridge it into
+# file_options (step 7a): time_to_event_prediction consumes it; the two
+# time-series categories only get it there so preflight can reject a value that
+# won't be honored (#441). Non-time-series categories ignore the field.
+_TIME_COLUMN_CATEGORIES: FrozenSet[str] = (
+    TIME_SERIES_CATEGORIES | TIME_TO_EVENT_CATEGORIES
+)
+
 MLM_CATEGORIES: FrozenSet[str] = frozenset(
     {
         TaskCategory.MASKED_LANGUAGE_MODELING,
@@ -213,7 +221,9 @@ class ResolvedConfig:
 
     # ----- data_id -----
     unique_id_column: Optional[str] = None  # None ⇒ strategy below decides
-    data_id_strategy: str = "content_hash"  # content_hash (default, #350) | uuid (column ⇒ unique_id_column)
+    data_id_strategy: str = (
+        "content_hash"  # content_hash (default, #350) | uuid (column ⇒ unique_id_column)
+    )
 
     # ----- Pass-through to ingestors -----
     annotation_column: Optional[str] = None
@@ -329,14 +339,20 @@ def resolve(config: Dict[str, Any]) -> ResolvedConfig:
     spec_file_options = (config.get("spec") or {}).get("file_options") or {}
     resolved.file_options = {**_default_file_options_for(category), **spec_file_options}
 
-    # 7a. For time_to_event_prediction the validator (TimeToEventValidator)
-    #     reads `time_column` from file_options. Bridge the top-level field
-    #     so the validator gets it without customers having to repeat the
-    #     value in spec.file_options. ``setdefault`` so an explicit
-    #     spec.file_options.time_column (the advanced override) wins over
-    #     the documented top-level shorthand, consistent with how every
-    #     other spec.file_options key behaves.
-    if category == TaskCategory.TIME_TO_EVENT_PREDICTION and resolved.time_column:
+    # 7a. Bridge the top-level `time_column` into file_options for the
+    #     time-series family so the ingestor sees it without customers having to
+    #     repeat the value in spec.file_options. ``setdefault`` so an explicit
+    #     spec.file_options.time_column (the advanced override) wins over the
+    #     top-level shorthand, consistent with how every other spec.file_options
+    #     key behaves.
+    #       - time_to_event_prediction: TimeToEventValidator consumes it (the
+    #         column is user-configurable).
+    #       - time_series_forecasting / _classification: the column is FIXED to
+    #         the physical `timestamp` and a custom value is never honored, so
+    #         BaseIngestor.validate_data preflights it and REJECTS anything else
+    #         (a typo or a real-but-wrong column) rather than silently ordering
+    #         by `timestamp` anyway (#441).
+    if category in _TIME_COLUMN_CATEGORIES and resolved.time_column:
         resolved.file_options.setdefault("time_column", resolved.time_column)
 
     # 7b. Bridge top-level `target_size` (any image category — customer

@@ -330,10 +330,6 @@ def _build_ingestor(
         category=resolved.category,
         data_format=resolved.data_format,
         label_policy=resolved.label_policy,
-        # Configured time column (time-series family). Threaded so validate_data
-        # can preflight it against the CSV header and reject a name that isn't
-        # there, instead of silently ingesting rows ordered by nothing (#441).
-        time_column=resolved.time_column,
     )
 
     if resolved.source_type == "csv":

@@ -41,6 +41,7 @@ from .table_lock import TableLock
 # (and their None/unknown -> False semantics are preserved).
 from ..modalities.registry import (
     FILE_BEARING_CATEGORIES as _FILE_BEARING_CATEGORIES,
+    FIXED_TIME_COLUMN_BY_CATEGORY,
     NLP_CATEGORIES as _NLP_CATEGORIES,
     REGISTRY as _MODALITY_REGISTRY,
     TABULAR_FAMILY_CATEGORIES as _TABULAR_FAMILY_CATEGORIES,
@@ -240,7 +241,6 @@ class BaseIngestor(ABC):
         file_options: Optional[Dict[str, Any]] = None,
         label_policy: str = label_policy_module.PASSTHROUGH,
         data_id_strategy: str = "content_hash",
-        time_column: Optional[str] = None,
     ):
         """Initialize the base ingestor.
 
@@ -346,15 +346,6 @@ class BaseIngestor(ABC):
         self.data_format = data_format
         self.file_options = file_options or {}
         self.label_policy = label_policy
-        # The configured time column (time-series family), used by
-        # validate_data's preflight header check (data-ingestors#441). Kept as a
-        # plain attribute here rather than injected into file_options, so it
-        # never rides the registration meta_data wire payload. (conventions.py
-        # separately bridges it into file_options for time_to_event_prediction,
-        # where TimeToEventValidator consumes it.) ``None`` ⇒ the category
-        # default applies — the fixed ``timestamp`` column, or TimeToEvent's
-        # ``time`` fallback.
-        self.time_column = time_column
 
         # backend#1028 item 3: end-to-end correlation id. When spawned by
         # jobs-manager, the Job env carries the CLI's idempotency key — the
@@ -562,25 +553,21 @@ class BaseIngestor(ABC):
         # Catch it once here with a clear, actionable message.
         preflight.check_csv_encoding(source)
 
-        # Pre-flight: a configured time_column that isn't in the CSV header is
-        # otherwise silently accepted — the time-series validators fall back to
-        # the fixed ``timestamp`` column and the rows land ordered by nothing
-        # (#441). Reject the typo up front, before any DB writes. Reads the
-        # header with the run's CSV dialect (getattr: only CSVIngestor carries
-        # csv_options).
-        #
-        # Check the EFFECTIVE column the category's validators actually use:
-        # for time_to_event_prediction, conventions.resolve bridges it into
-        # file_options, where an advanced ``spec.file_options.time_column``
-        # override intentionally wins over the top-level shorthand — so the
-        # preflight must honour the same precedence, or a valid override gets
-        # falsely rejected when the top-level name isn't in the header (cursor
-        # bugbot). Other categories don't bridge it; fall back to the top-level
-        # value threaded onto ``self`` (the fix that makes TSF/TSC reject).
+        # Pre-flight: for the fixed-time-column categories (TSF / TSC) the time
+        # column is always the physical ``timestamp`` and a config ``time_column``
+        # is never consumed — so a value pointing anywhere else (a typo, or a
+        # real-but-wrong column) is silently ignored while rows land ordered by
+        # ``timestamp`` (#441). Reject it up front. The configured value rides
+        # file_options (conventions.resolve bridges the top-level shorthand there
+        # for the time-series family). FIXED_TIME_COLUMN_BY_CATEGORY returns None
+        # for time_to_event_prediction (its time_column IS honored, validated
+        # exactly by TimeToEventValidator) and for every non-time-series category,
+        # making this a no-op there. ``.get`` (not spec_for) tolerates a
+        # None/unknown category from direct callers / tests.
         preflight.check_time_column(
-            source,
-            self.file_options.get("time_column") or self.time_column,
-            getattr(self, "csv_options", {}),
+            self.file_options.get("time_column"),
+            FIXED_TIME_COLUMN_BY_CATEGORY.get(self.category),
+            self.category,
         )
 
         # Pass the configured label_column through (without permanently
