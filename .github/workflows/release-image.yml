@@ -54,10 +54,10 @@ concurrency:
 jobs:
   # Only cut an image for a version that actually published. The old chain got
   # this implicitly: auto-release-on-master.yml ran on a *successful*
-  # publish-master (sdist install + schema probe) and only then tagged and
+  # publish-main (sdist install + schema probe) and only then tagged and
   # dispatched. The release tag now comes from the release train
   # (tracebloc/backend#1345), which pushes it right after the promotion merge
-  # while publish-master is still running — so the guarantee has to be stated
+  # while publish-main is still running — so the guarantee has to be stated
   # explicitly here instead of inherited from the trigger.
   verify-published:
     timeout-minutes: 15
@@ -91,7 +91,7 @@ jobs:
             exit 1
           fi
 
-          # publish-master.yml uploads to PyPI on the master push; the tag can
+          # publish-main.yml uploads to PyPI on the prod-branch push; the tag can
           # land first, and PyPI's CDN lags a little behind an upload. Poll
           # rather than race, and FAIL CLOSED: no published sdist means no
           # image, which is the whole point of this gate.
@@ -114,7 +114,7 @@ jobs:
               sleep 20
             fi
           done
-          echo "::error::tracebloc-ingestor ${version} never appeared on PyPI (10 min). Refusing to publish an image for a version that did not publish - check the 'Publish Master Package' run for this commit, then re-drive this workflow with: gh workflow run release-image.yml -f ref=${REF}"
+          echo "::error::tracebloc-ingestor ${version} never appeared on PyPI (10 min). Refusing to publish an image for a version that did not publish - check the 'Publish Package to PyPI (prod)' run for this commit, then re-drive this workflow with: gh workflow run release-image.yml -f ref=${REF}"
           exit 1
 
   release:
@@ -134,13 +134,13 @@ jobs:
         # Registers binfmt handlers so the arm64 layers can be built
         # under emulation on the amd64 runner. Without this, the
         # multi-arch build below silently degrades to amd64-only.
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -148,7 +148,7 @@ jobs:
 
       - name: Extract image metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           # Tag strategy: semver only. No :latest — downstream must pick a
@@ -201,7 +201,7 @@ jobs:
 
       - name: Build and push image
         id: build
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5.4.0
         with:
           context: .
           # Multi-arch (#24). Without `platforms`, build-push-action
@@ -264,7 +264,7 @@ jobs:
           echo "$output" | grep -q "INGEST_CONFIG"
 
       - name: Install cosign
-        uses: sigstore/cosign-installer@v3
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3.9.1
         with:
           cosign-release: 'v2.4.0'
 

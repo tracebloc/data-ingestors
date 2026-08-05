@@ -126,6 +126,11 @@ PyPI first. `RELEASING.md` documents how they stay aligned.
   fixture rows (`e2e/test_characterization.py:107,215`).
 - `debug_csv_processing.py` at the repo root is a tracked debugging scratch script — only
   `tracebloc_ingestor/` ships in the package.
+- A `code-quality-caller.yml` that passes **no `secrets:` line** is correct, not an omission.
+  The shared `code-quality.yml` reusable references no secrets by contract
+  (RFC-BACKEND-1405 Q5, backend#1526): secretless callees get no secrets line, and if the
+  reusable ever gains one, callers switch to explicit per-secret passing — never
+  `secrets: inherit`. Flag the *addition* of `secrets: inherit` on this caller instead.
 
 ## Tone
 

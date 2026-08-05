@@ -8,17 +8,22 @@ on:
 
 concurrency:
   group: publish-dev-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: false
+
+# Parity with publish-main.yml: this workflow builds + smoke-tests only (it does
+# not upload), but least privilege still applies on a public repo.
+permissions:
+  contents: read
 
 jobs:
   publish:
     timeout-minutes: 20
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 

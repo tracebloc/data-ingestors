@@ -1,6 +1,6 @@
 name: Tests
 
-# Runs the pytest suite on every PR + push to develop/master/main.
+# Runs the pytest suite on every PR + push to develop/main.
 # Matrix: Python 3.11 + 3.12 (matches setup.py: python_requires=">=3.11").
 # Coverage is gated at --cov-fail-under=95 (the suite currently sits at ~99%);
 # CI fails if total coverage regresses below 95%.
@@ -11,9 +11,9 @@ name: Tests
 
 on:
   pull_request:
-    branches: [develop, master, main]
+    branches: [develop, main]
   push:
-    branches: [develop, master, main]
+    branches: [develop, main]
 
 concurrency:
   group: tests-${{ github.workflow }}-${{ github.ref }}
