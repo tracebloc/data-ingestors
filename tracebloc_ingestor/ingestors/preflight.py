@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from ..config import Config
+from ..utils.columns import resolve_column
 from ..utils.constants import Intent, RED, RESET
 
 
@@ -101,6 +102,46 @@ def check_csv_encoding(source: Any) -> None:
             f"byte {exc.start}. Re-save the file as UTF-8 (in Excel: Save As → "
             f"'CSV UTF-8 (Comma delimited)'), then re-ingest.{RESET}"
         ) from exc
+
+
+def check_time_column(
+    time_column: Optional[str],
+    fixed_column: Optional[str],
+    category: Optional[str] = None,
+) -> None:
+    """Reject a configured ``time_column`` that a fixed-time-column category
+    will never honor (data-ingestors#441).
+
+    For ``time_series_forecasting`` / ``time_series_classification`` the time
+    column is a FIXED physical name (``timestamp``, Decision-2): ordering is
+    always by that column and the config ``time_column`` is not consumed. So a
+    ``time_column`` pointing anywhere else — a typo like ``nonexistent_col`` OR
+    a real-but-wrong column like ``temp_c`` — is silently ignored while the rows
+    land ordered by ``timestamp``. That silent accept (the #441 repro, and the
+    real-but-wrong subcase saadqbal flagged) is exactly what this rejects, up
+    front, before any DB writes: the field is decorative for these categories,
+    so validating it against the header would only give false confidence.
+
+    ``fixed_column`` is the category's fixed column (from
+    ``registry.FIXED_TIME_COLUMN_BY_CATEGORY``) or ``None`` for categories where
+    ``time_column`` IS user-configurable — ``time_to_event_prediction``, whose
+    ``time_column`` is validated (exactly) by ``TimeToEventValidator``. This is
+    a no-op when either ``time_column`` or ``fixed_column`` is unset, so it never
+    touches TTE or the non-time-series categories. The match is case-/whitespace-
+    insensitive (``resolve_column``), so ``Timestamp`` is accepted as the fixed
+    ``timestamp``.
+    """
+    if not time_column or not fixed_column:
+        return
+    if resolve_column([fixed_column], time_column) is None:
+        raise ValueError(
+            f"{RED}time_column '{time_column}' is not honored for "
+            f"{category or 'this category'}: rows are always ordered by the "
+            f"fixed '{fixed_column}' column, whose name is set by the platform "
+            f"(the top-level 'time_column' is a time_to_event_prediction field). "
+            f"Rename your time column to '{fixed_column}' and declare it in the "
+            f"schema, or remove the 'time_column' field.{RESET}"
+        )
 
 
 def check_intent(intent: Any) -> None:

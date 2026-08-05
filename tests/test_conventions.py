@@ -38,7 +38,6 @@ from tracebloc_ingestor.cli.conventions import (
 )
 from tracebloc_ingestor.utils.constants import DataFormat, TaskCategory
 
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
 EXAMPLES_DIR = REPO_ROOT / "examples" / "yaml"
 
@@ -71,6 +70,7 @@ def test_example_resolves(name: str):
 # ---------------------------------------------------------------------------
 # Identity & source dispatch
 # ---------------------------------------------------------------------------
+
 
 def test_image_classification_data_format():
     r = resolve(_load("image_classification.yaml"))
@@ -123,15 +123,17 @@ def test_semantic_segmentation_sidecars_set():
 # Default options
 # ---------------------------------------------------------------------------
 
+
 def test_image_classification_default_matches_shipped_sample():
     """Default file_options for image_classification round-trip through the
     bundled onboarding sample (256×256 .jpeg) with zero overrides — issue
     #198. Previously the default was 512×512 .jpg and the framework's own
     sample failed validation out-of-box."""
     r = resolve(_load("image_classification.yaml"))
-    assert r.file_options == DEFAULT_IMAGE_FILE_OPTIONS_BY_CATEGORY[
-        TaskCategory.IMAGE_CLASSIFICATION
-    ]
+    assert (
+        r.file_options
+        == DEFAULT_IMAGE_FILE_OPTIONS_BY_CATEGORY[TaskCategory.IMAGE_CLASSIFICATION]
+    )
     assert r.file_options["target_size"] == [256, 256]
     assert r.file_options["extension"] == ".jpeg"
 
@@ -141,9 +143,10 @@ def test_object_detection_default_matches_shipped_sample():
     aerial sample (1920×1080) — issue #199. Previously the default was
     448×448 and the framework's own sample failed validation out-of-box."""
     r = resolve(_load("object_detection.yaml"))
-    assert r.file_options == DEFAULT_IMAGE_FILE_OPTIONS_BY_CATEGORY[
-        TaskCategory.OBJECT_DETECTION
-    ]
+    assert (
+        r.file_options
+        == DEFAULT_IMAGE_FILE_OPTIONS_BY_CATEGORY[TaskCategory.OBJECT_DETECTION]
+    )
     assert r.file_options["target_size"] == [1920, 1080]
 
 
@@ -194,14 +197,18 @@ def test_customer_file_options_override_defaults():
     r = resolve(config)
     assert r.file_options["target_size"] == [224, 224]
     # extension still defaulted.
-    assert r.file_options["extension"] == DEFAULT_IMAGE_FILE_OPTIONS_BY_CATEGORY[
-        TaskCategory.IMAGE_CLASSIFICATION
-    ]["extension"]
+    assert (
+        r.file_options["extension"]
+        == DEFAULT_IMAGE_FILE_OPTIONS_BY_CATEGORY[TaskCategory.IMAGE_CLASSIFICATION][
+            "extension"
+        ]
+    )
 
 
 # ---------------------------------------------------------------------------
 # Label resolution
 # ---------------------------------------------------------------------------
+
 
 def test_string_label_resolves_to_passthrough_policy():
     r = resolve(_load("image_classification.yaml"))
@@ -234,6 +241,7 @@ def test_object_label_without_policy_defaults_to_passthrough():
 # ---------------------------------------------------------------------------
 # data_id resolution
 # ---------------------------------------------------------------------------
+
 
 def test_no_data_id_block_means_content_hash():
     # #350: content_hash is now the default when no data_id block is present.
@@ -271,6 +279,7 @@ def test_column_strategy_sets_unique_id_column():
 # Schema, time_column, processors
 # ---------------------------------------------------------------------------
 
+
 def test_tabular_schema_passes_through():
     r = resolve(_load("tabular_classification.yaml"))
     assert "age" in r.schema
@@ -290,9 +299,22 @@ def test_time_to_event_spec_file_options_time_column_wins_over_top_level():
     spec value must beat the top-level shorthand. Regression guard against
     overwriting the spec value with the top-level field."""
     config = _load("time_to_event_prediction.yaml")
-    config.setdefault("spec", {}).setdefault("file_options", {})["time_column"] = "override_time"
+    config.setdefault("spec", {}).setdefault("file_options", {})[
+        "time_column"
+    ] = "override_time"
     r = resolve(config)
     assert r.file_options["time_column"] == "override_time"
+
+
+def test_time_series_forecasting_bridges_time_column_for_preflight():
+    """A top-level time_column on a fixed-timestamp category is bridged into
+    file_options too, so BaseIngestor.validate_data can preflight it and reject
+    a value TSF/TSC never honor (#441). The forecasting validators still order
+    by the fixed `timestamp`; the field is carried only for that gate."""
+    config = _load("time_series_forecasting.yaml")
+    config["time_column"] = "nonexistent_col"
+    r = resolve(config)
+    assert r.file_options["time_column"] == "nonexistent_col"
 
 
 def test_processor_specs_pass_through_verbatim():
@@ -312,6 +334,7 @@ def test_no_processors_means_empty_list():
 # ---------------------------------------------------------------------------
 # Per-category convention details
 # ---------------------------------------------------------------------------
+
 
 def test_keypoint_detection_uses_annotation_column_convention():
     """The existing keypoint_detection template uses column "Annotation";
@@ -351,6 +374,7 @@ def test_image_categories_set_matches_schema_requirements():
 # ---------------------------------------------------------------------------
 # JSON source path
 # ---------------------------------------------------------------------------
+
 
 def test_json_source_dispatches_correctly():
     """No JSON example ships in examples/yaml/ today (CSV is dominant);
@@ -405,6 +429,7 @@ def test_invalid_bit_depth_raises():
 # ---------------------------------------------------------------------------
 # Uploader-declared per-column descriptors (di#360)
 # ---------------------------------------------------------------------------
+
 
 def test_columns_bridge_into_file_options():
     """Top-level `columns` (unit/ordinal) is carried on file_options as
