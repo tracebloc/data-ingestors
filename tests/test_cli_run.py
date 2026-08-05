@@ -306,6 +306,7 @@ def test_csv_kwargs_match_resolved_config(clean_env, mock_runtime, monkeypatch):
     assert kwargs["data_format"] == "image"
     assert kwargs["label_column"] == "image_label"
     assert kwargs["unique_id_column"] is None  # UUID generation, the default
+    assert kwargs["time_column"] is None  # unset ⇒ category default (#441)
     # File / CSV options carry the conventional defaults — now aligned with
     # the bundled image_classification onboarding sample (256×256 .jpeg, #198).
     assert kwargs["file_options"]["target_size"] == [256, 256]
@@ -378,6 +379,39 @@ def test_json_receives_file_options_for_time_to_event(
 
     _, kwargs = mock_runtime["JSONIngestor"].call_args
     assert kwargs["file_options"]["time_column"] == "event_time"
+
+
+def test_csv_time_series_forecasting_threads_time_column(
+    clean_env, mock_runtime, monkeypatch, tmp_path
+):
+    """A top-level `time_column` reaches the ingestor as its own kwarg (not just
+    TTE's file_options bridge) so validate_data can preflight it against the CSV
+    header and reject a name that isn't there (#441)."""
+    cfg = tmp_path / "tsf.yaml"
+    cfg.write_text(
+        "apiVersion: tracebloc.io/v1\n"
+        "kind: IngestConfig\n"
+        "category: time_series_forecasting\n"
+        "table: tsf_train\n"
+        "intent: train\n"
+        "csv: /data/tsf.csv\n"
+        "time_column: nonexistent_col\n"
+        "schema:\n"
+        "  timestamp: TIMESTAMP\n"
+        "  demand_mw: FLOAT\n"
+        "label:\n"
+        "  column: demand_mw\n"
+        "  policy: bucket\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("INGEST_CONFIG", str(cfg))
+
+    from tracebloc_ingestor.cli.run import main
+
+    main()
+
+    _, kwargs = mock_runtime["CSVIngestor"].call_args
+    assert kwargs["time_column"] == "nonexistent_col"
 
 
 # ---------------------------------------------------------------------------

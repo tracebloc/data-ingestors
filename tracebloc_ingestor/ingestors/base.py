@@ -240,6 +240,7 @@ class BaseIngestor(ABC):
         file_options: Optional[Dict[str, Any]] = None,
         label_policy: str = label_policy_module.PASSTHROUGH,
         data_id_strategy: str = "content_hash",
+        time_column: Optional[str] = None,
     ):
         """Initialize the base ingestor.
 
@@ -345,6 +346,15 @@ class BaseIngestor(ABC):
         self.data_format = data_format
         self.file_options = file_options or {}
         self.label_policy = label_policy
+        # The configured time column (time-series family), used by
+        # validate_data's preflight header check (data-ingestors#441). Kept as a
+        # plain attribute here rather than injected into file_options, so it
+        # never rides the registration meta_data wire payload. (conventions.py
+        # separately bridges it into file_options for time_to_event_prediction,
+        # where TimeToEventValidator consumes it.) ``None`` ⇒ the category
+        # default applies — the fixed ``timestamp`` column, or TimeToEvent's
+        # ``time`` fallback.
+        self.time_column = time_column
 
         # backend#1028 item 3: end-to-end correlation id. When spawned by
         # jobs-manager, the Job env carries the CLI's idempotency key — the
@@ -551,6 +561,16 @@ class BaseIngestor(ABC):
         # "No data found" (validators read UTF-8 and swallow decode errors).
         # Catch it once here with a clear, actionable message.
         preflight.check_csv_encoding(source)
+
+        # Pre-flight: a configured time_column that isn't in the CSV header is
+        # otherwise silently accepted — the time-series validators fall back to
+        # the fixed ``timestamp`` column and the rows land ordered by nothing
+        # (#441). Reject the typo up front, before any DB writes. Reads the
+        # header with the run's CSV dialect (getattr: only CSVIngestor carries
+        # csv_options).
+        preflight.check_time_column(
+            source, self.time_column, getattr(self, "csv_options", {})
+        )
 
         # Pass the configured label_column through (without permanently
         # mutating file_options / metadata) so label-aware validators like

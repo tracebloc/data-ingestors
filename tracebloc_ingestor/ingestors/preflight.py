@@ -12,10 +12,13 @@ The error messages are unchanged (they're pinned by tests).
 
 import os
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 
 from ..config import Config
+from ..utils import redaction
+from ..utils.columns import resolve_column
 from ..utils.constants import Intent, RED, RESET
+from ..utils.csv_dialect import read_dialect_kwargs
 
 
 def check_src_path(config: Optional[Config] = None) -> None:
@@ -101,6 +104,61 @@ def check_csv_encoding(source: Any) -> None:
             f"byte {exc.start}. Re-save the file as UTF-8 (in Excel: Save As → "
             f"'CSV UTF-8 (Comma delimited)'), then re-ingest.{RESET}"
         ) from exc
+
+
+def check_time_column(
+    source: Any,
+    time_column: Optional[str],
+    csv_options: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Fail fast when a configured ``time_column`` names a column that isn't in
+    the CSV header (data-ingestors#441).
+
+    The time-series categories order and validate rows by a time column. When
+    the config points ``time_column`` at a name that doesn't exist, the
+    forecasting validators silently fall back to the fixed ``timestamp`` column
+    and the rows land anyway — a silent accept that only surfaces (as undefined
+    ordering) much later, in training. Resolve the configured name against the
+    actual header once, up front, and reject a miss with the bad name plus the
+    columns that DO exist, before any DB writes.
+
+    No-op when ``time_column`` is unset (the category default applies) or the
+    source isn't a readable CSV (JSON columns are validated downstream by the
+    per-category validators). The header is tokenized with the run's CSV dialect
+    (``csv_options``) so a non-comma / BOM manifest that ingests fine resolves
+    the same columns the write path does — matching the CSV-reading validators.
+    """
+    if not time_column:
+        return
+    if not isinstance(source, (str, Path)):
+        return
+    path = Path(source)
+    if path.suffix.lower() != ".csv" or not path.exists():
+        return
+
+    # Lazy import so preflight has no hard pandas dependency for the non-CSV
+    # paths (mirrors how the CSV-reading validators import it locally).
+    try:
+        import pandas as pd
+    except ImportError:
+        return
+
+    try:
+        header = pd.read_csv(path, nrows=0, **read_dialect_kwargs(csv_options))
+    except Exception:
+        # A malformed / unreadable CSV surfaces with clearer messages through
+        # check_csv_encoding and the data validators; don't fail on an
+        # unrelated parse error here (nor mask the real cause).
+        return
+
+    columns = list(header.columns)
+    if resolve_column(columns, time_column) is None:
+        raise ValueError(
+            f"{RED}time_column '{time_column}' not found in CSV columns: "
+            f"{redaction.column_preview(columns)}. Set 'time_column' to one of "
+            f"the dataset's columns, or remove it to use the category "
+            f"default.{RESET}"
+        )
 
 
 def check_intent(intent: Any) -> None:

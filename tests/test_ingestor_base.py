@@ -600,6 +600,18 @@ def test_validate_data_no_validators_passes():
     assert ing.validate_data("src") is True
 
 
+def test_validate_data_rejects_missing_time_column(tmp_path):
+    # End-to-end through validate_data: a configured time_column absent from the
+    # CSV header aborts BEFORE any validators/DB writes, so the silent-accept of
+    # #441 can't happen. category=None ⇒ no category validators, isolating the
+    # preflight.
+    csv = tmp_path / "data.csv"
+    csv.write_text("timestamp,temp_c,demand_mw\n2020-01-01,1,2\n", encoding="utf-8")
+    ing = make_ingestor(category=None, time_column="nonexistent_col")
+    with pytest.raises(ValueError, match="nonexistent_col"):
+        ing.validate_data(str(csv))
+
+
 def test_validate_data_raises_when_validator_fails():
     ing = make_ingestor(category=None)
     bad = MagicMock()
@@ -937,6 +949,53 @@ def test_check_csv_encoding_rejects_nul_byte(tmp_path):
     bad.write_bytes(b"id,name\n1,a\x00b\n2,ok\n")
     with pytest.raises(ValueError, match="NUL byte"):
         preflight.check_csv_encoding(str(bad))
+
+
+# ---------------------------------------------------------------------------
+# time_column pre-flight (validate_data) — #441
+# ---------------------------------------------------------------------------
+
+
+def test_check_time_column_rejects_missing_column(tmp_path):
+    # A configured time_column that isn't in the CSV header used to be silently
+    # accepted (the TSF validators fall back to the fixed `timestamp` column and
+    # the rows land ordered by nothing). Now it fails fast, naming the bad
+    # column and the columns that DO exist (#441).
+    csv = tmp_path / "data.csv"
+    csv.write_text("timestamp,temp_c,demand_mw\n2020-01-01,1,2\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="nonexistent_col"):
+        preflight.check_time_column(str(csv), "nonexistent_col")
+
+
+def test_check_time_column_accepts_present_column(tmp_path):
+    # A time_column that IS in the header (case-/whitespace-insensitively,
+    # matching the ingest read path) must pass.
+    csv = tmp_path / "data.csv"
+    csv.write_text("Timestamp,temp_c\n2020-01-01,1\n", encoding="utf-8")
+    preflight.check_time_column(str(csv), "timestamp")  # must not raise
+
+
+def test_check_time_column_noop_when_unset_or_non_csv(tmp_path):
+    # Unset time_column ⇒ the category default applies; non-CSV / missing
+    # sources are left to the per-category validators.
+    csv = tmp_path / "data.csv"
+    csv.write_text("timestamp,temp_c\n2020-01-01,1\n", encoding="utf-8")
+    preflight.check_time_column(str(csv), None)  # unset
+    preflight.check_time_column(str(csv), "")  # empty
+    preflight.check_time_column(None, "nonexistent")  # not a path
+    preflight.check_time_column(str(tmp_path / "missing.csv"), "nonexistent")
+    preflight.check_time_column(str(tmp_path / "data.json"), "nonexistent")
+
+
+def test_check_time_column_honors_csv_dialect(tmp_path):
+    # The header is tokenized with the run's delimiter, so a semicolon manifest
+    # resolves the same columns the write path does — a present column is not
+    # falsely rejected because the whole line read as one comma-column.
+    csv = tmp_path / "data.csv"
+    csv.write_text("timestamp;temp_c;demand_mw\n2020-01-01;1;2\n", encoding="utf-8")
+    preflight.check_time_column(str(csv), "temp_c", {"delimiter": ";"})  # must not raise
+    with pytest.raises(ValueError, match="nope"):
+        preflight.check_time_column(str(csv), "nope", {"delimiter": ";"})
 
 
 # ---------------------------------------------------------------------------

@@ -193,6 +193,7 @@ class CSVIngestor(BaseIngestor):
         data_format: Optional[str] = None,
         label_policy: str = label_policy_module.PASSTHROUGH,
         data_id_strategy: str = "content_hash",
+        time_column: Optional[str] = None,
     ):
         """Initialize CSV Ingestor.
 
@@ -228,6 +229,7 @@ class CSVIngestor(BaseIngestor):
             file_options,
             label_policy=label_policy,
             data_id_strategy=data_id_strategy,
+            time_column=time_column,
         )
         self.csv_options = csv_options or {}
 

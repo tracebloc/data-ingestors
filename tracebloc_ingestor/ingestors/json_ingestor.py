@@ -219,6 +219,7 @@ class JSONIngestor(BaseIngestor):
         log_level: Optional[int] = None,
         label_policy: str = label_policy_module.PASSTHROUGH,
         data_id_strategy: str = "content_hash",
+        time_column: Optional[str] = None,
     ):
         """Initialize JSON Ingestor.
 
@@ -257,6 +258,7 @@ class JSONIngestor(BaseIngestor):
             file_options,
             label_policy=label_policy,
             data_id_strategy=data_id_strategy,
+            time_column=time_column,
         )
         self.json_options = json_options or {}
         if log_level is not None:
