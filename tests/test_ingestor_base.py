@@ -612,6 +612,36 @@ def test_validate_data_rejects_missing_time_column(tmp_path):
         ing.validate_data(str(csv))
 
 
+def test_validate_data_time_column_honors_file_options_override(tmp_path):
+    # The preflight must check the EFFECTIVE column the validators use. For
+    # time_to_event_prediction an advanced spec.file_options.time_column wins
+    # over the top-level shorthand (conventions.resolve), so a top-level name
+    # absent from the header must NOT reject when the override IS present
+    # (cursor bugbot on #449).
+    csv = tmp_path / "data.csv"
+    csv.write_text("event_time,duration\n2020-01-01,5\n", encoding="utf-8")
+    ing = make_ingestor(
+        category=None,
+        time_column="foo",  # top-level shorthand — NOT in the header
+        file_options={"time_column": "event_time"},  # override — IS in the header
+    )
+    assert ing.validate_data(str(csv)) is True
+
+
+def test_validate_data_rejects_bad_time_column_override(tmp_path):
+    # ...and a bad override (the effective column) is still rejected, even when
+    # the top-level shorthand would have resolved.
+    csv = tmp_path / "data.csv"
+    csv.write_text("event_time,duration\n2020-01-01,5\n", encoding="utf-8")
+    ing = make_ingestor(
+        category=None,
+        time_column="event_time",  # top-level valid...
+        file_options={"time_column": "nope"},  # ...but the override isn't there
+    )
+    with pytest.raises(ValueError, match="nope"):
+        ing.validate_data(str(csv))
+
+
 def test_validate_data_raises_when_validator_fails():
     ing = make_ingestor(category=None)
     bad = MagicMock()

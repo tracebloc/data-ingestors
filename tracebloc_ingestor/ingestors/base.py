@@ -568,8 +568,19 @@ class BaseIngestor(ABC):
         # (#441). Reject the typo up front, before any DB writes. Reads the
         # header with the run's CSV dialect (getattr: only CSVIngestor carries
         # csv_options).
+        #
+        # Check the EFFECTIVE column the category's validators actually use:
+        # for time_to_event_prediction, conventions.resolve bridges it into
+        # file_options, where an advanced ``spec.file_options.time_column``
+        # override intentionally wins over the top-level shorthand — so the
+        # preflight must honour the same precedence, or a valid override gets
+        # falsely rejected when the top-level name isn't in the header (cursor
+        # bugbot). Other categories don't bridge it; fall back to the top-level
+        # value threaded onto ``self`` (the fix that makes TSF/TSC reject).
         preflight.check_time_column(
-            source, self.time_column, getattr(self, "csv_options", {})
+            source,
+            self.file_options.get("time_column") or self.time_column,
+            getattr(self, "csv_options", {}),
         )
 
         # Pass the configured label_column through (without permanently
