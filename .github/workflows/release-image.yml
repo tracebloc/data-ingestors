@@ -70,6 +70,23 @@ jobs:
     # dropping the scopes free.
     permissions: {}
     steps:
+      # No un-gated workflow_dispatch may publish (backend#1422, decided
+      # 2026-08-05). Push/tag-triggered runs are train-owned and skip this
+      # step. A failing STEP is red and auditable; a skipped job would report
+      # green and hide denials (the promote.yml lesson, backend#1424).
+      - name: Authorize dispatcher (backend#1422)
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          ACTOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          case "$ACTOR" in
+            LukasWodka|saadqbal) echo "Dispatcher $ACTOR is on the allowlist." ;;
+            *)
+              echo "::error::$ACTOR is not permitted to dispatch this publish workflow (backend#1422)."
+              exit 1
+              ;;
+          esac
       - name: Wait for this version on PyPI
         id: check
         env:
