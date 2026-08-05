@@ -31,7 +31,6 @@ jobs:
       # fleet-wide + advisory soak done (backend#1303).
       soft-fail: false
       all-files: ${{ inputs.all-files || false }}
-      gitleaks-baseline: .gitleaks-baseline.json
       # black --check on the .py files a PR touches (diff-scoped -- adopting
       # the gate needs no repo-wide reformat; the tree converges as files are
       # touched). Pinned in step with this repo's pre-commit hook so local and
