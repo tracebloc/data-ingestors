@@ -54,10 +54,10 @@ concurrency:
 jobs:
   # Only cut an image for a version that actually published. The old chain got
   # this implicitly: auto-release-on-master.yml ran on a *successful*
-  # publish-master (sdist install + schema probe) and only then tagged and
+  # publish-main (sdist install + schema probe) and only then tagged and
   # dispatched. The release tag now comes from the release train
   # (tracebloc/backend#1345), which pushes it right after the promotion merge
-  # while publish-master is still running — so the guarantee has to be stated
+  # while publish-main is still running — so the guarantee has to be stated
   # explicitly here instead of inherited from the trigger.
   verify-published:
     timeout-minutes: 15

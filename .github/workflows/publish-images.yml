@@ -161,7 +161,7 @@ jobs:
 
       - name: Smoke-test the built image
         # Every other publisher runs this probe (release-image.yml,
-        # publish-master.yml, publish-dev.yml) and it exists for a real
+        # publish-main.yml, publish-dev.yml) and it exists for a real
         # regression: v0.3.0-rc1 shipped without tracebloc_ingestor/schema/
         # because the directory had no __init__.py and find_packages() silently
         # dropped it. Without the probe, that class of packaging break would
