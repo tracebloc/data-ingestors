@@ -38,6 +38,39 @@ config = Config()
 logger = logging.getLogger(__name__)
 logger.setLevel(config.LOG_LEVEL)
 
+# `data delete` reclaims a dataset with an ephemeral stage-identity pod
+# (uid/gid 65532, client-runtime#172). On a hostPath dataset the kubelet ignores
+# that pod's fsGroup, so the ingest side must leave the destination tree
+# group-owned by, and group-writable for, that group — otherwise the teardown
+# can't remove the files and they leak (remainder of client#259). Create the
+# destination dir setgid + group-writable so new entries inherit the group and
+# the group can delete them, regardless of the writing uid. 0o2775 = rwxrwsr-x.
+DEST_DIR_MODE = 0o2775
+
+
+def _ensure_dest_dir(path: str) -> None:
+    """Create ``path`` if absent, setgid + group-writable, so the ``data
+    delete`` teardown group can reclaim the tree (#172).
+
+    Only a directory we *create* is chmod'd — a pre-existing one is left as-is,
+    so we neither override an operator's deliberate mode nor mask a genuine
+    permission problem (an unwritable dest still surfaces downstream). The chmod
+    is best-effort: a failure is logged, not fatal, so ingestion still proceeds.
+    """
+    existed = os.path.isdir(path)
+    os.makedirs(path, exist_ok=True)
+    if existed:
+        return
+    try:
+        os.chmod(path, DEST_DIR_MODE)
+    except OSError as error:
+        logger.warning(
+            "Could not set group-writable/setgid mode on %s (%s); the `data "
+            "delete` teardown may not be able to reclaim it",
+            path,
+            error,
+        )
+
 # Define retry decorator for file operations
 retry_decorator = retry(
     stop=stop_after_attempt(RETRY_MAX_ATTEMPTS),
@@ -212,7 +245,7 @@ def image_transfer(
     """
     cfg = cfg or config
     # Create destination directory if it doesn't exist
-    os.makedirs(cfg.DEST_PATH, exist_ok=True)
+    _ensure_dest_dir(cfg.DEST_PATH)
 
     try:
         # Get the filename from the record
@@ -272,7 +305,7 @@ def annotation_transfer(
     """
     cfg = cfg or config
     # Create destination directory if it doesn't exist
-    os.makedirs(cfg.DEST_PATH, exist_ok=True)
+    _ensure_dest_dir(cfg.DEST_PATH)
 
     try:
         # Get the filename from the record
@@ -327,7 +360,7 @@ def text_transfer(
     """
     cfg = cfg or config
     # Create destination directory if it doesn't exist
-    os.makedirs(cfg.DEST_PATH, exist_ok=True)
+    _ensure_dest_dir(cfg.DEST_PATH)
 
     try:
         # Get the filename from the record
@@ -396,7 +429,7 @@ def mask_transfer(
     call per record.
     """
     cfg = cfg or config
-    os.makedirs(cfg.DEST_PATH, exist_ok=True)
+    _ensure_dest_dir(cfg.DEST_PATH)
 
     try:
         # Write target guarded against escaping DEST via a crafted mask_id (#239)

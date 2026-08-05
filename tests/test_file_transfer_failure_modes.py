@@ -117,6 +117,32 @@ def test_image_transfer_unwritable_dest_raises(dirs, no_retry_wait):
         os.chmod(dest, 0o700)  # restore so pytest can clean up tmp_path
 
 
+# --- #172: dest dir is created group-writable + setgid for teardown ---------
+
+@pytest.mark.skipif(
+    hasattr(os, "geteuid") and os.geteuid() == 0,
+    reason="root's created dirs ignore umask/perms nuances",
+)
+def test_ensure_dest_dir_new_dir_is_setgid_and_group_writable(tmp_path):
+    """#172: a dir the ingestor creates is setgid + group-writable so the
+    `data delete` teardown group (65532) can reclaim the tree on hostPath."""
+    dest = tmp_path / "storage" / "tbl"
+    file_transfer._ensure_dest_dir(str(dest))
+    mode = os.stat(dest).st_mode
+    assert mode & 0o2000, "setgid bit must be set so entries inherit the group"
+    assert mode & 0o020, "group-write bit must be set so the group can delete"
+
+
+def test_ensure_dest_dir_leaves_existing_dir_mode_untouched(tmp_path):
+    """A pre-existing dest is not re-chmod'd — we don't override an operator's
+    mode or mask a permission problem."""
+    dest = tmp_path / "storage" / "tbl"
+    dest.mkdir(parents=True)
+    os.chmod(dest, 0o750)
+    file_transfer._ensure_dest_dir(str(dest))
+    assert (os.stat(dest).st_mode & 0o777) == 0o750
+
+
 # --- atomic skip leaves no orphan (the #99 data-integrity invariant) --------
 
 def test_object_detection_missing_annotation_leaves_no_orphan(dirs):
