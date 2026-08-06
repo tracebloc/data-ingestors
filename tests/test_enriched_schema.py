@@ -298,6 +298,10 @@ def test_meta_data_payload_strips_scalar_alignment_bridges():
         "time_unit": "days",
         "event_indicator": {"event": 1, "censored": 0},
         "positive_definition": "same-document pairs",
+        # time_column is bridged only to configure a preflight validator (the
+        # TTE column / the TSF-TSC fixed-timestamp reject, #441), never dataset
+        # metadata — it must not ride the wire (cursor bugbot on #449).
+        "time_column": "timestamp",
     }
     ing = make_ingestor(
         enriched=True,

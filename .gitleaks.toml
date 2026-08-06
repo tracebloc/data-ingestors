@@ -1,0 +1,12 @@
+title = "tracebloc/data-ingestors gitleaks config"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "synthetic 32-hex correlation-id fixture (1 baseline entry)"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''(^|/)tests/''']
+regexTarget = "line"
+regexes = ['''CLI_STYLE_KEY\s*=\s*"[0-9a-f]{32}"''']
