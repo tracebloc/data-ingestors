@@ -19,6 +19,13 @@
 PYTHON ?= python3
 PYTEST ?= $(PYTHON) -m pytest
 
+# Lint tools are invoked through $(PYTHON) -m, not as bare commands on
+# PATH. `setup` pip-installs them into $(PYTHON)'s environment at a
+# pinned version; a bare `ruff` would resolve to whatever happens to be
+# first on PATH — a homebrew build, another venv — and the pin the
+# comment promises would silently not be the thing that ran. (Bugbot,
+# tracebloc/data-ingestors#461.)
+
 # Pinned to the version the org code-quality gate runs
 # (tracebloc/.github code-quality.yml, `ruff-version`). ruff's rule set
 # moves between releases, so an unpinned local install and CI can
@@ -75,17 +82,26 @@ setup:
 # running it. Format the files you touch; `pre-commit` already does.
 .PHONY: lint
 lint:
-	ruff check .
+	$(PYTHON) -m ruff check .
 
 # test: tests.yml's suite without the coverage machinery.
+#
+# Scoped to tests/ ON PURPOSE, even though tests.yml invokes bare
+# `pytest`. There is no `testpaths` setting, so a bare invocation also
+# collects e2e/ — which in CI is harmless (no MySQL is listening, so
+# e2e/conftest.py skips collection) and on a developer machine is not: a
+# laptop with a MySQL up, or with DB_NAME/DB_USER exported, would have
+# `make check` quietly run real ingestion that creates and drops tables
+# in that database. A pre-push check must not touch anyone's data.
+# (Bugbot, #461.) `make e2e` runs that suite deliberately.
 .PHONY: test
 test:
-	$(PYTEST) -q
+	$(PYTEST) tests/ -q
 
 # coverage: tests.yml exactly — the 95% floor included.
 .PHONY: coverage
 coverage:
-	$(PYTEST) --cov=tracebloc_ingestor --cov-report=term --cov-report=xml --cov-fail-under=95
+	$(PYTEST) tests/ --cov=tracebloc_ingestor --cov-report=term --cov-report=xml --cov-fail-under=95
 
 # e2e: e2e.yml — real ingestion against a real MySQL with an in-process
 # mock backend. Needs a database, hence the explicit target rather than
