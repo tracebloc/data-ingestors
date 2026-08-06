@@ -54,6 +54,7 @@ def _raise_oserror(*_a, **_k):
 
 # --- retry behaviour (tenacity on _copy_file_with_retry) --------------------
 
+
 def test_copy_retries_transient_error_then_succeeds(dirs, no_retry_wait, monkeypatch):
     src, dest = dirs
     s = _seed(src, "images", "a.jpg", b"payload")
@@ -101,6 +102,7 @@ def test_image_transfer_wraps_persistent_copy_error(dirs, no_retry_wait, monkeyp
 
 # --- a real filesystem permission error (not a mock) ------------------------
 
+
 @pytest.mark.skipif(
     hasattr(os, "geteuid") and os.geteuid() == 0,
     reason="root bypasses filesystem permission checks",
@@ -118,6 +120,7 @@ def test_image_transfer_unwritable_dest_raises(dirs, no_retry_wait):
 
 
 # --- #172: dest dir is created group-writable + setgid for teardown ---------
+
 
 @pytest.mark.skipif(
     hasattr(os, "geteuid") and os.geteuid() == 0,
@@ -145,6 +148,7 @@ def test_ensure_dest_dir_leaves_existing_dir_mode_untouched(tmp_path):
 
 # --- atomic skip leaves no orphan (the #99 data-integrity invariant) --------
 
+
 def test_object_detection_missing_annotation_leaves_no_orphan(dirs):
     src, dest = dirs
     _seed(src, "images", "x.jpg")  # image present, annotation absent
@@ -161,7 +165,8 @@ def test_segmentation_missing_mask_leaves_no_orphan(dirs):
     _seed(src, "images", "x.jpg")  # image present, mask file absent
     rec = file_transfer.map_file_transfer(
         TaskCategory.SEMANTIC_SEGMENTATION,
-        {"filename": "x", "mask_id": "m"}, {"extension": ".jpg"},
+        {"filename": "x", "mask_id": "m"},
+        {"extension": ".jpg"},
     )
     assert rec is None
     assert not dest.exists() or not any(dest.iterdir())
