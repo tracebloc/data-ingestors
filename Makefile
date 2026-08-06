@@ -19,6 +19,13 @@
 PYTHON ?= python3
 PYTEST ?= $(PYTHON) -m pytest
 
+# Pinned to the version the org code-quality gate runs
+# (tracebloc/.github code-quality.yml, `ruff-version`). ruff's rule set
+# moves between releases, so an unpinned local install and CI can
+# disagree about the same file. Bump this with the workflow, not apart
+# from it.
+RUFF_VERSION ?= 0.15.20
+
 .PHONY: help
 help:
 	@echo "tracebloc/data-ingestors — make targets"
@@ -53,6 +60,7 @@ setup:
 	$(PYTHON) -m pip install --upgrade pip
 	$(PYTHON) -m pip install -r requirements-dev.txt
 	$(PYTHON) -m pip install -e .
+	$(PYTHON) -m pip install "ruff==$(RUFF_VERSION)"
 	@echo "==> setup: dependencies installed; run 'make check'"
 
 # ---- individual targets ------------------------------------------
