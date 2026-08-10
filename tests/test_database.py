@@ -42,7 +42,9 @@ def mock_engine_factory():
 
 @pytest.fixture
 def db(mock_engine_factory):
-    return Database(Config(EDGE_ENV="local"))
+    # DB_USER/DB_PASSWORD are required (backend#1528 removed the edgeuser
+    # fallback); the engine is mocked so the values are arbitrary.
+    return Database(Config(EDGE_ENV="local", DB_USER="tb_ingest", DB_PASSWORD="pw"))
 
 
 # ---------------------------------------------------------------------------

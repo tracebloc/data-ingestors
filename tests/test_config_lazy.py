@@ -184,3 +184,27 @@ def test_numeric_int_field_still_coerces(clean_env, monkeypatch):
     config = Config()
     assert config.DB_PORT == 3307
     assert config.BATCH_SIZE == 500
+
+
+@pytest.mark.parametrize("attr", ["DB_USER", "DB_PASSWORD"])
+def test_db_credentials_required_no_edgeuser_fallback(clean_env, attr):
+    """backend#1528: the root-equivalent 'edgeuser' fallback is gone. With the
+    env var unset, accessing DB_USER/DB_PASSWORD must fail fast with a message
+    naming the variable — never silently return the legacy edgeuser default."""
+    with pytest.raises(ValueError, match=f"{attr} is not set"):
+        getattr(Config(), attr)
+
+
+@pytest.mark.parametrize(
+    "attr,env,value",
+    [("DB_USER", "DB_USER", "tb_ingest"), ("DB_PASSWORD", "DB_PASSWORD", "s3cret")],
+)
+def test_db_credentials_flow_from_env(clean_env, monkeypatch, attr, env, value):
+    monkeypatch.setenv(env, value)
+    assert getattr(Config(), attr) == value
+
+
+def test_db_credentials_override_wins(clean_env):
+    config = Config(DB_USER="tb_ingest", DB_PASSWORD="s3cret")
+    assert config.DB_USER == "tb_ingest"
+    assert config.DB_PASSWORD == "s3cret"

@@ -19,22 +19,24 @@ import pytest
 # ship the same secret. If this reappears anywhere in the package source, the
 # test fails, even in a comment.
 #
-# NOTE: `DB_PASSWORD` ("Edg9@Tr@ce") and `DB_USER` ("edgeuser") are
-# intentionally **not** in these lists. They're connection conventions for
-# the cluster-internal MySQL container, which bakes the same values into its
-# own image. They never vary per customer and don't leave the cluster, so
-# shipping them as defaults in `config.py` is correct, not a leak. See the
-# database-section comment in `config.py` and `Config.validate()` for the
-# rationale.
+# `Edg9@Tr@ce` is the legacy root-equivalent `edgeuser` password that DB_USER/
+# DB_PASSWORD used to fall back to. That fallback was removed in backend#1528
+# (D10 close-out): jobs-manager now injects per-Job tb_ingest credentials, so
+# the ingestor no longer connects as edgeuser and this password must never be
+# baked into source again. (`edgeuser` the username is guarded below.)
 KNOWN_LEAKED_SECRETS = (
     "&6edg*D9e16",
+    "Edg9@Tr@ce",
 )
 
-# Username default for the backend (tracebloc API) credential. Not secret on
-# its own, but paired with the leaked password above it formed a working
-# credential in legacy local dev — shouldn't be baked into source either.
+# Usernames that must not be baked into source. `testedge` was a legacy
+# backend (tracebloc API) default that — paired with the leaked password
+# above — formed a working credential in local dev. `edgeuser` is the
+# root-equivalent MySQL identity retired in backend#1528; DB_USER now comes
+# from the injected per-Job env, never a hardcoded default.
 LEGACY_USERNAME_DEFAULTS = (
     "testedge",
+    "edgeuser",
 )
 
 
