@@ -75,6 +75,14 @@ def main(argv: List[str] | None = None) -> int:  # pragma: no cover - thin shell
     ``sys.exit`` by the console-script wrapper; using a return value (rather
     than raising) keeps the function testable from inside pytest.
     """
+    # Group-writable by default (umask 002) so every directory and file the run
+    # writes under DEST_PATH can be reclaimed by the `data delete` teardown
+    # group (uid/gid 65532), not just the setgid DEST_PATH root itself — the
+    # hostPath half of client-runtime#172 (the teardown pod's fsGroup is ignored
+    # on hostPath). Files themselves need no write bit to be deleted; the
+    # containing directories do, which this guarantees for the whole tree.
+    os.umask(0o002)
+
     config_path = os.environ.get("INGEST_CONFIG")
     if not config_path:
         return _fail(
