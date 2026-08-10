@@ -1,0 +1,22 @@
+name: Version bump gate
+
+# Caller for tracebloc/.github version-bump-gate.yml. Fails a develop PR that
+# touches this repo's published files while the version those files would ship
+# under is ALREADY released -- caught on the author's diff, not days later at the
+# prod hop (backend#1563; the cli + py-package surprise on 2026-08-10).
+# Override a false positive with the 'skip-version-gate' label (visible in audit).
+on:
+  pull_request:
+    branches: [develop]
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+jobs:
+  version-bump-gate:
+    uses: tracebloc/.github/.github/workflows/version-bump-gate.yml@main
+    with:
+      version-file: "tracebloc_ingestor/__init__.py"
+      publish-paths: "tracebloc_ingestor/*"
+      soft-fail: false
