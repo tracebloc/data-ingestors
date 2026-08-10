@@ -7,6 +7,12 @@ on:
   # job in all-files mode instead of a PR diff.
   workflow_dispatch:
     inputs:
+      # Armed 2026-08-06 (backend#1492). Measured zero pin violations on every
+      # develop branch first, so this makes a green check stay green rather than
+      # importing a backlog. Soft-fail let #1449 add a second unpinned call site
+      # of an action while #1446 was open to pin it.
+      action-pins: true
+      action-pins-soft-fail: false
       all-files:
         description: "Scan the whole repo, not a diff"
         type: boolean
