@@ -339,15 +339,17 @@ class Config:
         module-level ``Config()`` instantiations elsewhere in the package
         don't blow up at import time.
 
-        In any non-local environment, the pod must boot with either:
-          - ``BACKEND_TOKEN`` (preferred), or
-          - ``CLIENT_ID`` + ``CLIENT_PASSWORD`` (deprecated fallback).
+        In any non-local environment, the pod must boot with:
+          - ``BACKEND_TOKEN`` (preferred) or ``CLIENT_ID`` +
+            ``CLIENT_PASSWORD`` (deprecated fallback) for backend auth, and
+          - ``DB_USER`` + ``DB_PASSWORD`` for MySQL.
 
-        Database credentials are intentionally **not** validated here: the
-        bundled MySQL container ships with fixed credentials that the
-        ingestor defaults match. They're a connection convention, not a
-        secret, and forcing customers to set them in env vars adds friction
-        with no security benefit.
+        Database credentials ARE validated here as of backend#1528 (D10): the
+        root-equivalent ``edgeuser`` fallback was removed, so the ingestor
+        authenticates as the identity jobs-manager injects per-Job
+        (``tb_ingest``). They are now required, not a connection convention —
+        checking them at boot surfaces a misconfigured Job here rather than
+        deep in ``_create_engine`` on the first query.
 
         Set ``CLIENT_ENV=local`` to bypass for development against a mock
         backend.
@@ -367,6 +369,22 @@ class Config:
             missing.append(
                 "BACKEND_TOKEN (preferred) or CLIENT_ID + CLIENT_PASSWORD "
                 "(deprecated fallback)"
+            )
+
+        # DB creds are required post-backend#1528 (edgeuser fallback removed).
+        # Peek at override/env directly rather than the properties, whose
+        # getters raise individually — this keeps the single aggregated
+        # "missing vars" error below.
+        db_user = self._override("DB_USER")
+        if db_user is _MISSING:
+            db_user = os.environ.get("DB_USER")
+        db_password = self._override("DB_PASSWORD")
+        if db_password is _MISSING:
+            db_password = os.environ.get("DB_PASSWORD")
+        if not db_user or not db_password:
+            missing.append(
+                "DB_USER + DB_PASSWORD (injected per-Job by jobs-manager; "
+                "backend#1528)"
             )
 
         if missing:
