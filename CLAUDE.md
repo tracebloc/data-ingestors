@@ -101,7 +101,7 @@ Python 3.11+, `sqlalchemy`, `mysql-connector-python`, `pandas`, `Pillow`, `reque
 ### Engineer kanban
 
 - Every ticket on the board carries a `Status` — no card sits at "No Status". New tickets start in `Backlog`. **Bugs are the exception:** label them `work-type:bug` (the Bug template does it) and put them straight into `Ready` — defects don't wait for refinement.
-- Picking up work: the team coordinates. `Ready` is the refined queue and the first choice when it's stocked; pulling from `Backlog` is normal when refinement hasn't caught up — say what you're taking.
+- Picking up work: the team coordinates. `Ready` is the refined queue — bugs excepted, per the line above — and the first choice when it's stocked; pulling from `Backlog` is normal when refinement hasn't caught up — say what you're taking.
 - Merging to `develop` moves the card to `On dev` automatically; there is no dev-side review.
 - Functional review happens once, on staging: when it passes, comment `/fr-pass` on the PR or drag the card to `Ready for prod`. Self-signoff is allowed.
 - `fr-gate` is a required check on promotions. If it blocks, the board or the work isn't ready — fix that. `skip-fr-gate` is audited, for emergencies only.
