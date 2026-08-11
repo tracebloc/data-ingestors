@@ -107,10 +107,38 @@ class Config:
                 f"{env_name} environment variable to a valid integer."
             )
 
+    @staticmethod
+    def _require_env(env_name: str) -> str:
+        """Read a required DB-credential env var, failing fast if unset
+        (backend#1528).
+
+        DB_USER / DB_PASSWORD used to fall back to the root-equivalent
+        edgeuser identity. That fallback is gone: jobs-manager now injects
+        the per-Job tb_ingest credentials into the ingestion Job's env, so an
+        unset value means a misconfigured Job, not a cue to use edgeuser. Raise
+        a message that names the variable rather than letting SQLAlchemy
+        surface an opaque access-denied (or, worse, silently connecting as the
+        legacy identity).
+        """
+        val = os.environ.get(env_name)
+        if not val:
+            raise ValueError(
+                f"{env_name} is not set. The ingestor authenticates to MySQL "
+                f"as the identity jobs-manager injects per-Job (backend#1528: "
+                f"tb_ingest); set the {env_name} environment variable. The "
+                f"legacy edgeuser fallback was removed once per-Job "
+                f"credentials shipped."
+            )
+        return val
+
     # ===== Database =====
-    # Cluster-internal MySQL ships with these credentials baked into its
-    # image; they're connection conventions, not secrets. Override via env
-    # only if you've replaced the bundled MySQL.
+    # DB_HOST/DB_PORT/DB_NAME are connection conventions for the
+    # cluster-internal MySQL and keep their defaults. DB_USER/DB_PASSWORD do
+    # NOT: the ingestor authenticates as the identity jobs-manager injects
+    # per-Job (backend#1528 — tb_ingest, scoped to training_test_datasets).
+    # The legacy root-equivalent edgeuser fallback was removed here once
+    # those per-Job credentials shipped; both are now required from env and
+    # fail fast if unset rather than silently connecting as the old identity.
     @property
     def DB_HOST(self) -> str:
         ov = self._override("DB_HOST")
@@ -125,12 +153,12 @@ class Config:
     @property
     def DB_USER(self) -> str:
         ov = self._override("DB_USER")
-        return ov if ov is not _MISSING else os.environ.get("DB_USER", "edgeuser")
+        return ov if ov is not _MISSING else self._require_env("DB_USER")
 
     @property
     def DB_PASSWORD(self) -> str:
         ov = self._override("DB_PASSWORD")
-        return ov if ov is not _MISSING else os.environ.get("DB_PASSWORD", "Edg9@Tr@ce")
+        return ov if ov is not _MISSING else self._require_env("DB_PASSWORD")
 
     @property
     def DB_NAME(self) -> str:
@@ -311,15 +339,18 @@ class Config:
         module-level ``Config()`` instantiations elsewhere in the package
         don't blow up at import time.
 
-        In any non-local environment, the pod must boot with either:
-          - ``BACKEND_TOKEN`` (preferred), or
-          - ``CLIENT_ID`` + ``CLIENT_PASSWORD`` (deprecated fallback).
+        In any non-local environment, the pod must boot with:
+          - ``BACKEND_TOKEN`` (preferred) or ``CLIENT_ID`` +
+            ``CLIENT_PASSWORD`` (deprecated fallback) for backend auth, and
+          - ``DB_USER`` + ``DB_PASSWORD`` for MySQL.
 
-        Database credentials are intentionally **not** validated here: the
-        bundled MySQL container ships with fixed credentials that the
-        ingestor defaults match. They're a connection convention, not a
-        secret, and forcing customers to set them in env vars adds friction
-        with no security benefit.
+        Database credentials are required as of backend#1528 (D10): the
+        root-equivalent ``edgeuser`` fallback was removed, so the ingestor
+        authenticates as the identity jobs-manager injects per-Job
+        (``tb_ingest``). They are NOT re-checked here — this method is
+        auth-scoped — but ``Config.DB_USER`` / ``DB_PASSWORD`` fail fast on
+        first access (``Database()`` init) via ``_require_env`` with a message
+        naming the unset variable, so a misconfigured Job still surfaces early.
 
         Set ``CLIENT_ENV=local`` to bypass for development against a mock
         backend.

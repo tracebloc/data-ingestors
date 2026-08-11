@@ -20,6 +20,8 @@ from tenacity import (
 )
 
 from tracebloc_ingestor import Config
+from tracebloc_ingestor.utils.fs import DEST_DIR_MODE as _DEST_DIR_MODE
+from tracebloc_ingestor.utils.fs import ensure_reclaimable_dir
 from tracebloc_ingestor.utils.constants import (
     GREEN,
     RED,
@@ -42,34 +44,20 @@ logger.setLevel(config.LOG_LEVEL)
 # (uid/gid 65532, client-runtime#172). On a hostPath dataset the kubelet ignores
 # that pod's fsGroup, so the ingest side must leave the destination tree
 # group-owned by, and group-writable for, that group — otherwise the teardown
-# can't remove the files and they leak (remainder of client#259). Create the
-# destination dir setgid + group-writable so new entries inherit the group and
-# the group can delete them, regardless of the writing uid. 0o2775 = rwxrwsr-x.
-DEST_DIR_MODE = 0o2775
+# can't remove the files and they leak (remainder of client#259). The rule now
+# lives in utils/fs.py so the duplicate validator -- which creates the SAME
+# destination directory, and gets there first -- applies it too. Re-exported here
+# because callers and tests already reference these names.
+DEST_DIR_MODE = _DEST_DIR_MODE
 
 
 def _ensure_dest_dir(path: str) -> None:
-    """Create ``path`` if absent, setgid + group-writable, so the ``data
-    delete`` teardown group can reclaim the tree (#172).
+    """Create ``path`` reclaimable by the `data delete` teardown (#172).
 
-    Only a directory we *create* is chmod'd — a pre-existing one is left as-is,
-    so we neither override an operator's deliberate mode nor mask a genuine
-    permission problem (an unwritable dest still surfaces downstream). The chmod
-    is best-effort: a failure is logged, not fatal, so ingestion still proceeds.
+    Thin delegation to :func:`ensure_reclaimable_dir`; see utils/fs.py for why
+    the mode is world-writable rather than group-writable.
     """
-    existed = os.path.isdir(path)
-    os.makedirs(path, exist_ok=True)
-    if existed:
-        return
-    try:
-        os.chmod(path, DEST_DIR_MODE)
-    except OSError as error:
-        logger.warning(
-            "Could not set group-writable/setgid mode on %s (%s); the `data "
-            "delete` teardown may not be able to reclaim it",
-            path,
-            error,
-        )
+    ensure_reclaimable_dir(path)
 
 
 # Define retry decorator for file operations

@@ -129,6 +129,7 @@ The Job needs these environment variables (set in [`ingestor-job.yaml`](ingestor
 | `CLIENT_ID`, `CLIENT_PASSWORD` | Tracebloc client credentials |
 | `CLIENT_PVC` | PVC name shared with the client (must match `values.yaml`) |
 | `MYSQL_HOST` | Hostname of the client's MySQL service |
+| `DB_USER`, `DB_PASSWORD` | **Required.** Credentials for the dataset database. There is no built-in fallback account — the Job fails at startup without these. On installs with `serviceDbAccounts: true`, use the generated `tb_ingest` account (password in the `<release-name>-secrets` Secret, key `TB_INGEST_PASSWORD`). |
 | `SRC_PATH` | Where your raw data is mounted in the ingestor pod |
 | `LABEL_FILE` | Path to labels (e.g. `Xy_train.csv`) |
 | `TABLE_NAME` | Destination table name in the client database |
