@@ -51,6 +51,7 @@ def db(mock_engine_factory):
 # __init__ / _create_engine
 # ---------------------------------------------------------------------------
 
+
 def test_init_builds_engine(db, mock_engine_factory):
     ce, engine, conn = mock_engine_factory
     assert db.engine is engine
@@ -65,18 +66,22 @@ def test_init_builds_engine(db, mock_engine_factory):
 # _get_sqlalchemy_type (pure)
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("mysql_type,expected_cls", [
-    ("INT", Integer),
-    ("INTEGER", Integer),
-    ("BIGINT", BigInteger),
-    ("TEXT", db_mod.Text),
-    ("FLOAT", db_mod.Float),
-    ("BOOLEAN", db_mod.Boolean),
-    ("DATE", db_mod.Date),
-    ("DATETIME", db_mod.DateTime),
-    ("TIMESTAMP", db_mod.DateTime),
-    ("TIME", db_mod.Time),
-])
+
+@pytest.mark.parametrize(
+    "mysql_type,expected_cls",
+    [
+        ("INT", Integer),
+        ("INTEGER", Integer),
+        ("BIGINT", BigInteger),
+        ("TEXT", db_mod.Text),
+        ("FLOAT", db_mod.Float),
+        ("BOOLEAN", db_mod.Boolean),
+        ("DATE", db_mod.Date),
+        ("DATETIME", db_mod.DateTime),
+        ("TIMESTAMP", db_mod.DateTime),
+        ("TIME", db_mod.Time),
+    ],
+)
 def test_get_sqlalchemy_type_mapping(db, mysql_type, expected_cls):
     result = db._get_sqlalchemy_type(mysql_type)
     # result may be a class or an instance depending on length handling.
@@ -136,12 +141,15 @@ def test_get_sqlalchemy_type_typo_no_suggestion_for_distant_input(db):
     assert "Did you mean" not in str(excinfo.value)
 
 
-@pytest.mark.parametrize("typo,suggestion", [
-    ("INTGER", "INTEGER"),
-    ("NUMRIC", "NUMERIC"),
-    ("BOLEAN", "BOOLEAN"),
-    ("VARCAHR", "VARCHAR"),
-])
+@pytest.mark.parametrize(
+    "typo,suggestion",
+    [
+        ("INTGER", "INTEGER"),
+        ("NUMRIC", "NUMERIC"),
+        ("BOLEAN", "BOOLEAN"),
+        ("VARCAHR", "VARCHAR"),
+    ],
+)
 def test_get_sqlalchemy_type_typo_suggestions_cover_common_mistakes(
     db, typo, suggestion
 ):
@@ -203,6 +211,7 @@ def test_get_sqlalchemy_type_char_bare(db):
 # create_table
 # ---------------------------------------------------------------------------
 
+
 def test_create_table_new(db):
     db.metadata.create_all = MagicMock()
     inspector = MagicMock()
@@ -246,7 +255,8 @@ def test_create_table_existing_matching_schema_reflects_ok(db):
 
     def fake_reflect(engine, only=None):
         Table(
-            "panel", db.metadata,
+            "panel",
+            db.metadata,
             Column("id", BigInteger, primary_key=True),
             Column("data_id", String(255)),
             Column("P01033_TIMP1", String(255)),
@@ -277,7 +287,8 @@ def test_create_table_existing_schema_mismatch_fails_fast(db):
 
     def fake_reflect(engine, only=None):
         Table(
-            "IBD_Biomarker", db.metadata,
+            "IBD_Biomarker",
+            db.metadata,
             Column("id", BigInteger, primary_key=True),
             Column("data_id", String(255)),
             Column("P02452|COL1A1", String(255)),  # original header (stale table)
@@ -292,6 +303,7 @@ def test_create_table_existing_schema_mismatch_fails_fast(db):
 # ---------------------------------------------------------------------------
 # insert_batch
 # ---------------------------------------------------------------------------
+
 
 def _seed_table(db):
     db.metadata.create_all = MagicMock()
@@ -384,12 +396,14 @@ def test_insert_batch_connection_error(db, mock_engine_factory):
 # Transient DB retry via tenacity — backend/#772 P2
 # ---------------------------------------------------------------------------
 
+
 def test_insert_batch_retries_on_transient_operational_error(db, mock_engine_factory):
     """A transient MySQL hiccup (server-gone-away, lost connection,
     deadlock) used to fail every in-flight batch permanently. tenacity
     now retries up to 3 attempts with exponential backoff; the second
     attempt succeeds in this test."""
     from sqlalchemy.exc import OperationalError
+
     ce, engine, conn = mock_engine_factory
     _seed_table(db)
 
@@ -425,6 +439,7 @@ def test_insert_batch_does_not_retry_permanent_error_falls_to_per_row(
     straight through to the existing per-row fallback path so the
     offending record can be identified."""
     from sqlalchemy.exc import IntegrityError
+
     ce, engine, conn = mock_engine_factory
     _seed_table(db)
 
@@ -455,12 +470,11 @@ def test_insert_batch_gives_up_after_max_retries(db, mock_engine_factory):
     to the per-row path (which will see the same error and record the
     failure)."""
     from sqlalchemy.exc import OperationalError
+
     ce, engine, conn = mock_engine_factory
     _seed_table(db)
 
-    err = OperationalError(
-        "INSERT …", {}, Exception("MySQL server has gone away")
-    )
+    err = OperationalError("INSERT …", {}, Exception("MySQL server has gone away"))
 
     def execute_side_effect(stmt, *a, **k):
         raise err
@@ -484,6 +498,7 @@ def test_insert_batch_rolls_back_between_transient_retries(db, mock_engine_facto
     is reset before the retry runs.
     """
     from sqlalchemy.exc import OperationalError
+
     ce, engine, conn = mock_engine_factory
     _seed_table(db)
 
@@ -515,14 +530,15 @@ def test_insert_batch_rolls_back_between_transient_retries(db, mock_engine_facto
     # before re-raising for the next retry. Two failures -> at least two
     # rollback calls (plus the outer commit-or-rollback path's own).
     rollback_count = sum(1 for e in events if e == "rollback")
-    assert rollback_count >= 2, (
-        f"expected at least 2 rollbacks between retries; events={events}"
-    )
+    assert (
+        rollback_count >= 2
+    ), f"expected at least 2 rollbacks between retries; events={events}"
 
 
 # ---------------------------------------------------------------------------
 # get_table_schema
 # ---------------------------------------------------------------------------
+
 
 def test_get_table_schema_reflected_dialect_types(db):
     """Regression: ``inspector.get_columns()`` against a real MySQL returns
@@ -573,6 +589,7 @@ def test_get_table_schema_generic_types(db):
     """Generic (in-process) SQLAlchemy types map to the same MySQL vocabulary
     as their reflected dialect counterparts."""
     inspector = MagicMock()
+
     class Weird:  # unknown SQLAlchemy type, no 'length' attribute
         pass
 
@@ -632,6 +649,7 @@ def test_create_table_rejects_overlong_column_name():
 # ---------------------------------------------------------------------------
 # upsert quoting (regression): special-character column names
 # ---------------------------------------------------------------------------
+
 
 def test_upsert_backtick_quotes_special_char_columns_in_values_clause():
     """ON DUPLICATE KEY UPDATE must backtick-quote the column name inside
@@ -727,9 +745,9 @@ def test_upsert_doubles_embedded_backticks_in_column_name():
         for column in table.columns
         if column.name not in ["id", "created_at", "data_id"]
     }
-    stmt = insert_stmt.values(
-        [{"data_id": "x", weird: 1.0}]
-    ).on_duplicate_key_update(**update_dict)
+    stmt = insert_stmt.values([{"data_id": "x", weird: 1.0}]).on_duplicate_key_update(
+        **update_dict
+    )
     sql = str(stmt.compile(dialect=mysql.dialect()))
 
     # Escaped form ` -> `` is present.
@@ -749,7 +767,7 @@ def test_get_samples_null_label_normalised_to_empty_string(db, mock_engine_facto
     convention the old per-row API always sent when no label was present)."""
     _, _, conn = mock_engine_factory
     conn.execute.return_value.fetchall.return_value = [
-        ("id-1", None),   # self-supervised / no label column → SQL NULL
+        ("id-1", None),  # self-supervised / no label column → SQL NULL
         ("id-2", "cat"),
     ]
     result = db.get_samples("tbl", "ing-uuid")
@@ -759,12 +777,14 @@ def test_get_samples_null_label_normalised_to_empty_string(db, mock_engine_facto
     ]
 
 
-def test_get_label_counts_null_label_normalised_to_empty_string(db, mock_engine_factory):
+def test_get_label_counts_null_label_normalised_to_empty_string(
+    db, mock_engine_factory
+):
     """SQL NULL and '' both map to '' so they merge into a single count."""
     _, _, conn = mock_engine_factory
     conn.execute.return_value.fetchall.return_value = [
         (None, 3),
-        ("",   2),
+        ("", 2),
         ("cat", 5),
     ]
     result = db.get_label_counts("tbl", "ing-uuid")
@@ -996,9 +1016,7 @@ def test_reclaim_dead_run_rows_noop_when_nothing_dead(db, mock_engine_factory):
     delete.assert_not_called()
 
 
-@pytest.mark.parametrize(
-    "reserved", ["tracebloc_ingest_meta", "tracebloc_ingest_runs"]
-)
+@pytest.mark.parametrize("reserved", ["tracebloc_ingest_meta", "tracebloc_ingest_runs"])
 def test_create_table_rejects_reserved_bookkeeping_tables(reserved):
     """The salt store (#225) and the run journal (backend#1028) share the
     cluster MySQL with dataset tables — a dataset must not be able to claim
@@ -1063,7 +1081,9 @@ def test_list_dataset_ingestor_ids_scans_tables_excluding_framework(
 
     executed = _executed_sql(conn)
     # Discovery query hit information_schema for the ingestor_id column.
-    assert any("information_schema.columns" in s and "ingestor_id" in s for s in executed)
+    assert any(
+        "information_schema.columns" in s and "ingestor_id" in s for s in executed
+    )
     # The framework run-journal table was skipped — never SELECTed as a dataset.
     assert not any("`tracebloc_ingest_runs`" in s for s in executed)
     # Per-dataset-table id scans excluded null/empty ids.

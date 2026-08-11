@@ -12,7 +12,6 @@ from pathlib import Path
 
 import pytest
 
-
 # Strings that previously shipped as hardcoded defaults for the **backend**
 # (tracebloc API) credentials in `tracebloc_ingestor/config.py`. These are
 # real per-customer credentials — shipping a default value made every install

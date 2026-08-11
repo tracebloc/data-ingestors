@@ -28,10 +28,21 @@ from tracebloc_ingestor.config import Config
 def clean_env(monkeypatch):
     """Strip the env vars these tests read/write."""
     for var in (
-        "SRC_PATH", "LABEL_FILE", "TABLE_NAME", "TITLE",
-        "BACKEND_TOKEN", "CLIENT_ID", "CLIENT_PASSWORD",
-        "CLIENT_ENV", "LOG_LEVEL", "BATCH_SIZE",
-        "MYSQL_HOST", "MYSQL_PORT", "DB_USER", "DB_PASSWORD", "DB_NAME",
+        "SRC_PATH",
+        "LABEL_FILE",
+        "TABLE_NAME",
+        "TITLE",
+        "BACKEND_TOKEN",
+        "CLIENT_ID",
+        "CLIENT_PASSWORD",
+        "CLIENT_ENV",
+        "LOG_LEVEL",
+        "BATCH_SIZE",
+        "MYSQL_HOST",
+        "MYSQL_PORT",
+        "DB_USER",
+        "DB_PASSWORD",
+        "DB_NAME",
     ):
         monkeypatch.delenv(var, raising=False)
 
@@ -169,7 +180,9 @@ def test_api_endpoint_follows_edge_env(clean_env, monkeypatch):
     assert config.API_ENDPOINT == "http://localhost:8000"
 
 
-@pytest.mark.parametrize("env,attr", [("MYSQL_PORT", "DB_PORT"), ("BATCH_SIZE", "BATCH_SIZE")])
+@pytest.mark.parametrize(
+    "env,attr", [("MYSQL_PORT", "DB_PORT"), ("BATCH_SIZE", "BATCH_SIZE")]
+)
 def test_non_numeric_int_field_raises_clear_error(clean_env, monkeypatch, env, attr):
     # A non-numeric MYSQL_PORT / BATCH_SIZE must surface a clear config error
     # naming the field, not a raw "invalid literal for int()" (#238).
