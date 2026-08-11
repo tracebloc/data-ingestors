@@ -32,6 +32,21 @@ spec:
           value: "client-pvc"
         - name: MYSQL_HOST
           value: "mysql-client"
+        # Dataset-DB credentials. REQUIRED: the ingestor no longer falls back to
+        # a built-in account, so `Database()` init fails without these.
+        - name: DB_USER
+          value: "<replace_with_db_user>"
+        - name: DB_PASSWORD
+          value: "<replace_with_db_password>"
+        # On installs with `serviceDbAccounts: true` in the client's values.yaml,
+        # use the generated tb_ingest account instead of a literal password:
+        # - name: DB_USER
+        #   value: "tb_ingest"
+        # - name: DB_PASSWORD
+        #   valueFrom:
+        #     secretKeyRef:
+        #       name: <release-name>-secrets
+        #       key: TB_INGEST_PASSWORD
         - name: SRC_PATH
           value: "/data" # Source folder path whithin the data ingestor
         - name: LABEL_FILE
