@@ -10,6 +10,7 @@ import logging
 
 from .base import BaseValidator, ValidationResult
 from ..config import Config
+from ..utils.fs import ensure_reclaimable_dir
 
 config = Config()
 logger = logging.getLogger(__name__)
@@ -203,7 +204,15 @@ class DuplicateValidator(BaseValidator):
         try:
             dest_path = Path(self.dest_path)
             if not dest_path.exists():
-                dest_path.mkdir(parents=True, exist_ok=True)
+                # Shared helper, not a bare mkdir: validation runs BEFORE the
+                # transfer, so whoever creates this directory first decides its
+                # mode -- and file_transfer deliberately does not re-chmod a
+                # directory that already exists. A bare mkdir here therefore left
+                # the tree at the umask default (0755, owned by the ingest uid),
+                # which the `data delete` teardown pod -- a different uid -- cannot
+                # remove: "rm: can't remove ...: Permission denied", with the
+                # table already dropped. See utils/fs.py.
+                ensure_reclaimable_dir(str(dest_path))
                 logger.info(f"Created destination directory: {self.dest_path}")
             return True
         except Exception as e:
