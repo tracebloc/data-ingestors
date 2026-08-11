@@ -11,10 +11,10 @@ Covers all three boot paths required by the #43 acceptance criteria:
 A fourth path — ``CLIENT_ENV=local`` — is also exercised because it bypasses
 both validation and the network entirely.
 
-Database credentials (``DB_USER`` / ``DB_PASSWORD``) are also part of the
-validation surface as of backend#1528: the root-equivalent ``edgeuser``
-fallback was removed, so a real run requires the ``tb_ingest`` identity
-jobs-manager injects per-Job. See `Config.validate()`.
+Database credentials (``DB_USER`` / ``DB_PASSWORD``) are required for a real
+run as of backend#1528 (the ``edgeuser`` fallback was removed — jobs-manager
+injects ``tb_ingest`` per-Job), but they are NOT part of this auth-scoped
+``validate()``; they fail fast at ``Database()`` init instead.
 """
 
 from __future__ import annotations
@@ -33,16 +33,13 @@ def _make_config(**overrides) -> Config:
 
     Default: a valid prod-like config with BACKEND_TOKEN set so ``validate()``
     passes; tests override only the auth fields they care about. DB creds are
-    now part of the validation surface (backend#1528 removed the edgeuser
-    fallback — jobs-manager injects tb_ingest per-Job), so the defaults include
-    them; a test can drop them via ``DB_USER=None`` / ``DB_PASSWORD=None``.
+    not part of ``validate()`` (it's auth-scoped) — they fail fast at
+    ``Database()`` init instead — so they're left unset here.
     """
     defaults = dict(
         BACKEND_TOKEN="test-token-abc",
         CLIENT_USERNAME=None,
         CLIENT_PASSWORD=None,
-        DB_USER="tb_ingest",
-        DB_PASSWORD="pw",
         EDGE_ENV="prod",
     )
     defaults.update(overrides)
@@ -145,25 +142,6 @@ class TestNoCredsFailsFast:
         assert "CLIENT_PASSWORD" in msg
         # The error message points users at the local-mode escape hatch.
         assert "CLIENT_ENV=local" in msg
-
-    def test_validate_requires_db_credentials(self):
-        """backend#1528: DB creds are required at boot now that the edgeuser
-        fallback is gone — a prod pod with backend auth but no DB_USER/
-        DB_PASSWORD must fail fast at validate(), naming them."""
-        config = _make_config(DB_USER=None, DB_PASSWORD=None)
-
-        with pytest.raises(ValueError) as exc_info:
-            config.validate()
-
-        msg = str(exc_info.value)
-        assert "DB_USER" in msg and "DB_PASSWORD" in msg
-        # Backend auth was present, so it must NOT be in the missing list.
-        assert "BACKEND_TOKEN" not in msg
-
-    def test_local_mode_skips_db_credential_check(self):
-        """Local dev has no jobs-manager to inject creds — validate() must
-        still pass with DB creds unset under CLIENT_ENV=local."""
-        _make_config(EDGE_ENV="local", DB_USER=None, DB_PASSWORD=None).validate()
 
     def test_apiclient_init_raises_before_network(self):
         config = _make_config(

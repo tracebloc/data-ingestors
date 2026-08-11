@@ -344,12 +344,13 @@ class Config:
             ``CLIENT_PASSWORD`` (deprecated fallback) for backend auth, and
           - ``DB_USER`` + ``DB_PASSWORD`` for MySQL.
 
-        Database credentials ARE validated here as of backend#1528 (D10): the
+        Database credentials are required as of backend#1528 (D10): the
         root-equivalent ``edgeuser`` fallback was removed, so the ingestor
         authenticates as the identity jobs-manager injects per-Job
-        (``tb_ingest``). They are now required, not a connection convention —
-        checking them at boot surfaces a misconfigured Job here rather than
-        deep in ``_create_engine`` on the first query.
+        (``tb_ingest``). They are NOT re-checked here — this method is
+        auth-scoped — but ``Config.DB_USER`` / ``DB_PASSWORD`` fail fast on
+        first access (``Database()`` init) via ``_require_env`` with a message
+        naming the unset variable, so a misconfigured Job still surfaces early.
 
         Set ``CLIENT_ENV=local`` to bypass for development against a mock
         backend.
@@ -369,22 +370,6 @@ class Config:
             missing.append(
                 "BACKEND_TOKEN (preferred) or CLIENT_ID + CLIENT_PASSWORD "
                 "(deprecated fallback)"
-            )
-
-        # DB creds are required post-backend#1528 (edgeuser fallback removed).
-        # Peek at override/env directly rather than the properties, whose
-        # getters raise individually — this keeps the single aggregated
-        # "missing vars" error below.
-        db_user = self._override("DB_USER")
-        if db_user is _MISSING:
-            db_user = os.environ.get("DB_USER")
-        db_password = self._override("DB_PASSWORD")
-        if db_password is _MISSING:
-            db_password = os.environ.get("DB_PASSWORD")
-        if not db_user or not db_password:
-            missing.append(
-                "DB_USER + DB_PASSWORD (injected per-Job by jobs-manager; "
-                "backend#1528)"
             )
 
         if missing:
