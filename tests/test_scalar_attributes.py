@@ -5,6 +5,7 @@ time-series ``timezone`` / ``sampling_frequency`` from the CSV timestamp pass.
 
 from __future__ import annotations
 
+from datetime import date, datetime
 from unittest.mock import MagicMock
 
 from tracebloc_ingestor.ingestors.csv_ingestor import CSVIngestor
@@ -319,3 +320,38 @@ def test_positive_definition_not_emitted_for_text():
     )
     attrs = ing._collect_run_metadata()["attributes"]
     assert "positive_definition" not in attrs
+
+
+def test_temporal_frequency_inferred_for_date_only_schema(make_csv):
+    """A date-only (``DATE``) timestamp column must still yield a cadence.
+
+    Daily series are the commonest forecasting shape, and since #489 an
+    INFERRED schema types a date-only column ``DATE`` (inference never emits
+    ``TIMESTAMP``). Only the DATETIME/TIMESTAMP cast branch accumulated the
+    timestamp sample, so a date-only dataset ingested cleanly but silently
+    omitted ``sampling_frequency`` from run metadata — a backend WARN with no
+    local signal (Bugbot on #490).
+    """
+    path = make_csv(
+        {
+            "timestamp": ["2023-10-01", "2023-10-02", "2023-10-03", "2023-10-04"],
+            "value": [1.0, 2.0, 3.0, 4.0],
+        }
+    )
+    ing = make_ingestor(
+        schema={"timestamp": "DATE", "value": "FLOAT"},
+        category=TaskCategory.TIME_SERIES_FORECASTING,
+    )
+    chunks = list(ing.read_data(str(path)))
+
+    attrs = ing._collect_run_metadata()["attributes"]
+    assert attrs["sampling_frequency"], "date-only series lost its cadence"
+
+    # …and the DATE branch's own contract still holds: the stored value stays a
+    # plain date. Accumulating the cadence must read the parsed datetimes
+    # WITHOUT reintroducing a spurious '00:00:00' into what gets written.
+    stored = [record["timestamp"] for record in chunks]
+    assert stored, "no records were read"
+    assert all(
+        isinstance(v, date) and not isinstance(v, datetime) for v in stored
+    ), f"DATE column gained a time component: {stored[:2]}"
