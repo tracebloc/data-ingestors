@@ -107,11 +107,13 @@ class TestApplyToLabelCounts:
 
     def test_bucket_rekeys_to_bucket_ids(self):
         out = label_policy.apply_to_label_counts({"0": 11, "1": 19}, BUCKET)
+        # Keys are stringified bucket ids — the wire shape the backend has
+        # always received (review on #487).
         assert out == {
-            label_policy.apply("0", BUCKET): 11,
-            label_policy.apply("1", BUCKET): 19,
+            str(label_policy.apply("0", BUCKET)): 11,
+            str(label_policy.apply("1", BUCKET)): 19,
         }
-        assert all(0 <= k < NUM_BUCKETS for k in out)
+        assert all(isinstance(k, str) and 0 <= int(k) < NUM_BUCKETS for k in out)
 
     def test_bucket_sums_colliding_raw_values(self):
         """64 buckets means collisions are routine. Dropping one of two
@@ -125,7 +127,7 @@ class TestApplyToLabelCounts:
         assert len(colliding) >= 2, "fixture needs two values in the same bucket"
         a, b = colliding[0], colliding[1]
         out = label_policy.apply_to_label_counts({a: 4, b: 6}, BUCKET)
-        assert out == {0: 10}
+        assert out == {"0": 10}
 
     def test_bucket_preserves_total_row_count(self):
         counts = {str(i): i for i in range(1, 40)}
@@ -135,7 +137,7 @@ class TestApplyToLabelCounts:
     def test_bucket_missing_label_key_uses_sentinel(self):
         # get_label_counts maps a SQL NULL label to the "" key.
         out = label_policy.apply_to_label_counts({"": 7}, BUCKET)
-        assert out == {MISSING_LABEL_BUCKET: 7}
+        assert out == {str(MISSING_LABEL_BUCKET): 7}
 
     def test_unknown_policy_raises(self):
         with pytest.raises(ValueError, match="Unknown label policy"):
@@ -152,9 +154,10 @@ class TestApplyToSamples:
             [{"data_id": "d1", "label": "1"}, {"data_id": "d2", "label": "0"}],
             BUCKET,
         )
+        # Stringified: data_samples[].label has always been a JSON string.
         assert [s["label"] for s in out] == [
-            label_policy.apply("1", BUCKET),
-            label_policy.apply("0", BUCKET),
+            str(label_policy.apply("1", BUCKET)),
+            str(label_policy.apply("0", BUCKET)),
         ]
         assert [s["data_id"] for s in out] == ["d1", "d2"]
 
@@ -443,8 +446,8 @@ def test_null_label_round_trips_to_the_missing_sentinel():
     MISSING_LABEL_BUCKET — so a missing target still reaches the backend as the
     sentinel, without a sentinel ever being stored locally."""
     assert label_policy.apply_to_label_counts({"": 3}, BUCKET) == {
-        MISSING_LABEL_BUCKET: 3
+        str(MISSING_LABEL_BUCKET): 3
     }
     assert label_policy.apply_to_samples([{"data_id": "d", "label": ""}], BUCKET) == [
-        {"data_id": "d", "label": MISSING_LABEL_BUCKET}
+        {"data_id": "d", "label": str(MISSING_LABEL_BUCKET)}
     ]

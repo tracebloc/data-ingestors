@@ -112,11 +112,16 @@ def apply_to_label_counts(counts: Mapping[Any, int], policy: str) -> Dict[Any, i
         policy: ``"passthrough"`` (returned unchanged) or ``"bucket"``.
 
     Returns:
-        Under ``bucket``, ``{bucket_id: row_count}``. Counts of raw values that
-        share a bucket are SUMMED — with 64 buckets, collisions are expected
-        (a 300-label dataset averages ~5 raw values per bucket), and dropping
-        one of the colliding entries would under-report the dataset's size to
-        the backend.
+        Under ``bucket``, ``{"<bucket_id>": row_count}``. Counts of raw values
+        that share a bucket are SUMMED — with 64 buckets, collisions are
+        expected (a 300-label dataset averages ~5 raw values per bucket), and
+        dropping one of the colliding entries would under-report the dataset's
+        size to the backend.
+
+        Keys are STRINGS, matching what the backend has always received: the
+        bucket id used to be written to the VARCHAR ``label`` column and read
+        back as a string, and JSON object keys are strings regardless. Same
+        reason ``apply_to_samples`` stringifies.
 
     Raises:
         ValueError: if ``policy`` is unknown (via :func:`apply`).
@@ -125,7 +130,7 @@ def apply_to_label_counts(counts: Mapping[Any, int], policy: str) -> Dict[Any, i
         return dict(counts)
     bucketed: Dict[Any, int] = {}
     for label, count in counts.items():
-        key = apply(label, policy)
+        key = str(apply(label, policy))
         bucketed[key] = bucketed.get(key, 0) + count
     return bucketed
 
@@ -147,6 +152,16 @@ def apply_to_samples(
         ``MISSING_LABEL_BUCKET`` for a shape that never had a label would
         misreport it as a label the ingest saw.
 
+        The bucketed label is a STRING, not the raw ``int``. Pre-#486 the
+        bucket was stored in the VARCHAR ``label`` column and read back out by
+        ``Database.get_samples``, so ``data_samples[].label`` has always been a
+        JSON string — as it is for classification class names. The backend's
+        summary serializer takes ``samples`` as an untyped ``ListField`` and
+        would accept a number, but every consumer downstream of
+        ``UserDataSet.data_samples`` has only ever seen strings, so this keeps
+        the wire shape identical rather than betting on their tolerance
+        (review on #487).
+
     Raises:
         ValueError: if ``policy`` is unknown (via :func:`apply`).
     """
@@ -156,7 +171,7 @@ def apply_to_samples(
     for sample in samples:
         record = dict(sample)
         if "label" in record:
-            record["label"] = apply(record["label"], policy)
+            record["label"] = str(apply(record["label"], policy))
         out.append(record)
     return out
 

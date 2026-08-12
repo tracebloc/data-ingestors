@@ -1207,6 +1207,20 @@ class BaseIngestor(ABC):
                         label_counts.values()
                     )
                 else:
+                    # CEILING (review on #487): this GROUP BYs the RAW label,
+                    # so a regression-class dataset with a continuous target
+                    # yields up to one entry per distinct value — ~N rows —
+                    # which the boundary then collapses to <= 64 buckets. Before
+                    # #486 the column held the buckets themselves, so the same
+                    # query grouped over <= 64 keys. Fine at the sizes we ingest
+                    # today (a 100k-row float target is a ~100k-entry dict,
+                    # single-digit MB); a multi-million-row continuous target
+                    # would want the bucketing pushed into SQL or the counts
+                    # folded while streaming. Deliberately NOT done here: both
+                    # shapes move the policy back outside
+                    # APIClient.send_ingest_summary — the single-application
+                    # boundary this PR exists to establish — or risk bucketing
+                    # an already-bucketed key. Tracked in #488.
                     label_counts = self.database.get_label_counts(
                         self.physical_table_name, self.ingestor_id
                     )

@@ -417,10 +417,13 @@ def test_summary_bucket_policy_buckets_labels_and_samples():
     sent = _captured_summary_payload(_client(), label_policy=BUCKET)
     # JSON object keys are strings, so compare against stringified bucket ids.
     assert sent["labels"] == {str(apply("1", BUCKET)): 19, str(apply("0", BUCKET)): 11}
+    # Strings, not JSON numbers: data_samples[].label has always been a string
+    # (pre-#486 the bucket was read back out of the VARCHAR label column).
     assert [s["label"] for s in sent["samples"]] == [
-        apply("1", BUCKET),
-        apply("0", BUCKET),
+        str(apply("1", BUCKET)),
+        str(apply("0", BUCKET)),
     ]
+    assert all(isinstance(s["label"], str) for s in sent["samples"])
     # ...and no raw target value survives anywhere in the body.
     assert sent["labels"].keys() != {"1", "0"}
 
