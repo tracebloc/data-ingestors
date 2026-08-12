@@ -35,6 +35,9 @@ def make_ingestor(records=None, **overrides):
     db.create_table.return_value = MagicMock()
     db.insert_batch.return_value = ([1], [])
     db.get_table_schema.return_value = {"a": "INT"}
+    # base.py streams the outbound label counts (#488): an unstubbed MagicMock
+    # iterates empty, which the peek reads as "no labels inserted".
+    db.iter_label_counts.return_value = [("cat", 1)]
     api = MagicMock()
     api.send_batch.return_value = True
     api.send_generate_edge_label_meta.return_value = True
@@ -177,6 +180,9 @@ def _csv_ingestor(schema=None, **ov):
     db.create_table.return_value = MagicMock()
     db.insert_batch.return_value = ([1], [])
     db.get_table_schema.return_value = {}
+    # base.py streams the outbound label counts (#488): an unstubbed MagicMock
+    # iterates empty, which the peek reads as "no labels inserted".
+    db.iter_label_counts.return_value = [("cat", 1)]
     api = MagicMock()
     for m in (
         "send_batch",
@@ -231,6 +237,9 @@ def _json_ingestor(schema=None, **ov):
     db.create_table.return_value = MagicMock()
     db.insert_batch.return_value = ([1], [])
     db.get_table_schema.return_value = {}
+    # base.py streams the outbound label counts (#488): an unstubbed MagicMock
+    # iterates empty, which the peek reads as "no labels inserted".
+    db.iter_label_counts.return_value = [("cat", 1)]
     api = MagicMock()
     for m in (
         "send_batch",

@@ -42,6 +42,7 @@ def _make_ingestor(records=None, insert_return=([1], []), **overrides):
     db.insert_batch.return_value = insert_return  # (inserted_ids, db_failures)
     db.get_table_schema.return_value = {"a": "INT"}
     db.get_label_counts.return_value = {"x": 1}  # truthy -> summary is sent
+    db.iter_label_counts.return_value = [("x", 1)]
     api = MagicMock(name="APIClient")
     kwargs = dict(
         database=db,

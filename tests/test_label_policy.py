@@ -360,7 +360,8 @@ def test_tte_ingest_stores_raw_event_indicator_and_sends_buckets(make_csv):
     db.insert_batch.side_effect = lambda table, batch: (list(range(len(batch))), [])
     db.get_table_schema.return_value = dict(schema, label="INT")
     # Read back from the DB, i.e. RAW labels — that is what the boundary gets.
-    db.get_label_counts.return_value = {"1": 3, "0": 1}
+    # Streamed as pairs (#488); a generator, to pin that nothing re-iterates it.
+    db.iter_label_counts.return_value = iter([("1", 3), ("0", 1)])
     db.get_samples.return_value = [
         {"data_id": "d1", "label": "1"},
         {"data_id": "d2", "label": "0"},
@@ -396,9 +397,13 @@ def test_tte_ingest_stores_raw_event_indicator_and_sends_buckets(make_csv):
         "0",
     }, "the DB row must keep the event indicator"
 
-    # The policy travels to the boundary rather than being pre-applied.
+    # The policy travels to the boundary rather than being pre-applied, and the
+    # counts arrive as a lazy (label, count) stream rather than a materialised
+    # dict (#488) — still RAW, since only the boundary buckets.
     assert api.send_ingest_summary.call_args.kwargs["label_policy"] == BUCKET
-    assert api.send_ingest_summary.call_args.kwargs["labels"] == {"1": 3, "0": 1}
+    sent_labels = api.send_ingest_summary.call_args.kwargs["labels"]
+    assert not isinstance(sent_labels, dict)
+    assert dict(sent_labels) == {"1": 3, "0": 1}
 
 
 # ---------------------------------------------------------------------------
@@ -451,3 +456,91 @@ def test_null_label_round_trips_to_the_missing_sentinel():
     assert label_policy.apply_to_samples([{"data_id": "d", "label": ""}], BUCKET) == [
         {"data_id": "d", "label": str(MISSING_LABEL_BUCKET)}
     ]
+
+
+# ---------------------------------------------------------------------------
+# Streamed counts: the boundary folds pairs without materialising them (#488)
+# ---------------------------------------------------------------------------
+
+
+class TestApplyToLabelCountsFromPairs:
+    def test_accepts_an_iterable_of_pairs(self):
+        out = label_policy.apply_to_label_counts([("0", 11), ("1", 19)], BUCKET)
+        assert out == {
+            str(label_policy.apply("0", BUCKET)): 11,
+            str(label_policy.apply("1", BUCKET)): 19,
+        }
+
+    def test_passthrough_drains_pairs_into_a_dict(self):
+        out = label_policy.apply_to_label_counts(iter([("cat", 3)]), PASSTHROUGH)
+        assert out == {"cat": 3}
+
+    def test_folds_a_generator_lazily_without_materialising_it(self):
+        """The point of the pair form: a continuous target's ungrouped counts
+        never all exist at once. The generator is consumed one pair at a time
+        and the result is bounded by the bucket count, not the input size."""
+        seen = []
+
+        def counts():
+            for i in range(5000):
+                seen.append(i)
+                yield (f"{i}.5", 1)
+
+        out = label_policy.apply_to_label_counts(counts(), BUCKET)
+        assert len(seen) == 5000  # fully consumed …
+        assert len(out) <= NUM_BUCKETS  # … into at most 64 keys
+        assert sum(out.values()) == 5000  # no row lost to a collision
+
+    def test_pair_and_mapping_forms_agree(self):
+        counts = {str(i): i for i in range(1, 50)}
+        assert label_policy.apply_to_label_counts(
+            counts, BUCKET
+        ) == label_policy.apply_to_label_counts(list(counts.items()), BUCKET)
+
+
+def test_boundary_accepts_streamed_counts_end_to_end():
+    """`send_ingest_summary` takes the pair form and buckets it, so BaseIngestor
+    can hand it the DB cursor instead of a dict."""
+    from unittest.mock import patch
+
+    from tracebloc_ingestor.api.client import APIClient
+    from tracebloc_ingestor.config import Config
+
+    client = APIClient(
+        Config(
+            BACKEND_TOKEN="tok",
+            CLIENT_USERNAME=None,
+            CLIENT_PASSWORD=None,
+            EDGE_ENV="prod",
+            TITLE=None,
+        )
+    )
+    captured = {}
+
+    def _capture(url, **kwargs):
+        captured["data"] = kwargs.get("data")
+        response = MagicMock()
+        response.status_code = 200
+        response.json.return_value = {"dataset_id": 1, "dataset_key": "k"}
+        return response
+
+    with patch.object(client.session, "post", side_effect=_capture):
+        client.send_ingest_summary(
+            table_name="tbl",
+            ingestor_id="ing",
+            labels=iter([("12.5", 2), ("13.5", 3)]),
+            dataset_title="T",
+            data_format="tabular",
+            data_intent="train",
+            category="tabular_regression",
+            schema={},
+            samples=[],
+            label_policy=BUCKET,
+        )
+
+    import json as _json
+
+    sent = _json.loads(captured["data"])
+    assert sum(sent["labels"].values()) == 5
+    assert all(0 <= int(k) < NUM_BUCKETS for k in sent["labels"])
+    assert "12.5" not in sent["labels"] and "13.5" not in sent["labels"]

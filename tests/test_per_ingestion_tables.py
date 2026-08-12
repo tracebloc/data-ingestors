@@ -293,6 +293,7 @@ def test_flag_on_threads_the_physical_name_end_to_end():
     db.insert_batch.return_value = ([1, 2], [])  # ids, db_failures
     db.get_table_schema.return_value = {"a": "INT"}
     db.get_label_counts.return_value = {"cat": 2}
+    db.iter_label_counts.return_value = [("cat", 2)]
     db.get_samples.return_value = []
     db.config.PER_INGESTION_TABLES = True
     api = MagicMock(name="APIClient")
@@ -321,7 +322,7 @@ def test_flag_on_threads_the_physical_name_end_to_end():
     )
     db.reclaim_dead_run_rows.assert_called_once_with(phys, ing.ingestor_id)
     db.record_ingest_started.assert_called_once_with(phys, ing.ingestor_id, None)
-    db.get_label_counts.assert_called_once_with(phys, ing.ingestor_id)
+    db.iter_label_counts.assert_called_once_with(phys, ing.ingestor_id)
     db.get_samples.assert_called_once_with(phys, ing.ingestor_id)
     db.get_table_schema.assert_called_once_with(phys)
     db.mark_ingest_registered.assert_called_once_with(phys, ing.ingestor_id)

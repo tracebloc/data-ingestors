@@ -65,6 +65,9 @@ def make_ingestor(records=None, **overrides):
     db.create_table.return_value = MagicMock(name="table")
     db.insert_batch.return_value = ([1, 2], [])
     db.get_table_schema.return_value = {"a": "INT"}
+    # base.py streams the outbound label counts (#488): an unstubbed MagicMock
+    # iterates empty, which the peek reads as "no labels inserted".
+    db.iter_label_counts.return_value = [("cat", 2)]
     api = MagicMock(name="APIClient")
     api.send_batch.return_value = True
     api.send_generate_edge_label_meta.return_value = True
@@ -306,7 +309,9 @@ def test_spc_ingest_summary_failure_raises_out_of_ingest(clean_env):
         base_mod,
         "map_file_transfer",
         side_effect=lambda c, r, o, cfg=None, source_record=None: r,
-    ), patch.object(base_mod, "compute_text_profile", return_value=None):
+    ), patch.object(
+        base_mod, "compute_text_profile", return_value=None
+    ):
         Sess.return_value.__enter__.return_value = MagicMock()
         with pytest.raises(RuntimeError, match="backend rejected"):
             ing.ingest("src", batch_size=10)

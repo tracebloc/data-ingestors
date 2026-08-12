@@ -782,10 +782,11 @@ def test_get_label_counts_null_label_normalised_to_empty_string(
 ):
     """SQL NULL and '' both map to '' so they merge into a single count."""
     _, _, conn = mock_engine_factory
-    conn.execute.return_value.fetchall.return_value = [
-        (None, 3),
-        ("", 2),
-        ("cat", 5),
+    # get_label_counts is the materialised form of iter_label_counts, which
+    # fetches in chunks (#488) rather than calling fetchall().
+    conn.execute.return_value.partitions.return_value = [
+        [(None, 3), ("", 2)],
+        [("cat", 5)],
     ]
     result = db.get_label_counts("tbl", "ing-uuid")
     assert result == {"": 5, "cat": 5}
@@ -1113,3 +1114,49 @@ def test_list_dataset_ingestor_ids_skips_a_table_that_errors(db, mock_engine_fac
         {"ingestor_id": "i1", "table_name": "ds_one"},
         {"ingestor_id": "i2", "table_name": "ds_two"},
     ]
+
+
+# ---------------------------------------------------------------------------
+# iter_label_counts: chunked fetch of the outbound label counts (#488)
+# ---------------------------------------------------------------------------
+
+
+def test_iter_label_counts_yields_pairs_in_chunks(db, mock_engine_factory):
+    """Fetched via partitions() rather than fetchall(), so a raw continuous
+    target's ungrouped counts are never all in memory at once."""
+    _, _, conn = mock_engine_factory
+    conn.execute.return_value.partitions.return_value = [
+        [("a", 1), ("b", 2)],
+        [("c", 3)],
+    ]
+    assert list(db.iter_label_counts("tbl", "ing-uuid")) == [
+        ("a", 1),
+        ("b", 2),
+        ("c", 3),
+    ]
+    conn.execute.return_value.partitions.assert_called_once_with(
+        db.LABEL_COUNT_FETCH_SIZE
+    )
+
+
+def test_iter_label_counts_normalises_null_label_to_empty_string(
+    db, mock_engine_factory
+):
+    """Same NULL handling as get_samples, so the send boundary maps both to the
+    missing-label bucket."""
+    _, _, conn = mock_engine_factory
+    conn.execute.return_value.partitions.return_value = [[(None, 4), ("cat", 1)]]
+    assert list(db.iter_label_counts("tbl", "ing-uuid")) == [("", 4), ("cat", 1)]
+
+
+def test_iter_label_counts_is_lazy(db, mock_engine_factory):
+    """Nothing is fetched until the caller iterates — the generator holds the
+    connection only while it is being consumed."""
+    _, _, conn = mock_engine_factory
+    conn.execute.return_value.partitions.return_value = [[("a", 1)]]
+    # Relative to whatever the Database fixture already ran on this connection.
+    before = conn.execute.call_count
+    gen = db.iter_label_counts("tbl", "ing-uuid")
+    assert conn.execute.call_count == before
+    next(gen)
+    assert conn.execute.call_count == before + 1

@@ -19,7 +19,6 @@ from sqlalchemy import (
     Index,
     bindparam,
     inspect,
-
 )
 from sqlalchemy.engine import Engine
 from sqlalchemy import LargeBinary
@@ -30,7 +29,7 @@ import secrets
 
 from .utils import redaction
 from urllib.parse import quote
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Iterator, Optional, Tuple
 from datetime import datetime
 from tenacity import (
     retry,
@@ -99,9 +98,7 @@ def _execute_with_retry(connection, stmt):
             # Swallow it so the original transient error propagates to
             # tenacity for the retry (or, on the last attempt, to the
             # caller's existing error path).
-            logger.debug(
-                f"connection.rollback() failed between retries: {rb_exc}"
-            )
+            logger.debug(f"connection.rollback() failed between retries: {rb_exc}")
         raise
 
 
@@ -142,7 +139,7 @@ class Database:
 
     def _get_sqlalchemy_type(self, mysql_type: str):
         """Convert MySQL type to SQLAlchemy type.
-        
+
         Extracts the base type (before parentheses) and matches exactly to avoid
         substring issues (e.g., "DATE" matching "DATETIME").
         """
@@ -169,10 +166,10 @@ class Database:
             "BLOB": BLOB,
             "LONGBLOB": LONGBLOB,
         }
-        
+
         mysql_type_upper = mysql_type.upper().strip()
         base_type = mysql_type_upper.split("(")[0].split()[0]
-        
+
         if base_type in type_mapping:
             alchemy_type = type_mapping[base_type]
             # Extract parenthesised arguments. Two shapes:
@@ -261,8 +258,16 @@ class Database:
         # is intentionally excluded — it's the user-facing label column the
         # framework maps onto the standard `label` column.
         _RESERVED = {
-            "id", "created_at", "updated_at", "status", "data_intent",
-            "data_id", "filename", "extension", "annotation", "ingestor_id",
+            "id",
+            "created_at",
+            "updated_at",
+            "status",
+            "data_intent",
+            "data_id",
+            "filename",
+            "extension",
+            "annotation",
+            "ingestor_id",
         }
         _collisions = sorted(_RESERVED & set(schema))
         if _collisions:
@@ -352,9 +357,17 @@ class Database:
             # to work around an unrelated error is exactly this case). Surface an
             # actionable error naming the drift instead.
             _STANDARD_COLUMNS = {
-                "id", "created_at", "updated_at", "status", "label",
-                "data_intent", "data_id", "filename", "extension",
-                "annotation", "ingestor_id",
+                "id",
+                "created_at",
+                "updated_at",
+                "status",
+                "label",
+                "data_intent",
+                "data_id",
+                "filename",
+                "extension",
+                "annotation",
+                "ingestor_id",
             }
             existing_features = {c.name for c in table.columns} - _STANDARD_COLUMNS
             expected_features = set(schema) - _STANDARD_COLUMNS
@@ -518,9 +531,7 @@ class Database:
                 # in #191 but dropped by the squash-merge — re-applying).
                 insert_stmt = insert(table)
                 update_dict = {
-                    column.name: text(
-                        f"VALUES(`{column.name.replace('`', '``')}`)"
-                    )
+                    column.name: text(f"VALUES(`{column.name.replace('`', '``')}`)")
                     for column in table.columns
                     if column.name not in ["id", "created_at", "data_id"]
                 }
@@ -578,9 +589,7 @@ class Database:
                             result["failures"].append(
                                 {
                                     "record": record,
-                                    "error": redaction.safe_db_error(
-                                        individual_error
-                                    ),
+                                    "error": redaction.safe_db_error(individual_error),
                                 }
                             )
                             connection.rollback()
@@ -964,7 +973,9 @@ class Database:
                             f"WHERE ingestor_id IS NOT NULL AND ingestor_id <> ''"
                         ),
                     ).fetchall()
-            except Exception as exc:  # noqa: BLE001 — skip the table, continue the sweep
+            except (
+                Exception
+            ) as exc:  # noqa: BLE001 — skip the table, continue the sweep
                 logger.warning(
                     "list_dataset_ingestor_ids: skipping table %s — could not read "
                     "ingestor_ids (%s)",
@@ -976,13 +987,58 @@ class Database:
                 pairs.append({"ingestor_id": ingestor_id, "table_name": table_name})
         return pairs
 
+    # Rows pulled per fetch by :meth:`iter_label_counts`. Bounds what the
+    # client materialises at once; the server-side GROUP BY is unaffected.
+    LABEL_COUNT_FETCH_SIZE = 1000
+
+    def iter_label_counts(
+        self, table_name: str, ingestor_id: str
+    ) -> Iterator[Tuple[str, int]]:
+        """
+        Yield ``(label, row_count)`` for every label inserted by *ingestor_id*.
+
+        Chunked rather than materialised (#488): since #486 the ``label`` column
+        holds the RAW target, so a regression-class dataset with a continuous
+        target groups into up to one row per distinct value. The consumer folds
+        those into <= 64 buckets at the send boundary, and with this iterator it
+        never has to hold the ungrouped result in memory to do it. Classification
+        datasets group into a handful of rows either way.
+
+        The connection stays open while the caller iterates, so consume it
+        promptly (:meth:`APIClient.send_ingest_summary` folds it before any
+        HTTP call). Abandoning the generator returns the connection to the pool
+        on collection.
+
+        Args:
+            table_name: Name of the table to query
+            ingestor_id: UUID of the current ingest run
+
+        Yields:
+            ``(label, count)`` pairs; a SQL NULL label is reported as ``""``,
+            matching :meth:`get_samples`, so the send boundary maps both to the
+            missing-label bucket.
+        """
+        with self.engine.connect() as conn:
+            result = conn.execute(
+                text(
+                    f"SELECT label, COUNT(*) AS cnt "
+                    f"FROM `{table_name}` "
+                    f"WHERE ingestor_id = :ingestor_id "
+                    f"GROUP BY label"
+                ),
+                {"ingestor_id": ingestor_id},
+            )
+            for chunk in result.partitions(self.LABEL_COUNT_FETCH_SIZE):
+                for label, cnt in chunk:
+                    yield (label if label is not None else "", cnt)
+
     def get_label_counts(self, table_name: str, ingestor_id: str) -> Dict[str, int]:
         """
         Return ``{label: row_count}`` for every label inserted by *ingestor_id*.
 
-        Used to build the summary payload sent to the backend after all records
-        have been committed, giving an accurate count that excludes any rows
-        that failed DB insertion.
+        The materialised form of :meth:`iter_label_counts` — same query, same
+        NULL normalisation. Callers that must bound memory over a raw
+        continuous target should iterate instead (#488).
 
         Args:
             table_name: Name of the table to query
@@ -991,20 +1047,9 @@ class Database:
         Returns:
             Dict mapping label string to integer row count
         """
-        with self.engine.connect() as conn:
-            rows = conn.execute(
-                text(
-                    f"SELECT label, COUNT(*) AS cnt "
-                    f"FROM `{table_name}` "
-                    f"WHERE ingestor_id = :ingestor_id "
-                    f"GROUP BY label"
-                ),
-                {"ingestor_id": ingestor_id},
-            ).fetchall()
         counts: Dict[str, int] = {}
-        for label, cnt in rows:
-            key = label if label is not None else ""
-            counts[key] = counts.get(key, 0) + cnt
+        for label, cnt in self.iter_label_counts(table_name, ingestor_id):
+            counts[label] = counts.get(label, 0) + cnt
         return counts
 
     def get_label_sequence_counts(
@@ -1174,7 +1219,10 @@ class Database:
                 ),
                 {"ingestor_id": ingestor_id, "limit": limit},
             ).fetchall()
-        return [{"data_id": row[0], "label": row[1] if row[1] is not None else ""} for row in rows]
+        return [
+            {"data_id": row[0], "label": row[1] if row[1] is not None else ""}
+            for row in rows
+        ]
 
     def get_table_schema(self, table_name: str) -> Dict[str, str]:
         """
@@ -1214,10 +1262,7 @@ class Database:
 
             # MySQL has no native BOOLEAN type: BOOL columns are created — and
             # therefore reflected — as TINYINT(1).
-            if (
-                type_name == "TINYINT"
-                and getattr(col_type, "display_width", None) == 1
-            ):
+            if type_name == "TINYINT" and getattr(col_type, "display_width", None) == 1:
                 schema[column["name"]] = "BOOLEAN"
                 continue
 

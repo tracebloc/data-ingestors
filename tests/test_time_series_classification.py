@@ -245,7 +245,10 @@ def test_toy_csv_ingests_with_sequence_unit_counts(make_csv, monkeypatch):
     ing.database.get_label_sequence_counts.assert_called_once_with(
         "tsc_toy", ing.ingestor_id, group_column="sequence_id"
     )
+    # Neither row-unit helper: get_label_counts is the materialised form of
+    # iter_label_counts, and the grouped path calls neither (#488).
     ing.database.get_label_counts.assert_not_called()
+    ing.database.iter_label_counts.assert_not_called()
 
     # The summary carries the per-sequence labels payload and
     # number_of_sequences in meta_data (serializer unchanged — counts only,
@@ -278,8 +281,9 @@ def test_non_grouped_category_keeps_row_counts(make_csv):
         schema={"heart_rate": "FLOAT", "label": "INT"},
     )
     ing.database.get_label_counts.return_value = {"0": 10, "1": 5}
+    ing.database.iter_label_counts.return_value = [("0", 10), ("1", 5)]
     _run_full_ingest(ing, csv_path)
-    ing.database.get_label_counts.assert_called_once()
+    ing.database.iter_label_counts.assert_called_once()
     ing.database.get_label_sequence_counts.assert_not_called()
     assert ing.database.create_table.call_args.kwargs["index_columns"] is None
     meta = ing.api_client.send_ingest_summary.call_args.kwargs["meta_data"]
@@ -392,10 +396,7 @@ def test_partial_sequence_deleted_despite_header_spelling_drift(make_csv):
     def _insert(table, batch):
         ok, failed = [], []
         for i, record in enumerate(batch):
-            if (
-                record.get("Sequence_ID") == "p3"
-                and record.get("heart_rate") == "72.0"
-            ):
+            if record.get("Sequence_ID") == "p3" and record.get("heart_rate") == "72.0":
                 failed.append({"record": record, "error": "dup key"})
             else:
                 ok.append(i)
@@ -431,6 +432,7 @@ def test_non_grouped_category_never_runs_integrity_delete(make_csv):
         schema={"heart_rate": "FLOAT", "label": "INT"},
     )
     ing.database.get_label_counts.return_value = {"0": 10, "1": 5}
+    ing.database.iter_label_counts.return_value = [("0", 10), ("1", 5)]
     ing.database.insert_batch.side_effect = lambda t, batch: (
         list(range(len(batch) - 1)),
         [{"record": batch[0], "error": "dup"}],

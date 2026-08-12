@@ -41,6 +41,7 @@ def make_ingestor(records=None, **overrides):
     db.insert_batch.return_value = ([1, 2], [])  # ids, db_failures
     db.get_table_schema.return_value = {"a": "INT"}
     db.get_label_counts.return_value = {"cat": 2}
+    db.iter_label_counts.return_value = [("cat", 2)]
     db.get_samples.return_value = []
     api = MagicMock(name="APIClient")
     api.send_ingest_summary.return_value = {"dataset_id": 1, "dataset_key": "key"}
@@ -1496,16 +1497,17 @@ def test_zero_inserted_skips_registration():
 
 
 def test_label_counts_empty_despite_inserts_raises():
-    """If rows were inserted (inserted_records > 0) but get_label_counts returns
+    """If rows were inserted (inserted_records > 0) but the label-count query returns
     {} — a DB accounting mismatch — ingest must raise RuntimeError rather than
     silently skip registration and leave committed MySQL rows unregistered."""
     ing = make_ingestor(records=[{"a": "1", "filename": "f1"}], category=None)
     # insert_batch reports 1 row committed, but the DB query returns nothing.
     ing.database.insert_batch.return_value = ([42], [])
     ing.database.get_label_counts.return_value = {}
+    ing.database.iter_label_counts.return_value = []
     with patch.object(base_mod, "Session") as Sess:
         Sess.return_value.__enter__.return_value = MagicMock()
-        with pytest.raises(RuntimeError, match="get_label_counts returned nothing"):
+        with pytest.raises(RuntimeError, match="iter_label_counts returned nothing"):
             ing.ingest("src", batch_size=10)
     ing.api_client.send_ingest_summary.assert_not_called()
 
@@ -1658,8 +1660,8 @@ def test_no_rows_inserted_no_delete():
         label_column="a",
     )
     # Force a failure after the commit point but before registration, with
-    # zero inserted rows: get_label_counts blows up on an empty run.
-    ing.database.get_label_counts.side_effect = RuntimeError("boom")
+    # zero inserted rows: the label-count query blows up on an empty run.
+    ing.database.iter_label_counts.side_effect = RuntimeError("boom")
     with patch.object(base_mod, "Session") as Sess, patch.object(
         ing, "validate_data", return_value=True
     ), patch.object(
@@ -1904,6 +1906,7 @@ def test_zero_record_run_journals_start_but_not_registered():
     for future reconcile passes, which only reclaim ids that still own rows."""
     ing = make_ingestor(records=[], label_column="a")
     ing.database.get_label_counts.return_value = {}
+    ing.database.iter_label_counts.return_value = []
     _run_happy_ingest(ing)
     ing.database.record_ingest_started.assert_called_once()
     ing.database.mark_ingest_registered.assert_not_called()

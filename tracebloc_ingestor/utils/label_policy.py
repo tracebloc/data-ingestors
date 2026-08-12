@@ -38,7 +38,7 @@ from __future__ import annotations
 
 import hashlib
 import math
-from typing import Any, Dict, Iterable, List, Mapping
+from typing import Any, Dict, Iterable, List, Mapping, Tuple, Union
 
 # Number of buckets. 64 is enough granularity for the central backend to
 # reason about distribution without offering reconstruction power. Trade-off
@@ -103,12 +103,19 @@ def _bucket(value: Any) -> int:
     return int.from_bytes(digest[:8], "big") % NUM_BUCKETS
 
 
-def apply_to_label_counts(counts: Mapping[Any, int], policy: str) -> Dict[Any, int]:
+def apply_to_label_counts(
+    counts: Union[Mapping[Any, int], Iterable[Tuple[Any, int]]], policy: str
+) -> Dict[Any, int]:
     """Bucket the keys of a ``{label: row_count}`` map for the outbound payload.
 
     Args:
-        counts: ``{label: row_count}`` as read back from the cluster DB
-            (``Database.get_label_counts``), keyed by the RAW label.
+        counts: The per-label row counts read back from the cluster DB, keyed by
+            the RAW label — either a mapping
+            (:meth:`Database.get_label_counts`) or an iterable of
+            ``(label, count)`` pairs (:meth:`Database.iter_label_counts`). The
+            pair form is folded as it arrives, so the ungrouped counts of a raw
+            continuous target are never materialised (#488): peak memory is the
+            <= 64 buckets, not the distinct-value count.
         policy: ``"passthrough"`` (returned unchanged) or ``"bucket"``.
 
     Returns:
@@ -126,10 +133,14 @@ def apply_to_label_counts(counts: Mapping[Any, int], policy: str) -> Dict[Any, i
     Raises:
         ValueError: if ``policy`` is unknown (via :func:`apply`).
     """
+    pairs = counts.items() if isinstance(counts, Mapping) else counts
     if policy == PASSTHROUGH:
-        return dict(counts)
+        # A mapping is copied rather than aliased; pairs are drained into a
+        # dict. GROUP BY makes the keys unique either way, so no summing is
+        # needed on this branch.
+        return dict(pairs)
     bucketed: Dict[Any, int] = {}
-    for label, count in counts.items():
+    for label, count in pairs:
         key = str(apply(label, policy))
         bucketed[key] = bucketed.get(key, 0) + count
     return bucketed

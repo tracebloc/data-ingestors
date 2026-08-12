@@ -65,6 +65,9 @@ def make_ingestor(records=None, **overrides):
     db.create_table.return_value = MagicMock(name="table")
     db.insert_batch.return_value = ([1, 2], [])
     db.get_table_schema.return_value = {"a": "INT"}
+    # base.py streams the outbound label counts (#488): an unstubbed MagicMock
+    # iterates empty, which the peek reads as "no labels inserted".
+    db.iter_label_counts.return_value = [("cat", 2)]
     api = MagicMock(name="APIClient")
     api.send_batch.return_value = True
     api.send_generate_edge_label_meta.return_value = True
@@ -126,8 +129,13 @@ def mock_runtime():
             inst.__exit__ = MagicMock(return_value=False)
             inst.ingest = MagicMock(return_value=[])
             cls_mock.return_value = inst
-        yield {"Config": cfg_cls, "Database": db_cls, "APIClient": api_cls,
-               "CSVIngestor": csv_cls, "JSONIngestor": json_cls}
+        yield {
+            "Config": cfg_cls,
+            "Database": db_cls,
+            "APIClient": api_cls,
+            "CSVIngestor": csv_cls,
+            "JSONIngestor": json_cls,
+        }
 
 
 def test_cli_run_routes_embeddings_yaml_to_csv_ingestor(
@@ -216,7 +224,9 @@ def test_emb_clean_pairs_and_triplets_validate(clean_env, tmp_path):
     """A clean dataset mixing a source<TAB>target pair and an
     anchor<TAB>positive<TAB>negative triplet passes validation."""
     ing, texts = _emb_ingestor_on(clean_env=clean_env, tmp_path=tmp_path, records=[])
-    (texts / "pair.txt").write_text("a question\ta matching passage\n", encoding="utf-8")
+    (texts / "pair.txt").write_text(
+        "a question\ta matching passage\n", encoding="utf-8"
+    )
     (texts / "triplet.txt").write_text(
         "an anchor\ta positive\ta hard negative\n", encoding="utf-8"
     )
@@ -273,7 +283,9 @@ def test_emb_ingest_summary_failure_raises_out_of_ingest(clean_env):
         base_mod,
         "map_file_transfer",
         side_effect=lambda c, r, o, cfg=None, source_record=None: r,
-    ), patch.object(base_mod, "compute_text_profile", return_value=None):
+    ), patch.object(
+        base_mod, "compute_text_profile", return_value=None
+    ):
         Sess.return_value.__enter__.return_value = MagicMock()
         with pytest.raises(RuntimeError, match="backend rejected"):
             ing.ingest("src", batch_size=10)
