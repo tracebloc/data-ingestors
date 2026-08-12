@@ -396,3 +396,55 @@ def test_tte_ingest_stores_raw_event_indicator_and_sends_buckets(make_csv):
     # The policy travels to the boundary rather than being pre-applied.
     assert api.send_ingest_summary.call_args.kwargs["label_policy"] == BUCKET
     assert api.send_ingest_summary.call_args.kwargs["labels"] == {"1": 3, "0": 1}
+
+
+# ---------------------------------------------------------------------------
+# Missing targets: NULL in, sentinel out (Bugbot on #487)
+# ---------------------------------------------------------------------------
+#
+# The write-path bucketing this PR removed used to absorb NaN into
+# MISSING_LABEL_BUCKET. The stored row now normalizes a missing target to SQL
+# NULL instead — the label column is VARCHAR(255) NULL — and the outbound
+# sentinel is reconstructed at the boundary from the DB's own NULL reporting.
+
+
+def test_stored_row_normalizes_nan_label_to_null():
+    """A float nan would otherwise reach the binder and land as "nan"."""
+    rp = _TestRecordProcessor(label_column="label")
+    assert rp._map_unique_id({"label": float("nan")}, {})["label"] is None
+
+
+def test_stored_row_normalizes_pandas_na_label_to_null():
+    import pandas as pd
+
+    rp = _TestRecordProcessor(label_column="label")
+    assert rp._map_unique_id({"label": pd.NA}, {})["label"] is None
+    assert rp._map_unique_id({"label": pd.NaT}, {})["label"] is None
+
+
+def test_stored_row_keeps_empty_string_label():
+    """ "" stores fine and already buckets to the sentinel — left untouched so
+    classification behavior is unchanged."""
+    rp = _TestRecordProcessor(label_column="label")
+    assert rp._map_unique_id({"label": ""}, {})["label"] == ""
+
+
+def test_stored_row_keeps_zero_and_false_labels():
+    """Guard against a truthiness-based null check: 0 and False are real
+    label values, not missing ones."""
+    rp = _TestRecordProcessor(label_column="label")
+    assert rp._map_unique_id({"label": 0}, {})["label"] == 0
+    assert rp._map_unique_id({"label": False}, {})["label"] is False
+
+
+def test_null_label_round_trips_to_the_missing_sentinel():
+    """The chain the NULL relies on: Database.get_label_counts keys a NULL
+    label as "" and get_samples reports "", and the boundary buckets both to
+    MISSING_LABEL_BUCKET — so a missing target still reaches the backend as the
+    sentinel, without a sentinel ever being stored locally."""
+    assert label_policy.apply_to_label_counts({"": 3}, BUCKET) == {
+        MISSING_LABEL_BUCKET: 3
+    }
+    assert label_policy.apply_to_samples([{"data_id": "d", "label": ""}], BUCKET) == [
+        {"data_id": "d", "label": MISSING_LABEL_BUCKET}
+    ]

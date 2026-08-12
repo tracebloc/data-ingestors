@@ -154,6 +154,22 @@ class RecordProcessor:
             # space-separated tags, etc.) pass through unchanged.
             if isinstance(label_val, str):
                 label_val = label_val.strip()
+            # A missing target becomes SQL NULL, the same missing-data
+            # normalization ``process()`` gives every schema column — the
+            # ``label`` column is VARCHAR(255) NULL (``Database.create_table``).
+            # Without this, pandas' float ``nan`` / ``pd.NA`` for an empty cell
+            # reaches the binder and lands as the literal string "nan" (Bugbot
+            # on #487: the write-path bucketing this PR removed used to absorb
+            # NaN into MISSING_LABEL_BUCKET, so dropping it left the hole).
+            # NULL keeps the outbound sentinel intact: ``get_label_counts``
+            # reports a NULL label under the ``""`` key and ``get_samples``
+            # as ``""``, both of which bucket to MISSING_LABEL_BUCKET at the
+            # boundary. An empty-string label is left alone — it stores fine
+            # and already buckets to the same sentinel.
+            if label_val is None or (
+                pd.api.types.is_scalar(label_val) and pd.isna(label_val)
+            ):
+                label_val = None
             cleaned_record["label"] = label_val
 
         if self.intent:
