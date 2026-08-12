@@ -14,6 +14,7 @@ from ..utils.constants import (
     RED,
     YELLOW,
 )
+from ..utils import label_policy as label_policy_module
 
 # Logger for this module. Level is set by `setup_logging()` on the root
 # logger when the user script calls it; child loggers inherit that level.
@@ -154,9 +155,7 @@ class APIClient:
             new = self.config.BACKEND_TOKEN or os.environ.get("BACKEND_TOKEN")
             if new and new != old:
                 self.token = new
-                logger.info(
-                    f"{GREEN}Re-read rotated BACKEND_TOKEN after 401.{RESET}"
-                )
+                logger.info(f"{GREEN}Re-read rotated BACKEND_TOKEN after 401.{RESET}")
                 return True
             return False
         # CLIENT_ID/PASSWORD path: mint a new token.
@@ -164,9 +163,7 @@ class APIClient:
             self.token = self.authenticate()
             return self.token != old
         except Exception as exc:
-            logger.error(
-                f"{RED}Failed to re-authenticate after 401: {exc}{RESET}"
-            )
+            logger.error(f"{RED}Failed to re-authenticate after 401: {exc}{RESET}")
             return False
 
     def _authed_request(
@@ -225,6 +222,7 @@ class APIClient:
         samples: List[Dict[str, Any]],
         meta_data: Optional[Dict[str, Any]] = None,
         physical_table: Optional[str] = None,
+        label_policy: str = label_policy_module.PASSTHROUGH,
     ) -> Dict[str, Any]:
         """
         Send a single ingest summary to the backend, creating the UserDataSet in one
@@ -234,13 +232,22 @@ class APIClient:
         Args:
             table_name: Dataset table name (used as the URL path segment)
             ingestor_id: UUID identifying this ingest run
-            labels: ``{label: row_count}`` — computed locally after DB insert
+            labels: ``{label: row_count}`` — computed locally after DB insert,
+                keyed by the RAW label as stored
             dataset_title: Human-readable name for the new dataset
             data_format: One of "image", "tabular", "text", "audio", "video"
             data_intent: "train" or "test"
             category: TaskCategory value, e.g. "image_classification"
             schema: Column schema written to GlobalMetaData
             samples: Small list of representative records shown in the UI
+            label_policy: ``"passthrough"`` (classification — raw label values
+                ride the payload) or ``"bucket"`` (regression-class — every
+                outbound label becomes a stable hash-bucket id so the central
+                backend never sees the raw target). This is the ONLY place the
+                policy is applied: it is a boundary control, and the row in the
+                cluster's own MySQL keeps the raw target the training client
+                needs (#486). Both label-bearing payload fields — ``labels``
+                and ``samples`` — go through it.
             physical_table: RFC-0003 D16 (tracebloc/backend#1205) — the
                 per-ingestion physical table (``ds_<uuid4().hex>``, derived
                 from ingestor_id) this run wrote into, reported so the
@@ -254,7 +261,14 @@ class APIClient:
 
         Raises:
             requests.exceptions.RequestException: If the API call fails after retries
+            ValueError: If ``label_policy`` is not a known policy name.
         """
+        # The boundary. Applied before the local-mock branch too, so a dry run
+        # reports the label count that would actually ship (bucket collisions
+        # merge keys, so it can be lower than the raw count).
+        labels = label_policy_module.apply_to_label_counts(labels, label_policy)
+        samples = label_policy_module.apply_to_samples(samples, label_policy)
+
         if self.config.EDGE_ENV == "local":
             logger.info(
                 f"Mock: Would send ingest summary for {table_name} "
@@ -329,7 +343,9 @@ class APIClient:
                     f"HTTP {e.response.status_code}: {body}{RESET}"
                 )
             else:
-                logger.error(f"{RED}Error sending ingest summary: {str(e)[:500]}{RESET}")
+                logger.error(
+                    f"{RED}Error sending ingest summary: {str(e)[:500]}{RESET}"
+                )
             raise
 
     def get_dataset_metadata(self, ingestor_id: str) -> Optional[Dict[str, Any]]:
