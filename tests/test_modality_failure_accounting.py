@@ -107,7 +107,6 @@ def make_ingestor(records=None, **overrides):
     db.insert_batch.return_value = ([1, 2], [])  # ids, db_failures
     db.get_table_schema.return_value = {"a": "INT"}
     db.get_label_counts.return_value = {"cat": 2}
-    db.iter_label_counts.return_value = [("cat", 2)]
     db.get_samples.return_value = []
     api = MagicMock(name="APIClient")
     api.send_ingest_summary.return_value = {"dataset_id": 1, "dataset_key": "key"}
@@ -272,8 +271,6 @@ def test_mid_batch_db_failure_summary_still_called():
     ing = make_ingestor(records=records, category=None)
     ing.database.get_label_counts.return_value = {"a": 2}
 
-    ing.database.iter_label_counts.return_value = [("a", 2)]
-
     def fake_insert(table_name, batch):
         failed_copy = {**batch[1], "updated_at": "now"}
         return [10, 12], [{"record": failed_copy, "error": "dup key"}]
@@ -312,15 +309,10 @@ def test_send_ingest_summary_400_logs_status_and_full_error(caplog):
         with caplog.at_level(logging.ERROR, logger="tracebloc_ingestor.api.client"):
             with pytest.raises(requests.exceptions.HTTPError):
                 client.send_ingest_summary(
-                    table_name="tbl",
-                    ingestor_id="ing",
-                    labels={"cat": 1},
-                    dataset_title="T",
-                    data_format="image",
-                    data_intent="train",
+                    table_name="tbl", ingestor_id="ing", labels={"cat": 1},
+                    dataset_title="T", data_format="image", data_intent="train",
                     category=TaskCategory.IMAGE_CLASSIFICATION,
-                    schema={},
-                    samples=[],
+                    schema={}, samples=[],
                 )
     joined = "\n".join(r.getMessage() for r in caplog.records)
     assert "HTTP 400" in joined

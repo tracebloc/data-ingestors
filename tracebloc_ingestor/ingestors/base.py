@@ -1,5 +1,4 @@
 from abc import ABC, abstractmethod
-from itertools import chain
 from typing import Dict, Any, Generator, List, Optional, NamedTuple
 from sqlalchemy.orm import Session
 from sqlalchemy.engine import Engine
@@ -1208,34 +1207,32 @@ class BaseIngestor(ABC):
                         label_counts.values()
                     )
                 else:
-                    # STREAMED, not materialised (#488). This GROUP BYs the RAW
-                    # label — since #486 that is what the column holds — so a
-                    # regression-class dataset with a continuous target groups
-                    # into up to one row per distinct value, which the send
-                    # boundary folds into <= 64 buckets. Pulling the whole
-                    # result into a dict first would make those ungrouped
-                    # counts the peak memory of the ingest; iterating keeps it
-                    # at the bucket count while the policy stays applied
-                    # exactly once, at the boundary.
+                    # CEILING (review on #487, tracked in #488): this GROUP BYs
+                    # the RAW label, so a regression-class dataset with a
+                    # continuous target yields up to one entry per distinct
+                    # value — ~N rows — which the send boundary then collapses to
+                    # <= 64 buckets. Before #486 the column held the buckets
+                    # themselves, so the same query grouped over <= 64 keys.
+                    # Fine at the sizes we ingest today: a 100k-row float target
+                    # is a ~100k-entry dict, single-digit MB.
                     #
-                    # The empty case can't be spotted by truthiness on an
-                    # iterator (always True), so peek one row: None means the
-                    # query returned nothing and the check below fires exactly
-                    # as it did for a dict.
-                    # iter() first: peeking a re-iterable (a list, a test
-                    # double) with next(iter(x)) would consume a throwaway
-                    # iterator and the chain below would then repeat that first
-                    # row, double-counting it.
-                    counts_stream = iter(
-                        self.database.iter_label_counts(
-                            self.physical_table_name, self.ingestor_id
-                        )
-                    )
-                    first_count = next(counts_stream, None)
-                    label_counts = (
-                        None
-                        if first_count is None
-                        else chain((first_count,), counts_stream)
+                    # It cannot be fixed by iterating: our DBAPI is
+                    # mysql+mysqlconnector, whose SQLAlchemy dialect reports
+                    # supports_server_side_cursors = False, so stream_results /
+                    # yield_per are no-ops and the driver buffers the whole
+                    # GROUP BY result on execute. Chunking the delivery
+                    # (Result.partitions) would bound the dict we build while
+                    # leaving the driver's buffer just as large — a memory bound
+                    # in the docstring only. Cursor Bugbot caught exactly that on
+                    # an earlier attempt in this PR.
+                    #
+                    # The two shapes that would actually bound it — bucketing in
+                    # SQL (SHA2 + CAST(CONV(...) AS UNSIGNED) % 64, which has to
+                    # agree with _bucket for every value) or moving to a DBAPI
+                    # with server-side cursors — are both bigger than this fix.
+                    # #488 carries them.
+                    label_counts = self.database.get_label_counts(
+                        self.physical_table_name, self.ingestor_id
                     )
 
                 if not stats["inserted_records"]:
@@ -1247,7 +1244,7 @@ class BaseIngestor(ABC):
                     counts_helper = (
                         "get_label_sequence_counts"
                         if grouping is not None and grouping.count_unit == "sequences"
-                        else "iter_label_counts"
+                        else "get_label_counts"
                     )
                     raise RuntimeError(
                         f"Inserted {stats['inserted_records']} row(s) but "

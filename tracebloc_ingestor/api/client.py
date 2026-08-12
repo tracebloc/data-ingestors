@@ -1,4 +1,4 @@
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple, Union
+from typing import List, Dict, Any, Optional
 import os
 import requests
 import json
@@ -213,7 +213,7 @@ class APIClient:
         self,
         table_name: str,
         ingestor_id: str,
-        labels: Union[Mapping[str, int], Iterable[Tuple[Any, int]]],
+        labels: Dict[str, int],
         dataset_title: str,
         data_format: str,
         data_intent: str,
@@ -232,12 +232,8 @@ class APIClient:
         Args:
             table_name: Dataset table name (used as the URL path segment)
             ingestor_id: UUID identifying this ingest run
-            labels: Per-label row counts computed locally after DB insert, keyed
-                by the RAW label as stored. A mapping, or an iterable of
-                ``(label, count)`` pairs for callers that stream them
-                (``Database.iter_label_counts``) — either way it is folded once,
-                here, before any HTTP call, so a retry re-sends the built
-                payload rather than re-consuming the source
+            labels: ``{label: row_count}`` — computed locally after DB insert,
+                keyed by the RAW label as stored
             dataset_title: Human-readable name for the new dataset
             data_format: One of "image", "tabular", "text", "audio", "video"
             data_intent: "train" or "test"

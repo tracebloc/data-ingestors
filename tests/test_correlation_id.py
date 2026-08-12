@@ -156,7 +156,6 @@ def _make_full_ingestor():
     )
     db.get_table_schema.return_value = {"heart_rate": "FLOAT", "label": "INT"}
     db.get_label_counts.return_value = {"0": 5, "1": 5}
-    db.iter_label_counts.return_value = [("0", 5), ("1", 5)]
     db.get_samples.return_value = []
     api = MagicMock(name="APIClient")
     api.config.TITLE = "corr toy"

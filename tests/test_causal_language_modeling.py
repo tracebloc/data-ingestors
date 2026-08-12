@@ -61,7 +61,6 @@ def make_ingestor(records=None, **overrides):
     db.insert_batch.return_value = ([1, 2], [])
     db.get_table_schema.return_value = {"a": "INT"}
     db.get_label_counts.return_value = {"cat": 2}
-    db.iter_label_counts.return_value = [("cat", 2)]
     db.get_samples.return_value = []
     api = MagicMock(name="APIClient")
     api.send_ingest_summary.return_value = {"dataset_id": 1, "dataset_key": "key"}
@@ -119,13 +118,8 @@ def mock_runtime():
             inst.__exit__ = MagicMock(return_value=False)
             inst.ingest = MagicMock(return_value=[])
             cls_mock.return_value = inst
-        yield {
-            "Config": cfg_cls,
-            "Database": db_cls,
-            "APIClient": api_cls,
-            "CSVIngestor": csv_cls,
-            "JSONIngestor": json_cls,
-        }
+        yield {"Config": cfg_cls, "Database": db_cls, "APIClient": api_cls,
+               "CSVIngestor": csv_cls, "JSONIngestor": json_cls}
 
 
 def test_cli_run_routes_clm_yaml_to_csv_ingestor(clean_env, mock_runtime, monkeypatch):

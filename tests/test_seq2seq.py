@@ -63,7 +63,6 @@ def make_ingestor(records=None, **overrides):
     db.insert_batch.return_value = ([1, 2], [])
     db.get_table_schema.return_value = {"a": "INT"}
     db.get_label_counts.return_value = {"cat": 2}
-    db.iter_label_counts.return_value = [("cat", 2)]
     db.get_samples.return_value = []
     api = MagicMock(name="APIClient")
     api.send_ingest_summary.return_value = {"dataset_id": 1, "dataset_key": "key"}
@@ -122,20 +121,17 @@ def mock_runtime():
             inst.__exit__ = MagicMock(return_value=False)
             inst.ingest = MagicMock(return_value=[])
             cls_mock.return_value = inst
-        yield {
-            "Config": cfg_cls,
-            "Database": db_cls,
-            "APIClient": api_cls,
-            "CSVIngestor": csv_cls,
-            "JSONIngestor": json_cls,
-        }
+        yield {"Config": cfg_cls, "Database": db_cls, "APIClient": api_cls,
+               "CSVIngestor": csv_cls, "JSONIngestor": json_cls}
 
 
 def test_cli_run_routes_s2s_yaml_to_csv_ingestor(clean_env, mock_runtime, monkeypatch):
     """The shipped seq2seq example yaml runs end-to-end-but-mocked: a CSVIngestor
     is built with the resolved seq2seq kwargs (TEXT, self-supervised, no label)
     and ingest() is called once; exit 0."""
-    monkeypatch.setenv("INGEST_CONFIG", str(EXAMPLES_DIR / "seq2seq.yaml"))
+    monkeypatch.setenv(
+        "INGEST_CONFIG", str(EXAMPLES_DIR / "seq2seq.yaml")
+    )
     from tracebloc_ingestor.cli.run import main
 
     rc = main()
@@ -214,9 +210,7 @@ def test_s2s_clean_dataset_validates(clean_env, tmp_path):
     tab is ordinary UTF-8 text."""
     ing, texts = _s2s_ingestor_on(clean_env=clean_env, tmp_path=tmp_path, records=[])
     (texts / "pair1.txt").write_text("Translate: Hi\tBonjour\n", encoding="utf-8")
-    (texts / "pair2.txt").write_text(
-        "Summarize: a long text\tshort\n", encoding="utf-8"
-    )
+    (texts / "pair2.txt").write_text("Summarize: a long text\tshort\n", encoding="utf-8")
     csv = tmp_path / "manifest.csv"
     pd.DataFrame({"filename": ["pair1", "pair2"]}).to_csv(csv, index=False)
 

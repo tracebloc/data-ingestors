@@ -35,19 +35,14 @@ from tracebloc_ingestor.api.client import APIClient
 from tracebloc_ingestor.ingestors import base as base_mod
 from tracebloc_ingestor.ingestors.base import BaseIngestor
 
+
 # ---------------------------------------------------------------------------
 # helpers (mirror test_api_client_methods.py / test_ingestor_base.py)
 # ---------------------------------------------------------------------------
 
-
 def _client(**overrides):
-    defaults = dict(
-        BACKEND_TOKEN="tok",
-        CLIENT_USERNAME=None,
-        CLIENT_PASSWORD=None,
-        EDGE_ENV="prod",
-        TITLE=None,
-    )
+    defaults = dict(BACKEND_TOKEN="tok", CLIENT_USERNAME=None,
+                    CLIENT_PASSWORD=None, EDGE_ENV="prod", TITLE=None)
     defaults.update(overrides)
     return APIClient(Config(**defaults))
 
@@ -80,7 +75,6 @@ def make_ingestor(records=None, **overrides):
     db.insert_batch.return_value = ([1, 2], [])  # ids, db_failures
     db.get_table_schema.return_value = {"a": "INT"}
     db.get_label_counts.return_value = {"cat": 2}
-    db.iter_label_counts.return_value = [("cat", 2)]
     db.get_samples.return_value = []
     api = MagicMock(name="APIClient")
     api.send_ingest_summary.return_value = {"dataset_id": 1, "dataset_key": "key"}
@@ -105,30 +99,22 @@ def make_ingestor(records=None, **overrides):
 _DRF_400_BODY = (
     '[{"data_id": ["This field may not be blank."], '
     '"label": ["Object with label=tok_cls_O does not exist. '
-    "Padding padding padding padding padding to push the field error "
+    'Padding padding padding padding padding to push the field error '
     'well past the first hundred characters of the message."]}]'
 )
 
 
 def _summary_call(client):
     return client.send_ingest_summary(
-        table_name="tbl",
-        ingestor_id="ing",
-        labels={"cat": 1},
-        dataset_title="T",
-        data_format="image",
-        data_intent="train",
-        category="image_classification",
-        schema={},
-        samples=[],
+        table_name="tbl", ingestor_id="ing", labels={"cat": 1},
+        dataset_title="T", data_format="image", data_intent="train",
+        category="image_classification", schema={}, samples=[],
     )
 
 
 def test_send_ingest_summary_400_logs_status_and_full_error(caplog):
     client = _client()
-    with patch.object(
-        client.session, "post", return_value=_resp(400, text=_DRF_400_BODY)
-    ):
+    with patch.object(client.session, "post", return_value=_resp(400, text=_DRF_400_BODY)):
         with caplog.at_level(logging.ERROR, logger="tracebloc_ingestor.api.client"):
             with pytest.raises(requests.exceptions.HTTPError):
                 _summary_call(client)
@@ -153,8 +139,7 @@ def test_send_ingest_summary_400_body_capped_at_2000_chars(caplog):
 def test_send_ingest_summary_connection_error_still_logged(caplog):
     client = _client()
     with patch.object(
-        client.session,
-        "post",
+        client.session, "post",
         side_effect=requests.exceptions.ConnectionError("conn refused"),
     ):
         with caplog.at_level(logging.ERROR, logger="tracebloc_ingestor.api.client"):
@@ -169,7 +154,6 @@ def test_send_ingest_summary_connection_error_still_logged(caplog):
 # 2. ingest() surfaces summary failures: raise propagates, DB failures counted
 # ---------------------------------------------------------------------------
 
-
 def _run_ingest(ing, batch_size=10):
     """Run ingest with Session patched out; capture the logged summary."""
     captured = {}
@@ -179,9 +163,8 @@ def _run_ingest(ing, batch_size=10):
         captured["summary"] = summary
         return real_log(self, summary)
 
-    with patch.object(base_mod, "Session") as Sess, patch.object(
-        BaseIngestor, "_log_summary", spy
-    ):
+    with patch.object(base_mod, "Session") as Sess, \
+         patch.object(BaseIngestor, "_log_summary", spy):
         Sess.return_value.__enter__.return_value = MagicMock()
         failed = ing.ingest("src", batch_size=batch_size)
     return failed, captured.get("summary")
@@ -194,9 +177,8 @@ def test_ingest_summary_failure_raises_out_of_ingest():
     ing = make_ingestor(records=records, category=None)
     ing.api_client.send_ingest_summary.side_effect = RuntimeError("backend rejected")
 
-    with patch.object(base_mod, "Session") as Sess, patch.object(
-        ing, "validate_data", return_value=True
-    ):
+    with patch.object(base_mod, "Session") as Sess, \
+         patch.object(ing, "validate_data", return_value=True):
         Sess.return_value.__enter__.return_value = MagicMock()
         with pytest.raises(RuntimeError, match="backend rejected"):
             ing.ingest("src", batch_size=10)
@@ -211,10 +193,8 @@ def test_ingest_summary_failure_on_partial_batch():
     ing.database.insert_batch.side_effect = lambda t, b: (list(range(len(b))), [])
     ing.database.get_label_counts.return_value = {"cat": 3}
 
-    ing.database.iter_label_counts.return_value = [("cat", 3)]
-    with patch.object(base_mod, "Session") as Sess, patch.object(
-        ing, "validate_data", return_value=True
-    ):
+    with patch.object(base_mod, "Session") as Sess, \
+         patch.object(ing, "validate_data", return_value=True):
         Sess.return_value.__enter__.return_value = MagicMock()
         with pytest.raises(RuntimeError, match="backend rejected"):
             ing.ingest("src", batch_size=2)
@@ -275,8 +255,6 @@ def test_ingest_mid_batch_db_failure_only_db_failure_in_failed():
     ing = make_ingestor(records=records, category=None)
     ing.database.get_label_counts.return_value = {"a": 2}
 
-    ing.database.iter_label_counts.return_value = [("a", 2)]
-
     def fake_insert(table_name, batch):
         failed_copy = {**batch[1], "updated_at": "now"}
         return [10, 12], [{"record": failed_copy, "error": "dup key"}]
@@ -314,10 +292,10 @@ def test_template_exits_nonzero_on_failed_records(template):
     m = re.search(
         r"^from tracebloc_ingestor import \((?P<names>[^)]*)\)", src, re.M | re.S
     )
-    assert m and "run_ingestion" in m.group(
-        "names"
-    ), f"{template}: does not import run_ingestion from tracebloc_ingestor"
+    assert m and "run_ingestion" in m.group("names"), (
+        f"{template}: does not import run_ingestion from tracebloc_ingestor"
+    )
     # … and actually called with the constructed ingestor.
-    assert re.search(
-        r"run_ingestion\(\s*ingestor,", src
-    ), f"{template}: main() does not call run_ingestion(ingestor, ...)"
+    assert re.search(r"run_ingestion\(\s*ingestor,", src), (
+        f"{template}: main() does not call run_ingestion(ingestor, ...)"
+    )
