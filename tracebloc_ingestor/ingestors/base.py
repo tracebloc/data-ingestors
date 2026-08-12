@@ -265,8 +265,9 @@ class BaseIngestor(ABC):
             label_policy: ``"passthrough"`` (default; classification — the
                 label value crosses the cluster boundary unchanged) or
                 ``"bucket"`` (regression-class — each label is replaced
-                with a stable hash-bucket ID before the API payload is
-                built, so raw target values never leak). Schema-validated
+                with a stable hash-bucket ID in the API payload, so raw
+                target values never leak; the stored row keeps the raw
+                target, which is what training reads — #486). Schema-validated
                 upstream by the YAML entrypoint; templates pass the
                 appropriate constant from :mod:`tracebloc_ingestor.utils.label_policy`.
         Raises:
@@ -461,7 +462,6 @@ class BaseIngestor(ABC):
             label_column=self.label_column,
             annotation_column=self.annotation_column,
             unique_id_column=self.unique_id_column,
-            label_policy=self.label_policy,
             ingestor_id=self.ingestor_id,
             data_id_strategy=self.data_id_strategy,
             table_salt=self._table_salt,
@@ -1291,6 +1291,12 @@ class BaseIngestor(ABC):
                         schema=self._schema_payload(schema_dict),
                         samples=samples,
                         meta_data=self._meta_data_payload(),
+                        # label_counts / samples come straight from the cluster
+                        # DB, i.e. RAW targets. The policy is applied inside
+                        # send_ingest_summary — the boundary — and nowhere
+                        # earlier, so the stored rows keep the values training
+                        # needs (#486).
+                        label_policy=self.label_policy,
                     )
                     dataset_registered = True
                     stats["api_sent_records"] = stats["inserted_records"]

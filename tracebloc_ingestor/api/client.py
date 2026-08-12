@@ -14,6 +14,7 @@ from ..utils.constants import (
     RED,
     YELLOW,
 )
+from ..utils import label_policy as label_policy_module
 
 # Logger for this module. Level is set by `setup_logging()` on the root
 # logger when the user script calls it; child loggers inherit that level.
@@ -225,6 +226,7 @@ class APIClient:
         samples: List[Dict[str, Any]],
         meta_data: Optional[Dict[str, Any]] = None,
         physical_table: Optional[str] = None,
+        label_policy: str = label_policy_module.PASSTHROUGH,
     ) -> Dict[str, Any]:
         """
         Send a single ingest summary to the backend, creating the UserDataSet in one
@@ -234,13 +236,22 @@ class APIClient:
         Args:
             table_name: Dataset table name (used as the URL path segment)
             ingestor_id: UUID identifying this ingest run
-            labels: ``{label: row_count}`` — computed locally after DB insert
+            labels: ``{label: row_count}`` — computed locally after DB insert,
+                keyed by the RAW label as stored
             dataset_title: Human-readable name for the new dataset
             data_format: One of "image", "tabular", "text", "audio", "video"
             data_intent: "train" or "test"
             category: TaskCategory value, e.g. "image_classification"
             schema: Column schema written to GlobalMetaData
             samples: Small list of representative records shown in the UI
+            label_policy: ``"passthrough"`` (classification — raw label values
+                ride the payload) or ``"bucket"`` (regression-class — every
+                outbound label becomes a stable hash-bucket id so the central
+                backend never sees the raw target). This is the ONLY place the
+                policy is applied: it is a boundary control, and the row in the
+                cluster's own MySQL keeps the raw target the training client
+                needs (#486). Both label-bearing payload fields — ``labels``
+                and ``samples`` — go through it.
             physical_table: RFC-0003 D16 (tracebloc/backend#1205) — the
                 per-ingestion physical table (``ds_<uuid4().hex>``, derived
                 from ingestor_id) this run wrote into, reported so the
@@ -254,7 +265,14 @@ class APIClient:
 
         Raises:
             requests.exceptions.RequestException: If the API call fails after retries
+            ValueError: If ``label_policy`` is not a known policy name.
         """
+        # The boundary. Applied before the local-mock branch too, so a dry run
+        # reports the label count that would actually ship (bucket collisions
+        # merge keys, so it can be lower than the raw count).
+        labels = label_policy_module.apply_to_label_counts(labels, label_policy)
+        samples = label_policy_module.apply_to_samples(samples, label_policy)
+
         if self.config.EDGE_ENV == "local":
             logger.info(
                 f"Mock: Would send ingest summary for {table_name} "

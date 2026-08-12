@@ -345,3 +345,117 @@ def test_send_metadata_backfill_payload_shape():
     assert captured["url"].endswith("/global_meta/metadata_backfill/tb/")
     sent = _json.loads(captured["data"])
     assert sent == {"schema": {"x": {"dtype": "int"}}, "meta_data": {"attributes": {}}}
+
+
+# ---------------------------------------------------------------------------
+# send_ingest_summary: the label-policy boundary (#486)
+# ---------------------------------------------------------------------------
+#
+# The policy is applied HERE and nowhere earlier — the row stored in the
+# cluster's MySQL keeps the raw target, which is what the training client reads.
+# These pin that both label-bearing payload fields go through it.
+
+
+def _captured_summary_payload(client, **overrides):
+    """POST the summary with a mocked session and return the decoded body."""
+    import json as _json
+
+    kwargs = dict(
+        table_name="tbl",
+        ingestor_id="ing",
+        labels={"1": 19, "0": 11},
+        dataset_title="T",
+        data_format="tabular",
+        data_intent="train",
+        category="time_to_event_prediction",
+        schema={},
+        samples=[{"data_id": "d1", "label": "1"}, {"data_id": "d2", "label": "0"}],
+    )
+    kwargs.update(overrides)
+    captured = {}
+
+    def _capture(url, **request_kwargs):
+        captured["data"] = request_kwargs.get("data")
+        return _resp(200, {"dataset_id": 1, "dataset_key": "key"})
+
+    with patch.object(client.session, "post", side_effect=_capture):
+        client.send_ingest_summary(**kwargs)
+    return _json.loads(captured["data"])
+
+
+def test_summary_default_policy_sends_raw_labels():
+    """Default is passthrough — classification payloads are unchanged."""
+    sent = _captured_summary_payload(_client())
+    assert sent["labels"] == {"1": 19, "0": 11}
+    assert [s["label"] for s in sent["samples"]] == ["1", "0"]
+
+
+def test_summary_bucket_policy_buckets_labels_and_samples():
+    from tracebloc_ingestor.utils.label_policy import BUCKET, apply
+
+    sent = _captured_summary_payload(_client(), label_policy=BUCKET)
+    # JSON object keys are strings, so compare against stringified bucket ids.
+    assert sent["labels"] == {str(apply("1", BUCKET)): 19, str(apply("0", BUCKET)): 11}
+    assert [s["label"] for s in sent["samples"]] == [
+        apply("1", BUCKET),
+        apply("0", BUCKET),
+    ]
+    # ...and no raw target value survives anywhere in the body.
+    assert sent["labels"].keys() != {"1", "0"}
+
+
+def test_summary_bucket_policy_preserves_total_row_count():
+    from tracebloc_ingestor.utils.label_policy import BUCKET
+
+    sent = _captured_summary_payload(
+        _client(), labels={str(i): 1 for i in range(200)}, label_policy=BUCKET
+    )
+    assert sum(sent["labels"].values()) == 200
+
+
+def test_summary_does_not_mutate_the_callers_labels_or_samples():
+    """base.py reuses these for its own logging/stats after the call."""
+    from tracebloc_ingestor.utils.label_policy import BUCKET
+
+    labels = {"1": 19, "0": 11}
+    samples = [{"data_id": "d1", "label": "1"}]
+    _captured_summary_payload(
+        _client(), labels=labels, samples=samples, label_policy=BUCKET
+    )
+    assert labels == {"1": 19, "0": 11}
+    assert samples == [{"data_id": "d1", "label": "1"}]
+
+
+def test_summary_unknown_policy_raises_before_sending():
+    client = _client()
+    with patch.object(client.session, "post") as post:
+        with pytest.raises(ValueError, match="Unknown label policy"):
+            client.send_ingest_summary(
+                table_name="tbl", ingestor_id="ing", labels={"1": 1},
+                dataset_title="T", data_format="tabular", data_intent="train",
+                category="tabular_regression", schema={}, samples=[],
+                label_policy="ohno",
+            )
+    post.assert_not_called()
+
+
+def test_summary_local_mode_still_applies_policy_to_its_log(caplog):
+    """The mock branch reports what WOULD ship: bucket collisions merge keys,
+    so the label count it logs is the post-policy one."""
+    import logging as _logging
+
+    from tracebloc_ingestor.utils.label_policy import BUCKET, apply
+
+    client = _client(EDGE_ENV="local")
+    labels = {str(i): 1 for i in range(200)}
+    expected_labels = len({apply(k, BUCKET) for k in labels})
+    with caplog.at_level(_logging.INFO, logger="tracebloc_ingestor.api.client"):
+        with patch.object(client.session, "post") as post:
+            client.send_ingest_summary(
+                table_name="tbl", ingestor_id="ing", labels=labels,
+                dataset_title="T", data_format="tabular", data_intent="train",
+                category="tabular_regression", schema={}, samples=[],
+                label_policy=BUCKET,
+            )
+    post.assert_not_called()
+    assert f"200 rows across {expected_labels} label(s)" in caplog.text

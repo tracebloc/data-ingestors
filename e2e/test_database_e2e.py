@@ -124,7 +124,6 @@ def test_content_hash_retry_reclaims_rows_instead_of_duplicating(db, table):
     the data_id UNIQUE upsert — row count stays constant and ownership moves
     to the retry's ingestor_id (whose scoped label counts then match)."""
     from tracebloc_ingestor.ingestors.record_processor import RecordProcessor
-    from tracebloc_ingestor.utils import label_policy as label_policy_module
 
     db.create_table(table, {"feature": "FLOAT"})
     salt = db.get_or_create_table_salt(table)
@@ -137,7 +136,6 @@ def test_content_hash_retry_reclaims_rows_instead_of_duplicating(db, table):
             label_column="target",
             annotation_column=None,
             unique_id_column=None,
-            label_policy=label_policy_module.PASSTHROUGH,
             ingestor_id=ingestor_id,
             data_id_strategy="content_hash",
             table_salt=salt,

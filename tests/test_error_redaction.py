@@ -90,7 +90,6 @@ def test_int64_overflow_error_redacts():
 
 def _rp(unique_id_column=None):
     from tracebloc_ingestor.ingestors.record_processor import RecordProcessor
-    from tracebloc_ingestor.utils import label_policy as label_policy_module
 
     return RecordProcessor(
         schema={"x": "FLOAT"},
@@ -98,7 +97,6 @@ def _rp(unique_id_column=None):
         label_column="y",
         annotation_column=None,
         unique_id_column=unique_id_column,
-        label_policy=label_policy_module.PASSTHROUGH,
         ingestor_id="run-1",
         # #350: content_hash is now the default strategy and needs a salt.
         table_salt="0" * 64,
