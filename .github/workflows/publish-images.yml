@@ -183,7 +183,15 @@ jobs:
           # The CLI has no --help: main() expects INGEST_CONFIG and says so.
           output=$(docker run --rm --entrypoint tracebloc-ingest "${IMAGE}@${DIGEST}" 2>&1 || true)
           echo "$output"
-          echo "$output" | grep -q "INGEST_CONFIG"
+          # MATCHED FROM A HERE-STRING, NOT THROUGH A PIPE -- same reason as
+          # release-image.yml (backend#1778). `echo "$output" | grep -q` under
+          # `set -euo pipefail` lets `grep -q` close the pipe on its first match;
+          # once $output outgrows the pipe buffer the `echo` subshell takes
+          # SIGPIPE, pipefail reports 141 and errexit fails the step. $output is
+          # unbounded container stdout+stderr, so a verbose traceback is all it
+          # would take -- and a 141 here reads as a broken image, failing the
+          # channel publish for a race rather than a packaging break.
+          grep -q "INGEST_CONFIG" <<<"$output"
 
       - name: Export digest
         env:
@@ -251,7 +259,14 @@ jobs:
           out=$(docker buildx imagetools inspect "${IMAGE}:${TAG}")
           echo "$out"
           for arch in amd64 arm64; do
-            printf '%s' "$out" | grep -q "linux/${arch}" || {
+            # Here-string, not a pipe: the third instance of the same shape
+            # (backend#1778). `grep -q` closes the pipe on its first match and a
+            # `printf` subshell killed by SIGPIPE makes the pipeline 141, which
+            # `||` reads as "this arch is missing" -- failing a correctly
+            # published multi-arch index. `imagetools inspect` output is small,
+            # so this has never tipped; leaving one instance of the bug in a file
+            # being fixed for it is the part worth avoiding.
+            grep -q "linux/${arch}" <<<"$out" || {
               echo "::error::published ${IMAGE}:${TAG} is missing linux/${arch}"
               exit 1
             }

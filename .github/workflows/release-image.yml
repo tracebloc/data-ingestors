@@ -315,7 +315,19 @@ jobs:
             -c "from tracebloc_ingestor.cli.run import _load_schema; print(_load_schema()['title'])"
           output=$(docker run --rm --entrypoint tracebloc-ingest "${IMAGE}@${DIGEST}" 2>&1 || true)
           echo "$output"
-          echo "$output" | grep -q "INGEST_CONFIG"
+          # MATCHED FROM A HERE-STRING, NOT THROUGH A PIPE. `echo "$output" |
+          # grep -q` under this step's `set -euo pipefail` is a trap: `grep -q`
+          # exits on its first match, and once $output no longer fits the pipe
+          # buffer the `echo` subshell dies of SIGPIPE, pipefail reports 141, and
+          # errexit fails the step (backend#1778). $output is `docker run ...
+          # 2>&1` -- measured at 147 bytes today against a 64 KiB buffer, so this
+          # is latent, not live. But it is unbounded container stdout+stderr and
+          # the match is on the FIRST line, so `grep -q` leaves early: one
+          # verbose traceback is all it would take to tip it. A 141
+          # here aborts the smoke gate before the cosign signing steps below, so
+          # the failure would read as "the image is broken" rather than "grep
+          # won the race". A here-string has no producer to signal.
+          grep -q "INGEST_CONFIG" <<<"$output"
 
       - name: Install cosign
         uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3.9.1
