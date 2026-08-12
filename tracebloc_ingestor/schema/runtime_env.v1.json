@@ -1,0 +1,20 @@
+{
+  "version": "1",
+  "description": "Environment variables the ingestor requires from whatever spawns it (jobs-manager's ingestion Job, or an operator running the container directly). A spawner that omits a required variable produces a container that fails at Config() before reading any data. Published so the spawner can assert it satisfies this contract in CI, rather than the two sides discovering a disagreement in a live environment (backend#1752).",
+  "required": [
+    {
+      "name": "DB_USER",
+      "since": "0.8.0",
+      "provided_by": "jobs-manager, gated on SERVICE_DB_ACCOUNTS",
+      "was_defaulted_to": "edgeuser",
+      "reason": "backend#1528 D10 retired the root-equivalent edgeuser identity; the ingestor now authenticates as the per-Job tb_ingest account the spawner injects."
+    },
+    {
+      "name": "DB_PASSWORD",
+      "since": "0.8.0",
+      "provided_by": "jobs-manager, gated on SERVICE_DB_ACCOUNTS",
+      "was_defaulted_to": "<the legacy edgeuser password>",
+      "reason": "Same as DB_USER. Injected as a secretKeyRef so the value never lands in the Job spec."
+    }
+  ]
+}
