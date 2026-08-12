@@ -407,7 +407,6 @@ def test_declared_mask_id_is_stored_populated_on_the_row():
         label_column=None,
         annotation_column=None,
         unique_id_column=None,
-        label_policy=None,
         ingestor_id="t",
         # #350: content_hash is now the default strategy and needs a salt.
         table_salt="0" * 64,

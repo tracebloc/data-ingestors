@@ -31,7 +31,6 @@ from typing import Any, Dict, Optional
 
 import pandas as pd
 
-from ..utils import label_policy as label_policy_module
 from ..utils.constants import Intent
 
 logger = logging.getLogger(__name__)
@@ -49,7 +48,6 @@ class RecordProcessor:
         label_column: Optional[str],
         annotation_column: Optional[str],
         unique_id_column: Optional[str],
-        label_policy: Any,
         ingestor_id: str,
         data_id_strategy: str = "content_hash",
         table_salt: Optional[str] = None,
@@ -61,13 +59,14 @@ class RecordProcessor:
         self.unique_id_column = unique_id_column
         # #225: content-hash strategy needs the per-table salt; failing at
         # construction beats minting unsalted (correlatable) ids at row time.
-        if data_id_strategy == "content_hash" and not unique_id_column and not table_salt:
-            raise ValueError(
-                "data_id_strategy='content_hash' requires a table_salt"
-            )
+        if (
+            data_id_strategy == "content_hash"
+            and not unique_id_column
+            and not table_salt
+        ):
+            raise ValueError("data_id_strategy='content_hash' requires a table_salt")
         self.data_id_strategy = data_id_strategy
         self.table_salt = table_salt
-        self.label_policy = label_policy
         self.ingestor_id = ingestor_id
 
     def _map_unique_id(
@@ -111,31 +110,36 @@ class RecordProcessor:
             )
 
         if self.label_column:
-            # Apply the configured label policy at the latest possible moment
-            # before the API client builds its payload. For classification-class
-            # categories ``label_policy="passthrough"`` is a no-op; for
-            # regression-class categories ``"bucket"`` replaces the raw target
-            # with a stable hash-bucket ID so the value never leaks to the
-            # central backend (#44 / parent client#85).
+            # The RAW label is what gets stored. The ``label.policy`` bucketing
+            # of #44 / client#85 is a BOUNDARY control and runs in
+            # ``APIClient.send_ingest_summary``, on the outbound payload only.
             #
-            # Coerce numpy / pandas scalar types to native Python before the
-            # policy runs. After the INT-cast switch to nullable ``Int64``,
+            # It used to run here, on the record handed to the batch writer for
+            # INSERT (#486). Since ``process()`` also drops the source
+            # ``label_column`` from the schema-filtered columns, the raw target
+            # was then persisted nowhere: every regression-class dataset
+            # (tabular_regression, time_series_forecasting,
+            # time_to_event_prediction) stored a hash bucket in ``[0, 64)``
+            # where its training target belonged. The training client reads
+            # THIS row, so a metadata control silently destroyed the data.
+            #
+            # Coerce numpy / pandas scalar types to native Python. After the
+            # INT-cast switch to nullable ``Int64``,
             # itertuples yields ``numpy.int64`` (the old ``downcast='integer'``
             # incidentally produced plain ``int``) — and mysql-connector-python
             # refuses to bind numpy scalars, failing the passthrough path with
             # "Python type numpy.int64 cannot be converted" on every row of any
             # INT label column (tabular_classification on the e2e job). The
-            # other policies (e.g. ``bucket``) stringify their output so they
-            # never hit this; the fix lives here so passthrough also yields a
-            # binder-friendly value.
+            # bucketing stringifies its output so it never hit this; the fix
+            # lives here so the stored value is binder-friendly.
             label_val = record.get(self.label_column)
             if hasattr(label_val, "item") and not isinstance(label_val, str):
                 try:
                     label_val = label_val.item()
                 except (ValueError, AttributeError):
                     pass
-            # Strip surrounding whitespace from string label values before
-            # the policy runs — protects against silent label-set
+            # Strip surrounding whitespace from string label values —
+            # protects against silent label-set
             # corruption (issue #261) where ``"  A  "`` and ``"A"`` would
             # otherwise land as distinct classes in MySQL. A user
             # copy-pasting from Excel / another tool routinely has
@@ -150,9 +154,23 @@ class RecordProcessor:
             # space-separated tags, etc.) pass through unchanged.
             if isinstance(label_val, str):
                 label_val = label_val.strip()
-            cleaned_record["label"] = label_policy_module.apply(
-                label_val, self.label_policy
-            )
+            # A missing target becomes SQL NULL, the same missing-data
+            # normalization ``process()`` gives every schema column — the
+            # ``label`` column is VARCHAR(255) NULL (``Database.create_table``).
+            # Without this, pandas' float ``nan`` / ``pd.NA`` for an empty cell
+            # reaches the binder and lands as the literal string "nan" (Bugbot
+            # on #487: the write-path bucketing this PR removed used to absorb
+            # NaN into MISSING_LABEL_BUCKET, so dropping it left the hole).
+            # NULL keeps the outbound sentinel intact: ``get_label_counts``
+            # reports a NULL label under the ``""`` key and ``get_samples``
+            # as ``""``, both of which bucket to MISSING_LABEL_BUCKET at the
+            # boundary. An empty-string label is left alone — it stores fine
+            # and already buckets to the same sentinel.
+            if label_val is None or (
+                pd.api.types.is_scalar(label_val) and pd.isna(label_val)
+            ):
+                label_val = None
+            cleaned_record["label"] = label_val
 
         if self.intent:
             cleaned_record["data_intent"] = self.intent
@@ -197,9 +215,13 @@ class RecordProcessor:
         SHA-256 over the per-table salt + a canonical JSON serialization of
         every cleaned field (sorted keys, ASCII, compact separators,
         ``default=str`` so dates/decimals serialize stably post-cast). The
-        record is hashed AFTER schema cleaning and label policy, so the
-        digest reflects exactly what will be stored — identical source
-        records produce identical ids across process restarts.
+        record is hashed AFTER schema cleaning, so the digest reflects exactly
+        what will be stored — identical source records produce identical ids
+        across process restarts. Since #486 that includes the RAW label (the
+        bucketing it used to hash moved to the send boundary), so a
+        regression-class source re-ingested across that change mints different
+        ids for the same rows — a one-off, and those datasets need a re-ingest
+        anyway because their stored targets were buckets.
 
         Privacy: the salt (random per table, cluster-MySQL-only) makes the
         digest unlinkable across tables/clusters and defeats dictionary
@@ -213,9 +235,7 @@ class RecordProcessor:
             separators=(",", ":"),
             default=str,
         )
-        return hashlib.sha256(
-            (self.table_salt + canonical).encode("utf-8")
-        ).hexdigest()
+        return hashlib.sha256((self.table_salt + canonical).encode("utf-8")).hexdigest()
 
     def process(self, record: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Process a single record"""
@@ -269,7 +289,6 @@ class RecordProcessor:
             }
             # Map unique ID if specified
             cleaned_record = self._map_unique_id(record, cleaned_record)
-
 
             if cleaned_record is None:
                 return None

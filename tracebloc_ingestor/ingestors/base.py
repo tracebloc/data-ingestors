@@ -265,8 +265,9 @@ class BaseIngestor(ABC):
             label_policy: ``"passthrough"`` (default; classification — the
                 label value crosses the cluster boundary unchanged) or
                 ``"bucket"`` (regression-class — each label is replaced
-                with a stable hash-bucket ID before the API payload is
-                built, so raw target values never leak). Schema-validated
+                with a stable hash-bucket ID in the API payload, so raw
+                target values never leak; the stored row keeps the raw
+                target, which is what training reads — #486). Schema-validated
                 upstream by the YAML entrypoint; templates pass the
                 appropriate constant from :mod:`tracebloc_ingestor.utils.label_policy`.
         Raises:
@@ -461,7 +462,6 @@ class BaseIngestor(ABC):
             label_column=self.label_column,
             annotation_column=self.annotation_column,
             unique_id_column=self.unique_id_column,
-            label_policy=self.label_policy,
             ingestor_id=self.ingestor_id,
             data_id_strategy=self.data_id_strategy,
             table_salt=self._table_salt,
@@ -1207,6 +1207,30 @@ class BaseIngestor(ABC):
                         label_counts.values()
                     )
                 else:
+                    # CEILING (review on #487, tracked in #488): this GROUP BYs
+                    # the RAW label, so a regression-class dataset with a
+                    # continuous target yields up to one entry per distinct
+                    # value — ~N rows — which the send boundary then collapses to
+                    # <= 64 buckets. Before #486 the column held the buckets
+                    # themselves, so the same query grouped over <= 64 keys.
+                    # Fine at the sizes we ingest today: a 100k-row float target
+                    # is a ~100k-entry dict, single-digit MB.
+                    #
+                    # It cannot be fixed by iterating: our DBAPI is
+                    # mysql+mysqlconnector, whose SQLAlchemy dialect reports
+                    # supports_server_side_cursors = False, so stream_results /
+                    # yield_per are no-ops and the driver buffers the whole
+                    # GROUP BY result on execute. Chunking the delivery
+                    # (Result.partitions) would bound the dict we build while
+                    # leaving the driver's buffer just as large — a memory bound
+                    # in the docstring only. Cursor Bugbot caught exactly that on
+                    # an earlier attempt in this PR.
+                    #
+                    # The two shapes that would actually bound it — bucketing in
+                    # SQL (SHA2 + CAST(CONV(...) AS UNSIGNED) % 64, which has to
+                    # agree with _bucket for every value) or moving to a DBAPI
+                    # with server-side cursors — are both bigger than this fix.
+                    # #488 carries them.
                     label_counts = self.database.get_label_counts(
                         self.physical_table_name, self.ingestor_id
                     )
@@ -1291,6 +1315,12 @@ class BaseIngestor(ABC):
                         schema=self._schema_payload(schema_dict),
                         samples=samples,
                         meta_data=self._meta_data_payload(),
+                        # label_counts / samples come straight from the cluster
+                        # DB, i.e. RAW targets. The policy is applied inside
+                        # send_ingest_summary — the boundary — and nowhere
+                        # earlier, so the stored rows keep the values training
+                        # needs (#486).
+                        label_policy=self.label_policy,
                     )
                     dataset_registered = True
                     stats["api_sent_records"] = stats["inserted_records"]
