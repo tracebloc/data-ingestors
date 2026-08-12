@@ -60,16 +60,23 @@ def test_authenticate_http_error_raises():
 
 def _summary_call(client):
     return client.send_ingest_summary(
-        table_name="tbl", ingestor_id="ing", labels={"cat": 1},
-        dataset_title="T", data_format="image", data_intent="train",
-        category="image_classification", schema={}, samples=[],
+        table_name="tbl",
+        ingestor_id="ing",
+        labels={"cat": 1},
+        dataset_title="T",
+        data_format="image",
+        data_intent="train",
+        category="image_classification",
+        schema={},
+        samples=[],
     )
 
 
 def test_send_ingest_summary_success():
     client = _client()
     with patch.object(
-        client.session, "post",
+        client.session,
+        "post",
         return_value=_resp(200, {"dataset_id": 1, "dataset_key": "key"}),
     ):
         result = _summary_call(client)
@@ -90,7 +97,8 @@ def test_send_ingest_summary_409_returns_existing_dataset():
     the client must return the existing dataset, not raise (issue #332)."""
     client = _client()
     with patch.object(
-        client.session, "post",
+        client.session,
+        "post",
         return_value=_resp(409, {"dataset_id": 7, "dataset_key": "existing"}),
     ):
         result = _summary_call(client)
@@ -110,7 +118,8 @@ def test_send_ingest_summary_payload_shape():
 
     client = _client()
     with patch.object(
-        client.session, "post",
+        client.session,
+        "post",
         return_value=_resp(200, {"dataset_id": 42, "dataset_key": "k"}),
     ) as post:
         client.send_ingest_summary(
@@ -127,8 +136,17 @@ def test_send_ingest_summary_payload_shape():
         )
 
     sent = _json.loads(post.call_args.kwargs["data"])
-    for key in ("ingestor_id", "labels", "dataset_title", "data_format",
-                "data_intent", "category", "schema", "samples", "meta_data"):
+    for key in (
+        "ingestor_id",
+        "labels",
+        "dataset_title",
+        "data_format",
+        "data_intent",
+        "category",
+        "schema",
+        "samples",
+        "meta_data",
+    ):
         assert key in sent, f"missing key: {key}"
     assert sent["meta_data"] == {"source": "test"}
 
@@ -196,7 +214,8 @@ def test_authed_request_passes_through_non_401_unchanged():
     failure — the per-call error handling already covers those."""
     client = _client()
     with patch.object(
-        client.session, "post",
+        client.session,
+        "post",
         return_value=_resp(200, {"dataset_id": 1, "dataset_key": "k"}),
     ) as post:
         _summary_call(client)
@@ -337,7 +356,9 @@ def test_send_metadata_backfill_payload_shape():
     def _capture(url, **kwargs):
         captured["url"] = url
         captured["data"] = kwargs.get("data")
-        return _resp(201, {"table_name": "tb", "created": False, "competitions_refolded": 0})
+        return _resp(
+            201, {"table_name": "tb", "created": False, "competitions_refolded": 0}
+        )
 
     with patch.object(client.session, "post", side_effect=_capture):
         client.send_metadata_backfill("tb", {"x": {"dtype": "int"}}, {"attributes": {}})
@@ -431,9 +452,15 @@ def test_summary_unknown_policy_raises_before_sending():
     with patch.object(client.session, "post") as post:
         with pytest.raises(ValueError, match="Unknown label policy"):
             client.send_ingest_summary(
-                table_name="tbl", ingestor_id="ing", labels={"1": 1},
-                dataset_title="T", data_format="tabular", data_intent="train",
-                category="tabular_regression", schema={}, samples=[],
+                table_name="tbl",
+                ingestor_id="ing",
+                labels={"1": 1},
+                dataset_title="T",
+                data_format="tabular",
+                data_intent="train",
+                category="tabular_regression",
+                schema={},
+                samples=[],
                 label_policy="ohno",
             )
     post.assert_not_called()
@@ -452,9 +479,15 @@ def test_summary_local_mode_still_applies_policy_to_its_log(caplog):
     with caplog.at_level(_logging.INFO, logger="tracebloc_ingestor.api.client"):
         with patch.object(client.session, "post") as post:
             client.send_ingest_summary(
-                table_name="tbl", ingestor_id="ing", labels=labels,
-                dataset_title="T", data_format="tabular", data_intent="train",
-                category="tabular_regression", schema={}, samples=[],
+                table_name="tbl",
+                ingestor_id="ing",
+                labels=labels,
+                dataset_title="T",
+                data_format="tabular",
+                data_intent="train",
+                category="tabular_regression",
+                schema={},
+                samples=[],
                 label_policy=BUCKET,
             )
     post.assert_not_called()

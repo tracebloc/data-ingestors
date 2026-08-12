@@ -59,10 +59,12 @@ class RecordProcessor:
         self.unique_id_column = unique_id_column
         # #225: content-hash strategy needs the per-table salt; failing at
         # construction beats minting unsalted (correlatable) ids at row time.
-        if data_id_strategy == "content_hash" and not unique_id_column and not table_salt:
-            raise ValueError(
-                "data_id_strategy='content_hash' requires a table_salt"
-            )
+        if (
+            data_id_strategy == "content_hash"
+            and not unique_id_column
+            and not table_salt
+        ):
+            raise ValueError("data_id_strategy='content_hash' requires a table_salt")
         self.data_id_strategy = data_id_strategy
         self.table_salt = table_salt
         self.ingestor_id = ingestor_id
@@ -217,9 +219,7 @@ class RecordProcessor:
             separators=(",", ":"),
             default=str,
         )
-        return hashlib.sha256(
-            (self.table_salt + canonical).encode("utf-8")
-        ).hexdigest()
+        return hashlib.sha256((self.table_salt + canonical).encode("utf-8")).hexdigest()
 
     def process(self, record: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Process a single record"""
@@ -273,7 +273,6 @@ class RecordProcessor:
             }
             # Map unique ID if specified
             cleaned_record = self._map_unique_id(record, cleaned_record)
-
 
             if cleaned_record is None:
                 return None

@@ -9,6 +9,7 @@ for real, closing the gap between "every line executed" and "the DB behaves".
 Skipped unless a MySQL is reachable (see ``conftest.py``); CI runs it with a
 MySQL service in ``.github/workflows/e2e.yml``.
 """
+
 import os
 import uuid
 
@@ -21,8 +22,10 @@ from tracebloc_ingestor.database import Database
 
 def _query(sql):
     conn = mysql.connector.connect(
-        host=os.environ["MYSQL_HOST"], port=int(os.environ["MYSQL_PORT"]),
-        user=os.environ["DB_USER"], password=os.environ["DB_PASSWORD"],
+        host=os.environ["MYSQL_HOST"],
+        port=int(os.environ["MYSQL_PORT"]),
+        user=os.environ["DB_USER"],
+        password=os.environ["DB_PASSWORD"],
         database=os.environ["DB_NAME"],
     )
     cur = conn.cursor()
@@ -53,7 +56,9 @@ def _rec(data_id, **cols):
 def test_create_table_and_insert_roundtrip(db, table):
     """CREATE TABLE + INSERT actually run, and values come back intact."""
     db.create_table(table, {"feature": "FLOAT"})
-    ids, failures = db.insert_batch(table, [_rec("a", feature=1.5), _rec("b", feature=2.5)])
+    ids, failures = db.insert_batch(
+        table, [_rec("a", feature=1.5), _rec("b", feature=2.5)]
+    )
     assert failures == []
     assert _query(f"SELECT COUNT(*) FROM `{table}`")[0][0] == 2
     vals = sorted(r[0] for r in _query(f"SELECT feature FROM `{table}`"))
@@ -77,14 +82,16 @@ def test_partial_batch_falls_back_without_duplicating_good_rows(db, table):
     batch = [_rec("ok1", feature=1), _rec(None, feature=2), _rec("ok2", feature=3)]
     ids, failures = db.insert_batch(table, batch)
     assert _query(f"SELECT COUNT(*) FROM `{table}`")[0][0] == 2  # ok1 + ok2, once each
-    assert len(failures) == 1                                    # the NULL-data_id row
+    assert len(failures) == 1  # the NULL-data_id row
 
 
 def test_non_ascii_data_roundtrip(db, table):
     """Non-ASCII values (German umlauts) survive the real INSERT/SELECT."""
     db.create_table(table, {"name": "VARCHAR(64)"})
     db.insert_batch(table, [_rec("u", name="Größe-Meßwert")])
-    assert _query(f"SELECT name FROM `{table}` WHERE data_id='u'")[0][0] == "Größe-Meßwert"
+    assert (
+        _query(f"SELECT name FROM `{table}` WHERE data_id='u'")[0][0] == "Größe-Meßwert"
+    )
 
 
 def test_get_table_schema_reports_real_mysql_types(db, table):
@@ -97,14 +104,17 @@ def test_get_table_schema_reports_real_mysql_types(db, table):
     catch that — it fed generic types into a fake inspector. This is the
     test shape that does: declared type in, real CREATE TABLE, real
     reflection out."""
-    db.create_table(table, {
-        "f_int": "INT",
-        "f_float": "FLOAT",
-        "f_dec": "DECIMAL(10,2)",
-        "f_bool": "BOOLEAN",
-        "f_dt": "DATETIME",
-        "f_name": "VARCHAR(64)",
-    })
+    db.create_table(
+        table,
+        {
+            "f_int": "INT",
+            "f_float": "FLOAT",
+            "f_dec": "DECIMAL(10,2)",
+            "f_bool": "BOOLEAN",
+            "f_dt": "DATETIME",
+            "f_name": "VARCHAR(64)",
+        },
+    )
     schema = db.get_table_schema(table)
     assert schema["f_int"] == "INT"
     assert schema["f_float"] == "FLOAT"
@@ -147,10 +157,10 @@ def test_content_hash_retry_reclaims_rows_instead_of_duplicating(db, table):
             records.append(rec)
         db.insert_batch(table, records)
 
-    run("attempt-1")               # first attempt: rows land
+    run("attempt-1")  # first attempt: rows land
     assert _query(f"SELECT COUNT(*) FROM `{table}`")[0][0] == 2
 
-    run("attempt-2-retry")         # k8s Job retry: SAME content, new run id
+    run("attempt-2-retry")  # k8s Job retry: SAME content, new run id
     assert _query(f"SELECT COUNT(*) FROM `{table}`")[0][0] == 2  # no duplication
     owners = {r[0] for r in _query(f"SELECT ingestor_id FROM `{table}`")}
     assert owners == {"attempt-2-retry"}  # re-claimed by the retry

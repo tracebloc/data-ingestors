@@ -22,7 +22,9 @@ SECRET = "patient-4711-Müller"
 
 def test_row_refs_formats_and_caps():
     assert redaction.row_refs([2, 17, 108], total=3) == "rows [2, 17, 108]"
-    assert redaction.row_refs([0, 1, 2, 3, 4], total=9) == "rows [0, 1, 2, 3, 4] (+4 more)"
+    assert (
+        redaction.row_refs([0, 1, 2, 3, 4], total=9) == "rows [0, 1, 2, 3, 4] (+4 more)"
+    )
 
 
 def test_mask_shape_keeps_structure_never_content():
@@ -162,9 +164,11 @@ def test_json_dtype_error_masks_the_value():
 def test_json_non_dict_record_reports_position_not_content():
     from tracebloc_ingestor.ingestors.json_ingestor import JSONIngestor
 
-    gen = JSONIngestor._iter_validated_records.__wrapped__ if hasattr(
-        JSONIngestor._iter_validated_records, "__wrapped__"
-    ) else JSONIngestor._iter_validated_records
+    gen = (
+        JSONIngestor._iter_validated_records.__wrapped__
+        if hasattr(JSONIngestor._iter_validated_records, "__wrapped__")
+        else JSONIngestor._iter_validated_records
+    )
     ing = object.__new__(JSONIngestor)
     ing.schema = {}
     with pytest.raises(ValueError) as exc:

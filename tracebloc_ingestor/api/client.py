@@ -155,9 +155,7 @@ class APIClient:
             new = self.config.BACKEND_TOKEN or os.environ.get("BACKEND_TOKEN")
             if new and new != old:
                 self.token = new
-                logger.info(
-                    f"{GREEN}Re-read rotated BACKEND_TOKEN after 401.{RESET}"
-                )
+                logger.info(f"{GREEN}Re-read rotated BACKEND_TOKEN after 401.{RESET}")
                 return True
             return False
         # CLIENT_ID/PASSWORD path: mint a new token.
@@ -165,9 +163,7 @@ class APIClient:
             self.token = self.authenticate()
             return self.token != old
         except Exception as exc:
-            logger.error(
-                f"{RED}Failed to re-authenticate after 401: {exc}{RESET}"
-            )
+            logger.error(f"{RED}Failed to re-authenticate after 401: {exc}{RESET}")
             return False
 
     def _authed_request(
@@ -347,7 +343,9 @@ class APIClient:
                     f"HTTP {e.response.status_code}: {body}{RESET}"
                 )
             else:
-                logger.error(f"{RED}Error sending ingest summary: {str(e)[:500]}{RESET}")
+                logger.error(
+                    f"{RED}Error sending ingest summary: {str(e)[:500]}{RESET}"
+                )
             raise
 
     def get_dataset_metadata(self, ingestor_id: str) -> Optional[Dict[str, Any]]:

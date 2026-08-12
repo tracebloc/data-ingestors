@@ -7,12 +7,10 @@ duplicating them. The per-table salt keeps ids unlinkable across tables and
 never leaves the cluster.
 """
 
-
 import pytest
 
 from tracebloc_ingestor.cli.conventions import resolve
 from tracebloc_ingestor.ingestors.record_processor import RecordProcessor
-
 
 SALT_A = "a" * 64
 SALT_B = "b" * 64
@@ -196,7 +194,9 @@ def _build(config):
 
     db = MagicMock()
     db.get_or_create_table_salt.return_value = SALT_A
-    return _build_ingestor(database=db, api_client=MagicMock(), resolved=resolve(config))
+    return _build_ingestor(
+        database=db, api_client=MagicMock(), resolved=resolve(config)
+    )
 
 
 @pytest.mark.parametrize("source_key", ["csv", "json"])

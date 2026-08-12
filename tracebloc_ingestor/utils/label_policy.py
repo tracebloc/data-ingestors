@@ -40,7 +40,6 @@ import hashlib
 import math
 from typing import Any, Dict, Iterable, List, Mapping
 
-
 # Number of buckets. 64 is enough granularity for the central backend to
 # reason about distribution without offering reconstruction power. Trade-off
 # is documented; bumping this number requires no schema change.
@@ -80,8 +79,7 @@ def apply(value: Any, policy: str) -> Any:
     if policy == BUCKET:
         return _bucket(value)
     raise ValueError(
-        f"Unknown label policy: {policy!r}. "
-        f"Valid: {PASSTHROUGH!r}, {BUCKET!r}."
+        f"Unknown label policy: {policy!r}. " f"Valid: {PASSTHROUGH!r}, {BUCKET!r}."
     )
 
 
@@ -105,9 +103,7 @@ def _bucket(value: Any) -> int:
     return int.from_bytes(digest[:8], "big") % NUM_BUCKETS
 
 
-def apply_to_label_counts(
-    counts: Mapping[Any, int], policy: str
-) -> Dict[Any, int]:
+def apply_to_label_counts(counts: Mapping[Any, int], policy: str) -> Dict[Any, int]:
     """Bucket the keys of a ``{label: row_count}`` map for the outbound payload.
 
     Args:

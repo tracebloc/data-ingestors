@@ -384,9 +384,7 @@ def test_tte_ingest_stores_raw_event_indicator_and_sends_buckets(make_csv):
 
     assert failed == []
     stored_labels = {
-        row["label"]
-        for call in db.insert_batch.call_args_list
-        for row in call.args[1]
+        row["label"] for call in db.insert_batch.call_args_list for row in call.args[1]
     }
     # An INT label column arrives as a native int (numpy scalars are coerced so
     # mysql-connector can bind them); what matters is the VALUE, not its type.
