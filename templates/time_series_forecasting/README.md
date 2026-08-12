@@ -43,7 +43,7 @@ helm install my-forecast-dataset tracebloc/ingestor \
   --set-file ingestConfig=./ingest.yaml
 ```
 
-Forecasting is a regression-class task — `label.policy: bucket` is required so the central backend never sees raw target values. Canonical example: [`examples/yaml/time_series_forecasting.yaml`](../../examples/yaml/time_series_forecasting.yaml). Full chart docs: [`tracebloc/client/ingestor/README.md`](https://github.com/tracebloc/client/blob/develop/ingestor/README.md).
+Forecasting is a regression-class task — `label.policy: bucket` is required so the central backend never sees raw target values. Bucketing applies to the metadata payload only: the row stored in your cluster's MySQL keeps the raw target, which is what training reads (#486). Canonical example: [`examples/yaml/time_series_forecasting.yaml`](../../examples/yaml/time_series_forecasting.yaml). Full chart docs: [`tracebloc/client/ingestor/README.md`](https://github.com/tracebloc/client/blob/develop/ingestor/README.md).
 
 ## Directory Structure
 

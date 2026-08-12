@@ -22,7 +22,9 @@ SECRET = "patient-4711-Müller"
 
 def test_row_refs_formats_and_caps():
     assert redaction.row_refs([2, 17, 108], total=3) == "rows [2, 17, 108]"
-    assert redaction.row_refs([0, 1, 2, 3, 4], total=9) == "rows [0, 1, 2, 3, 4] (+4 more)"
+    assert (
+        redaction.row_refs([0, 1, 2, 3, 4], total=9) == "rows [0, 1, 2, 3, 4] (+4 more)"
+    )
 
 
 def test_mask_shape_keeps_structure_never_content():
@@ -90,7 +92,6 @@ def test_int64_overflow_error_redacts():
 
 def _rp(unique_id_column=None):
     from tracebloc_ingestor.ingestors.record_processor import RecordProcessor
-    from tracebloc_ingestor.utils import label_policy as label_policy_module
 
     return RecordProcessor(
         schema={"x": "FLOAT"},
@@ -98,7 +99,6 @@ def _rp(unique_id_column=None):
         label_column="y",
         annotation_column=None,
         unique_id_column=unique_id_column,
-        label_policy=label_policy_module.PASSTHROUGH,
         ingestor_id="run-1",
         # #350: content_hash is now the default strategy and needs a salt.
         table_salt="0" * 64,
@@ -164,9 +164,11 @@ def test_json_dtype_error_masks_the_value():
 def test_json_non_dict_record_reports_position_not_content():
     from tracebloc_ingestor.ingestors.json_ingestor import JSONIngestor
 
-    gen = JSONIngestor._iter_validated_records.__wrapped__ if hasattr(
-        JSONIngestor._iter_validated_records, "__wrapped__"
-    ) else JSONIngestor._iter_validated_records
+    gen = (
+        JSONIngestor._iter_validated_records.__wrapped__
+        if hasattr(JSONIngestor._iter_validated_records, "__wrapped__")
+        else JSONIngestor._iter_validated_records
+    )
     ing = object.__new__(JSONIngestor)
     ing.schema = {}
     with pytest.raises(ValueError) as exc:

@@ -26,11 +26,18 @@ jobs:
         run: |
           set -euo pipefail
           changed="$(git diff --name-only "${BASE_SHA}...HEAD")"
-          if ! printf '%s\n' "$changed" | grep -qE '^tracebloc_ingestor/'; then
+          # Here-string, not a pipe: `grep -q` closes the pipe at its first
+          # match, and under `pipefail` a producer killed by SIGPIPE makes the
+          # pipeline status 141. `if !` reads that as "no match" and exits 0
+          # "guard N/A" -- the guard would silently PASS a PR that did change
+          # the package. This repo's path list is ~14 KB today, well under the
+          # 64 KB pipe buffer, so it is latent rather than live (backend#1778).
+          if ! grep -qE '^tracebloc_ingestor/' <<<"$changed"; then
             echo "No tracebloc_ingestor/ change in this PR — guard N/A."
             exit 0
           fi
-          if git diff "${BASE_SHA}...HEAD" -- tracebloc_ingestor/__init__.py | grep -qE '^\+__version__'; then
+          version_diff="$(git diff "${BASE_SHA}...HEAD" -- tracebloc_ingestor/__init__.py)"
+          if grep -qE '^\+__version__' <<<"$version_diff"; then
             echo "Package changed and __version__ was bumped. ✓"
             exit 0
           fi

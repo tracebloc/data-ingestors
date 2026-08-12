@@ -10,8 +10,9 @@ as its entrypoint. The flow:
     3. Resolve convention defaults from ``category`` (validators, sidecar
        patterns, default columns, default file extensions) — see ``conventions``.
     4. Dispatch to ``CSVIngestor`` or ``JSONIngestor`` based on the source type.
-    5. Apply ``label.policy`` bucketing in ``APIClient.send_batch`` for
-       regression-class tasks.
+    5. Apply ``label.policy`` bucketing in ``APIClient.send_ingest_summary``
+       for regression-class tasks — on the outbound payload only; the row
+       stored in the cluster's MySQL keeps the raw target (#486).
 
 Customers no longer write Python or build Docker images for the dominant case.
 """
