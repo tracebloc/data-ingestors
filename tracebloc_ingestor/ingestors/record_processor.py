@@ -36,6 +36,7 @@ from ..storage_contract import (
     IMAGE_NAME_COLUMN,
     ROW_ID_COLUMN,
 )
+from ..utils import redaction
 from ..utils.constants import Intent
 
 logger = logging.getLogger(__name__)
@@ -315,5 +316,11 @@ class RecordProcessor:
             return cleaned_record
 
         except Exception as e:
-            logger.error(f"Error processing record: {str(e)}")
+            # The residual raw-`str(e)` site in an otherwise-covered package
+            # (backend#1879). Everything raised in here has the record's own
+            # cells in scope, so the message is a content leak by default:
+            # a MySQL type rejection quotes the value, and a plain
+            # `ValueError` from casting a cell embeds it too. The exception
+            # class alone is the actionable part.
+            logger.error(f"Error processing record: {redaction.safe_db_error(e)}")
             return None
