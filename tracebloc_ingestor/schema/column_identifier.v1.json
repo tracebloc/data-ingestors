@@ -1,0 +1,81 @@
+{
+  "version": "1",
+  "description": "Canonical column-identifier grammar (ISSUE #382). The authoritative definition lives in tracebloc_ingestor/identifiers.py; this file is that definition published machine-readably so the trainer (tracebloc-engine) can GENERATE its contract cases from it instead of transcribing them. Before this file existed, both repos carried hand-copied copies of the case table below and each side's comments claimed the other kept it honest — but nothing crossed the repo boundary, so either could change and both suites would stay green. That is the mechanism that made #382 silent until training (backend#1780).",
+  "rule": "Quote-and-allow: a column name is valid iff it can be safely backtick-quoted for MySQL. Every character except NUL is permitted and made safe by quoting; length is the one constraint quoting cannot rescue.",
+  "max_length": 64,
+  "max_length_reason": "MySQL's maximum identifier length. The one column-name constraint that backtick-quoting cannot work around, so both repos hard-fail above it.",
+  "forbidden_characters": [
+    {
+      "codepoint": "U+0000",
+      "name": "NUL",
+      "reason": "illegal in a MySQL identifier"
+    }
+  ],
+  "quoting": {
+    "style": "backtick",
+    "escape": "double the backtick",
+    "example": {
+      "input": "we`ird",
+      "output": "`we``ird`"
+    },
+    "reason": "Matches MySQL's identifier quoting rules and what SQLAlchemy emits in the ingestor's CREATE TABLE DDL, so any valid name is rendered injection-safe."
+  },
+  "not_covered": "TABLE names, which are stricter and validated separately (TableNameValidator here, _validate_sql_identifier in the trainer). Table names are platform-controlled; column names come from raw user data.",
+  "cases": [
+    {
+      "name": "123_gene",
+      "valid": true,
+      "why": "digit-leading — quotable"
+    },
+    {
+      "name": "_ok",
+      "valid": true,
+      "why": "leading underscore"
+    },
+    {
+      "name": "feature-1",
+      "valid": true,
+      "why": "hyphen — quotable"
+    },
+    {
+      "name": "col name",
+      "valid": true,
+      "why": "space — quotable"
+    },
+    {
+      "name": "P08254|MMP3",
+      "valid": true,
+      "why": "proteomics pipe header (#184/#185)"
+    },
+    {
+      "name": "Körpergröße",
+      "valid": true,
+      "why": "clinical unicode header (#739)"
+    },
+    {
+      "name": "feature.1",
+      "valid": true,
+      "why": "dot"
+    },
+    {
+      "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "valid": true,
+      "why": "exactly 64 — boundary OK"
+    },
+    {
+      "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "valid": false,
+      "why": "65 characters — too long"
+    },
+    {
+      "name": "",
+      "valid": false,
+      "why": "empty"
+    },
+    {
+      "name": "bad\u0000col",
+      "valid": false,
+      "why": "NUL — illegal in a MySQL identifier"
+    }
+  ]
+}
