@@ -1,0 +1,369 @@
+{
+  "_README": [
+    "Captured from REAL ingests by tests/test_ingest_storage_contract.py",
+    "(data-ingestors). Do not hand-edit: regenerate with",
+    "UPDATE_INGEST_CONTRACT_GOLDEN=1 pytest tests/test_ingest_storage_contract.py",
+    "",
+    "tracebloc-engine mirrors this file verbatim into",
+    "core/tests/contracts/ingested_image_rows.json and replays it through",
+    "its CV dataset readers (backend#1706). Carry any regeneration across.",
+    "",
+    "'ingestor_id' is dropped and a uuid-strategy data_id is masked as '<uuid4>' \u2014 both are random per run.",
+    "content_hash ids are computed under the fixed test salt '1706170617061706170617061706170617061706170617061706170617061706'.",
+    "'rows' holds the first 4 of 'total_rows_ingested'; the contract is per-row."
+  ],
+  "contract": {
+    "image_name_columns": [
+      "filename",
+      "data_id"
+    ],
+    "data_id_strategies": [
+      "content_hash",
+      "uuid",
+      "column"
+    ],
+    "default_data_id_strategy": "content_hash",
+    "opaque_data_id_strategies": [
+      "content_hash",
+      "uuid"
+    ],
+    "recognised_image_suffixes": [
+      ".jpeg",
+      ".jpg",
+      ".png"
+    ],
+    "uuid_sentinel": "<uuid4>"
+  },
+  "cases": [
+    {
+      "id": "image_classification-default",
+      "category": "image_classification",
+      "data_id_strategy": "content_hash",
+      "unique_id_column": null,
+      "total_rows_ingested": 576,
+      "dest_files": [
+        "cat1.jpeg",
+        "cat2.jpeg",
+        "cat3.jpeg",
+        "dog1.jpeg",
+        "dog2.jpeg",
+        "dog3.jpeg"
+      ],
+      "rows": [
+        {
+          "label": "cat",
+          "data_intent": "train",
+          "data_id": "815352a97dcb5a2e07f82a504b4b23843aca91c55e2cb495039c595f6239e36a",
+          "filename": "cat1",
+          "extension": ".jpeg"
+        },
+        {
+          "label": "cat",
+          "data_intent": "train",
+          "data_id": "671123fe6b39176eaa49e03d9e68b9ef2e089dc0b14d81070748c93966803179",
+          "filename": "cat2",
+          "extension": ".jpeg"
+        },
+        {
+          "label": "cat",
+          "data_intent": "train",
+          "data_id": "d028007b85eec04b5cc91003036a42ef09649c2394fed45d3f727a1294479013",
+          "filename": "cat3",
+          "extension": ".jpeg"
+        },
+        {
+          "label": "dog",
+          "data_intent": "train",
+          "data_id": "8a277e09492091bcf1fbaedc4614a7ea68e81e177c7bb8701f054c460fc4a2b0",
+          "filename": "dog1",
+          "extension": ".jpeg"
+        }
+      ]
+    },
+    {
+      "id": "image_classification-column",
+      "category": "image_classification",
+      "data_id_strategy": "column",
+      "unique_id_column": "filename",
+      "total_rows_ingested": 576,
+      "dest_files": [
+        "cat1.jpeg",
+        "cat2.jpeg",
+        "cat3.jpeg",
+        "dog1.jpeg",
+        "dog2.jpeg",
+        "dog3.jpeg"
+      ],
+      "rows": [
+        {
+          "label": "cat",
+          "data_intent": "train",
+          "data_id": "cat1.jpeg",
+          "filename": "cat1",
+          "extension": ".jpeg"
+        },
+        {
+          "label": "cat",
+          "data_intent": "train",
+          "data_id": "cat2.jpeg",
+          "filename": "cat2",
+          "extension": ".jpeg"
+        },
+        {
+          "label": "cat",
+          "data_intent": "train",
+          "data_id": "cat3.jpeg",
+          "filename": "cat3",
+          "extension": ".jpeg"
+        },
+        {
+          "label": "dog",
+          "data_intent": "train",
+          "data_id": "dog1.jpeg",
+          "filename": "dog1",
+          "extension": ".jpeg"
+        }
+      ]
+    },
+    {
+      "id": "object_detection-default",
+      "category": "object_detection",
+      "data_id_strategy": "uuid",
+      "unique_id_column": null,
+      "total_rows_ingested": 128,
+      "dest_files": [
+        "0000001_02999_d_0000005.jpg",
+        "0000001_02999_d_0000005.xml"
+      ],
+      "rows": [
+        {
+          "label": "car",
+          "data_intent": "train",
+          "data_id": "<uuid4>",
+          "filename": "0000001_02999_d_0000005",
+          "extension": ".jpg"
+        },
+        {
+          "label": "car",
+          "data_intent": "train",
+          "data_id": "<uuid4>",
+          "filename": "0000001_02999_d_0000005",
+          "extension": ".jpg"
+        },
+        {
+          "label": "car",
+          "data_intent": "train",
+          "data_id": "<uuid4>",
+          "filename": "0000001_02999_d_0000005",
+          "extension": ".jpg"
+        },
+        {
+          "label": "motor",
+          "data_intent": "train",
+          "data_id": "<uuid4>",
+          "filename": "0000001_02999_d_0000005",
+          "extension": ".jpg"
+        }
+      ]
+    },
+    {
+      "id": "object_detection-column",
+      "category": "object_detection",
+      "data_id_strategy": "column",
+      "unique_id_column": "filename",
+      "total_rows_ingested": 128,
+      "dest_files": [
+        "0000001_02999_d_0000005.jpg",
+        "0000001_02999_d_0000005.xml"
+      ],
+      "rows": [
+        {
+          "label": "car",
+          "data_intent": "train",
+          "data_id": "0000001_02999_d_0000005",
+          "filename": "0000001_02999_d_0000005",
+          "extension": ".jpg"
+        },
+        {
+          "label": "car",
+          "data_intent": "train",
+          "data_id": "0000001_02999_d_0000005",
+          "filename": "0000001_02999_d_0000005",
+          "extension": ".jpg"
+        },
+        {
+          "label": "car",
+          "data_intent": "train",
+          "data_id": "0000001_02999_d_0000005",
+          "filename": "0000001_02999_d_0000005",
+          "extension": ".jpg"
+        },
+        {
+          "label": "motor",
+          "data_intent": "train",
+          "data_id": "0000001_02999_d_0000005",
+          "filename": "0000001_02999_d_0000005",
+          "extension": ".jpg"
+        }
+      ]
+    },
+    {
+      "id": "keypoint_detection-default",
+      "category": "keypoint_detection",
+      "data_id_strategy": "content_hash",
+      "unique_id_column": null,
+      "total_rows_ingested": 3,
+      "dest_files": [
+        "person_001.jpg",
+        "person_002.jpg",
+        "person_003.jpg"
+      ],
+      "rows": [
+        {
+          "label": "person",
+          "data_intent": "train",
+          "annotation": "{\"nose\": [0.50, 0.20], \"left_eye\": [0.46, 0.16], \"right_eye\": [0.54, 0.16], \"left_shoulder\": [0.37, 0.39], \"right_shoulder\": [0.63, 0.39], \"left_elbow\": [0.31, 0.59], \"right_elbow\": [0.68, 0.59], \"left_wrist\": [0.27, 0.76], \"right_wrist\": [0.72, 0.76]}",
+          "data_id": "f2feb4ca9dd0b7add8beb306684b90f8fb484a270c7be49d81ca1713f4e0d758",
+          "filename": "person_001",
+          "extension": ".jpg"
+        },
+        {
+          "label": "athlete",
+          "data_intent": "train",
+          "annotation": "{\"nose\": [0.51, 0.21], \"left_eye\": [0.48, 0.18], \"right_eye\": [0.55, 0.18], \"left_shoulder\": [0.39, 0.43], \"right_shoulder\": [0.64, 0.41], \"left_elbow\": [0.33, 0.63], \"right_elbow\": [0.70, 0.61], \"left_wrist\": [0.29, 0.78], \"right_wrist\": [0.74, 0.78]}",
+          "data_id": "8382b4358710c9e3590794f54132302845b643be00a6e4ffb1e56622a003325b",
+          "filename": "person_002",
+          "extension": ".jpg"
+        },
+        {
+          "label": "dancer",
+          "data_intent": "train",
+          "annotation": "{\"nose\": [0.49, 0.19], \"left_eye\": [0.45, 0.16], \"right_eye\": [0.53, 0.16], \"left_shoulder\": [0.35, 0.37], \"right_shoulder\": [0.61, 0.38], \"left_elbow\": [0.30, 0.58], \"right_elbow\": [0.66, 0.57], \"left_wrist\": [0.25, 0.74], \"right_wrist\": [0.71, 0.75]}",
+          "data_id": "7ae2efd5c6b258e5795c1e22f2cb27d1d27fbd931e08aca4fdc0e20ece968b63",
+          "filename": "person_003",
+          "extension": ".jpg"
+        }
+      ]
+    },
+    {
+      "id": "keypoint_detection-column",
+      "category": "keypoint_detection",
+      "data_id_strategy": "column",
+      "unique_id_column": "filename",
+      "total_rows_ingested": 3,
+      "dest_files": [
+        "person_001.jpg",
+        "person_002.jpg",
+        "person_003.jpg"
+      ],
+      "rows": [
+        {
+          "label": "person",
+          "data_intent": "train",
+          "annotation": "{\"nose\": [0.50, 0.20], \"left_eye\": [0.46, 0.16], \"right_eye\": [0.54, 0.16], \"left_shoulder\": [0.37, 0.39], \"right_shoulder\": [0.63, 0.39], \"left_elbow\": [0.31, 0.59], \"right_elbow\": [0.68, 0.59], \"left_wrist\": [0.27, 0.76], \"right_wrist\": [0.72, 0.76]}",
+          "data_id": "person_001",
+          "filename": "person_001",
+          "extension": ".jpg"
+        },
+        {
+          "label": "athlete",
+          "data_intent": "train",
+          "annotation": "{\"nose\": [0.51, 0.21], \"left_eye\": [0.48, 0.18], \"right_eye\": [0.55, 0.18], \"left_shoulder\": [0.39, 0.43], \"right_shoulder\": [0.64, 0.41], \"left_elbow\": [0.33, 0.63], \"right_elbow\": [0.70, 0.61], \"left_wrist\": [0.29, 0.78], \"right_wrist\": [0.74, 0.78]}",
+          "data_id": "person_002",
+          "filename": "person_002",
+          "extension": ".jpg"
+        },
+        {
+          "label": "dancer",
+          "data_intent": "train",
+          "annotation": "{\"nose\": [0.49, 0.19], \"left_eye\": [0.45, 0.16], \"right_eye\": [0.53, 0.16], \"left_shoulder\": [0.35, 0.37], \"right_shoulder\": [0.61, 0.38], \"left_elbow\": [0.30, 0.58], \"right_elbow\": [0.66, 0.57], \"left_wrist\": [0.25, 0.74], \"right_wrist\": [0.71, 0.75]}",
+          "data_id": "person_003",
+          "filename": "person_003",
+          "extension": ".jpg"
+        }
+      ]
+    },
+    {
+      "id": "semantic_segmentation-default",
+      "category": "semantic_segmentation",
+      "data_id_strategy": "content_hash",
+      "unique_id_column": null,
+      "total_rows_ingested": 3,
+      "dest_files": [
+        "image_001.jpg",
+        "image_001_mask.png",
+        "image_002.jpg",
+        "image_002_mask.png",
+        "image_003.jpg",
+        "image_003_mask.png"
+      ],
+      "rows": [
+        {
+          "mask_id": "image_001_mask",
+          "label": "road",
+          "data_intent": "train",
+          "data_id": "756ea6b45b7ae0dee26cd003f641f35c3fe6a518ea6515c51d1864e81b87dbe3",
+          "filename": "image_001",
+          "extension": ".jpg"
+        },
+        {
+          "mask_id": "image_002_mask",
+          "label": "building",
+          "data_intent": "train",
+          "data_id": "be1d294cde6c11053dab3be7e231d5581f950bef5d778d4fc3fe151135e60241",
+          "filename": "image_002",
+          "extension": ".jpg"
+        },
+        {
+          "mask_id": "image_003_mask",
+          "label": "person",
+          "data_intent": "train",
+          "data_id": "8e1921fbdbbd521f26f2271d46d813af3fa4c15af731e9a4860be4b5767d6748",
+          "filename": "image_003",
+          "extension": ".jpg"
+        }
+      ]
+    },
+    {
+      "id": "semantic_segmentation-column",
+      "category": "semantic_segmentation",
+      "data_id_strategy": "column",
+      "unique_id_column": "filename",
+      "total_rows_ingested": 3,
+      "dest_files": [
+        "image_001.jpg",
+        "image_001_mask.png",
+        "image_002.jpg",
+        "image_002_mask.png",
+        "image_003.jpg",
+        "image_003_mask.png"
+      ],
+      "rows": [
+        {
+          "mask_id": "image_001_mask",
+          "label": "road",
+          "data_intent": "train",
+          "data_id": "image_001",
+          "filename": "image_001",
+          "extension": ".jpg"
+        },
+        {
+          "mask_id": "image_002_mask",
+          "label": "building",
+          "data_intent": "train",
+          "data_id": "image_002",
+          "filename": "image_002",
+          "extension": ".jpg"
+        },
+        {
+          "mask_id": "image_003_mask",
+          "label": "person",
+          "data_intent": "train",
+          "data_id": "image_003",
+          "filename": "image_003",
+          "extension": ".jpg"
+        }
+      ]
+    }
+  ]
+}

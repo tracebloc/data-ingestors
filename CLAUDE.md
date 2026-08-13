@@ -58,6 +58,7 @@ the file extension — drives validation and file transfer.
   - `api/` -- API client for communicating with tracebloc backend
   - `database.py` -- MySQL/SQLAlchemy database operations
   - `file_transfer.py` -- secure file transfer to cluster storage
+  - `storage_contract.py` -- the ingest→trainer storage contract (framework column names, `data_id` strategies, the on-disk naming rule). Stdlib-only and mirrored verbatim by tracebloc-engine's `core/utils/ingest_contract.py`; change it here first (backend#1706)
   - `config.py` -- configuration
   - `utils/` -- shared utilities (incl. `TaskCategory` constants, logging)
 - **`templates/`** -- ingestor scripts used inside Docker containers
