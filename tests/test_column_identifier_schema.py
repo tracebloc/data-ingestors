@@ -145,30 +145,45 @@ def test_the_declared_quoting_is_what_the_code_emits() -> None:
 def test_the_contract_covers_every_rule_the_code_enforces() -> None:
     """code → JSON: the file may not omit a constraint the code applies.
 
-    Derived from behaviour rather than from a list, so a NEW rule added to
-    identifiers.py without a contract entry fails here instead of quietly
-    shrinking what a consumer tests.
+    Checks each rule class the code is known to enforce against a concrete
+    entry in the contract, so removing that entry from the JSON — dropping the
+    empty-string case, ``max_length``, or NUL from ``forbidden_characters`` —
+    fails here instead of quietly shrinking what a consumer generating from the
+    file would test.
     """
     contract = _contract()
     declared_forbidden = {
         chr(int(e["codepoint"][2:], 16)) for e in contract["forbidden_characters"]
     }
+    declared_max_length = contract.get("max_length")
+    empty_is_a_declared_case = any(
+        c["name"] == "" and c["valid"] is False for c in contract["cases"]
+    )
     # Probe the code with one representative of each rule class it is known to
-    # apply. Every rejection found here must be explained by the contract.
-    unexplained = []
-    for probe, explained_by in (
-        ("", "empty strings are covered by the cases list"),
-        ("a" * (contract["max_length"] + 1), "max_length"),
-        ("bad\x00col", "forbidden_characters"),
+    # apply. Each probe must be BOTH (a) rejected by the code — so the rule is
+    # really enforced — AND (b) backed by a concrete entry in the contract, so a
+    # consumer generating from the file tests it too. The bug this guards
+    # against is the published grammar silently dropping a rule the code still
+    # applies: without (b), deleting the empty-string case, ``max_length``, or
+    # the NUL entry would leave this test green. Probes are built from the code
+    # (its own MAX constant, not the contract's number) so a missing contract
+    # entry surfaces as an uncovered rule here, never as a mis-built probe.
+    gaps = []
+    for probe, covered_by_contract, handle in (
+        ("", empty_is_a_declared_case, "an empty-string rejecting case"),
+        (
+            "a" * (MAX_COLUMN_IDENTIFIER_LENGTH + 1),
+            isinstance(declared_max_length, int),
+            "a max_length entry",
+        ),
+        ("bad\x00col", "\x00" in declared_forbidden, "NUL in forbidden_characters"),
     ):
-        if is_valid_column_identifier(probe):
-            unexplained.append(
-                f"code ACCEPTS {probe!r}, contract implies it should not"
-            )
-    assert not unexplained, unexplained
-    assert (
-        "\x00" in declared_forbidden
-    ), "the code rejects NUL but the contract does not declare it forbidden"
+        assert (
+            is_valid_column_identifier(probe) is False
+        ), f"code no longer rejects {probe!r}; the enforced rule vanished"
+        if not covered_by_contract:
+            gaps.append(f"code rejects {probe!r} but the contract omits {handle}")
+    assert not gaps, gaps
     # Non-string input is a rule too, and a consumer in a typed language would
     # not infer it from the case list.
     assert is_valid_column_identifier(None) is False
