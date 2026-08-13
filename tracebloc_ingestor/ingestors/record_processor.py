@@ -31,6 +31,11 @@ from typing import Any, Dict, Optional
 
 import pandas as pd
 
+from ..storage_contract import (
+    EXTENSION_COLUMN,
+    IMAGE_NAME_COLUMN,
+    ROW_ID_COLUMN,
+)
 from ..utils.constants import Intent
 
 logger = logging.getLogger(__name__)
@@ -189,16 +194,16 @@ class RecordProcessor:
                 # collide and the upsert would collapse the dataset. It is
                 # merged here (not read from cleaned_record) because process()
                 # attaches filename only AFTER this method returns.
-                cleaned_record["data_id"] = self._content_hash(
-                    {**cleaned_record, "filename": record.get("filename")}
+                cleaned_record[ROW_ID_COLUMN] = self._content_hash(
+                    {**cleaned_record, IMAGE_NAME_COLUMN: record.get(IMAGE_NAME_COLUMN)}
                 )
             else:
-                cleaned_record["data_id"] = str(uuid.uuid4())
+                cleaned_record[ROW_ID_COLUMN] = str(uuid.uuid4())
             return cleaned_record
 
         unique_id = record.get(self.unique_id_column)
         if unique_id is not None and str(unique_id).strip():
-            cleaned_record["data_id"] = str(unique_id).strip()
+            cleaned_record[ROW_ID_COLUMN] = str(unique_id).strip()
             return cleaned_record
         else:
             logger.warning(
@@ -295,8 +300,8 @@ class RecordProcessor:
 
             # Add ingestor_id to the record
             cleaned_record["ingestor_id"] = self.ingestor_id
-            cleaned_record["filename"] = record.get("filename")
-            cleaned_record["extension"] = record.get("extension")
+            cleaned_record[IMAGE_NAME_COLUMN] = record.get(IMAGE_NAME_COLUMN)
+            cleaned_record[EXTENSION_COLUMN] = record.get(EXTENSION_COLUMN)
             # The cleaned record carries ONLY schema-declared DB columns +
             # framework columns. A sidecar's link column is a table column IFF
             # the schema declares it: semantic_segmentation MUST declare mask_id
