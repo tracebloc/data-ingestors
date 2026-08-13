@@ -22,7 +22,7 @@ whitespace-tokenized word per token):
 import logging
 import os
 import re
-from typing import Any, List, Optional, Tuple
+from typing import Any, List, Tuple
 
 import pandas as pd
 
@@ -80,8 +80,8 @@ class BIOLabelValidator(BaseValidator):
                     is_valid=False, errors=["No data found to validate"]
                 )
 
-            filename_col = self._resolve_column(df, self.filename_column)
-            label_col = self._resolve_column(df, self.label_column)
+            filename_col = self._match_column(df.columns, self.filename_column)
+            label_col = self._match_column(df.columns, self.label_column)
             missing = []
             if filename_col is None:
                 missing.append(self.filename_column)
@@ -215,11 +215,3 @@ class BIOLabelValidator(BaseValidator):
             f"type). Valid under IOB1 but malformed under IOB2; if you intended "
             f"IOB2, the entity should start with 'B-'."
         ]
-
-    @staticmethod
-    def _resolve_column(df: pd.DataFrame, name: str) -> Optional[str]:
-        """Return the actual column name matching ``name`` case-insensitively."""
-        if name in df.columns:
-            return name
-        lowered = {c.lower(): c for c in df.columns}
-        return lowered.get(name.lower())

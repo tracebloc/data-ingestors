@@ -104,7 +104,7 @@ class TabSeparatedRecordValidator(BaseValidator):
                 # IngestableRecordsValidator's job, not this one.
                 return self._create_result(is_valid=True, metadata={"rows_checked": 0})
 
-            filename_col = self._resolve_column(df, self.filename_column)
+            filename_col = self._match_column(df.columns, self.filename_column)
             if filename_col is None:
                 return self._create_result(
                     is_valid=False,
@@ -219,11 +219,3 @@ class TabSeparatedRecordValidator(BaseValidator):
             )
 
         return None
-
-    @staticmethod
-    def _resolve_column(df: Any, name: str) -> Optional[str]:
-        """Return the actual column name matching ``name`` case-insensitively."""
-        if name in df.columns:
-            return name
-        lowered = {c.lower(): c for c in df.columns}
-        return lowered.get(name.lower())
