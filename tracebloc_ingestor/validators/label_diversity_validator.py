@@ -81,7 +81,7 @@ class LabelDiversityValidator(BaseValidator):
                     metadata={"rows_checked": 0, "label_column": self.label_column},
                 )
 
-            col = self._resolve_column(df, self.label_column)
+            col = self._match_column(df.columns, self.label_column)
             if col is None:
                 # The label column isn't in the CSV — caller's
                 # responsibility to surface (DataValidator or the
@@ -219,7 +219,7 @@ class LabelDiversityValidator(BaseValidator):
                 # #252, medium) — or (b) build a ``usecols`` spelling
                 # pandas then rejected, erroring the read.
                 header_df = pd.read_csv(path, nrows=0, encoding="utf-8")
-                actual = self._resolve_column(header_df, self.label_column)
+                actual = self._match_column(header_df.columns, self.label_column)
                 if actual is None:
                     # Label column genuinely absent — benign skip; the
                     # ingestor / DataValidator report the missing column.
@@ -309,22 +309,4 @@ class LabelDiversityValidator(BaseValidator):
             return self.schema[actual]
         target = str(actual).strip().lower()
         normalised = {str(k).strip().lower(): v for k, v in self.schema.items()}
-        return normalised.get(target)
-
-    @staticmethod
-    def _resolve_column(df: pd.DataFrame, name: str) -> Optional[str]:
-        """Return the actual column name matching ``name`` case- AND
-        whitespace-insensitively.
-
-        CSVIngestor strips column-name whitespace on read
-        (``chunk.columns.str.strip()``), so a header like ``" label "`` is
-        ingested as ``label``. Resolving against the raw header without the
-        same strip treated the column as missing, skipped the diversity check
-        with a warning, and let a single-class CSV pass preflight (bugbot
-        #252). Match the strip here so the gate sees the same column the
-        ingestor does."""
-        if name in df.columns:
-            return name
-        target = str(name).strip().lower()
-        normalised = {str(c).strip().lower(): c for c in df.columns}
         return normalised.get(target)

@@ -2,8 +2,15 @@
 
 This module is the authoritative definition of what counts as a valid *column*
 identifier across the tracebloc platform. It is deliberately dependency-light
-(stdlib only) so the trainer (``tracebloc-client``) can mirror it verbatim
-without taking a dependency on the rest of this package.
+(stdlib only) so the trainer (``tracebloc-engine`` — renamed from
+``tracebloc-client``) can mirror it verbatim without taking a dependency on the
+rest of this package.
+
+It is published machine-readably as ``schema/column_identifier.v1.json``, pinned
+to this module in both directions by ``tests/test_column_identifier_schema.py``.
+Consumers should GENERATE their cases from that file rather than transcribing
+the table below: two hand-copied copies is what let ISSUE #382's disagreement
+stay silent until training (backend#1780).
 
 The reconciliation (ISSUE #382)
 -------------------------------
