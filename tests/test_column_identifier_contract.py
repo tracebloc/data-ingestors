@@ -1,7 +1,7 @@
 """Cross-repo column-identifier contract (ISSUE #382).
 
 This pins the canonical column-name grammar that BOTH the ingestor (here) and
-the trainer (``tracebloc-client`` core/utils/database.py) must agree on. The
+the trainer (``tracebloc-engine`` core/utils/database.py) must agree on. The
 trainer mirrors ``tracebloc_ingestor.identifiers`` verbatim and has its own copy
 of this table plus a pin test; together they keep the two repos from drifting.
 
