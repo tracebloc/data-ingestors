@@ -128,9 +128,9 @@ def test_every_forbidden_character_is_actually_rejected() -> None:
         cp = entry["codepoint"]
         assert cp.startswith("U+"), f"unparseable codepoint {cp!r}"
         ch = chr(int(cp[2:], 16))
-        assert is_valid_column_identifier(f"bad{ch}col") is False, (
-            f"the contract forbids {entry['name']} but the code accepts it"
-        )
+        assert (
+            is_valid_column_identifier(f"bad{ch}col") is False
+        ), f"the contract forbids {entry['name']} but the code accepts it"
 
 
 def test_the_declared_quoting_is_what_the_code_emits() -> None:
@@ -162,11 +162,13 @@ def test_the_contract_covers_every_rule_the_code_enforces() -> None:
         ("bad\x00col", "forbidden_characters"),
     ):
         if is_valid_column_identifier(probe):
-            unexplained.append(f"code ACCEPTS {probe!r}, contract implies it should not")
+            unexplained.append(
+                f"code ACCEPTS {probe!r}, contract implies it should not"
+            )
     assert not unexplained, unexplained
-    assert "\x00" in declared_forbidden, (
-        "the code rejects NUL but the contract does not declare it forbidden"
-    )
+    assert (
+        "\x00" in declared_forbidden
+    ), "the code rejects NUL but the contract does not declare it forbidden"
     # Non-string input is a rule too, and a consumer in a typed language would
     # not infer it from the case list.
     assert is_valid_column_identifier(None) is False

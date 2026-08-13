@@ -29,17 +29,17 @@ from tracebloc_ingestor.identifiers import (
 # The issue's parametrisation, plus the accept/reject verdict under the
 # reconciled grammar. (name, should_be_valid)
 CONTRACT_CASES = [
-    ("123_gene", True),                       # digit-leading — quotable
-    ("_ok", True),                            # leading underscore
-    ("feature-1", True),                      # hyphen — quotable
-    ("col name", True),                       # space — quotable
-    ("P08254|MMP3", True),                    # proteomics pipe header (#184/#185)
-    ("Körpergröße", True),                    # clinical unicode header (#739)
-    ("feature.1", True),                      # dot
-    ("a" * MAX_COLUMN_IDENTIFIER_LENGTH, True),       # exactly 64 — boundary OK
+    ("123_gene", True),  # digit-leading — quotable
+    ("_ok", True),  # leading underscore
+    ("feature-1", True),  # hyphen — quotable
+    ("col name", True),  # space — quotable
+    ("P08254|MMP3", True),  # proteomics pipe header (#184/#185)
+    ("Körpergröße", True),  # clinical unicode header (#739)
+    ("feature.1", True),  # dot
+    ("a" * MAX_COLUMN_IDENTIFIER_LENGTH, True),  # exactly 64 — boundary OK
     ("a" * (MAX_COLUMN_IDENTIFIER_LENGTH + 1), False),  # 65 chars — too long
-    ("", False),                              # empty
-    ("bad\x00col", False),                    # NUL — illegal in identifier
+    ("", False),  # empty
+    ("bad\x00col", False),  # NUL — illegal in identifier
 ]
 
 
