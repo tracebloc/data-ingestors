@@ -185,3 +185,39 @@ def test_iob2_check_skipped_when_tag_format_invalid(validator, texts_dir):
     assert not result.is_valid
     assert any("invalid BIO tag" in e for e in result.errors)
     assert not result.warnings
+
+
+def test_csv_padded_header_still_resolves_label(texts_dir, tmp_path):
+    """``filename, label`` — the header Excel writes by default — must resolve,
+    not report the label column missing.
+
+    Regression (backend#1828): BIOLabelValidator carried a private
+    ``_resolve_column`` that lower-cased but did NOT strip, so pandas' parsed
+    header ``[" label"]`` never matched the configured ``label``. The dataset
+    was rejected for a column the user can see in their file, on
+    token_classification only, while sibling validators in the same preflight
+    run resolved it fine. Exercised through the real CSV read path (a raw file,
+    not a DataFrame) because that is where the padding survives —
+    ``BaseValidator._load_data`` calls ``pd.read_csv`` without
+    ``skipinitialspace``.
+    """
+    _write(texts_dir, "s1", "John Smith")
+    path = tmp_path / "padded.csv"
+    path.write_text("filename, label\ns1,B-PER I-PER\n", encoding="utf-8")
+
+    result = BIOLabelValidator().validate(str(path))
+
+    assert result.is_valid, result.errors
+    assert result.metadata["rows_checked"] == 1
+
+
+def test_csv_padded_filename_header_still_resolves(texts_dir, tmp_path):
+    """The same strip must apply to the ``filename`` column, which is padded
+    whenever it is not the first CSV field (backend#1828)."""
+    _write(texts_dir, "s1", "John Smith")
+    path = tmp_path / "padded_fn.csv"
+    path.write_text("label, filename\nB-PER I-PER,s1\n", encoding="utf-8")
+
+    result = BIOLabelValidator().validate(str(path))
+
+    assert result.is_valid, result.errors

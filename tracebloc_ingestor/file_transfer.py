@@ -20,6 +20,10 @@ from tenacity import (
 )
 
 from tracebloc_ingestor import Config
+from tracebloc_ingestor.storage_contract import (
+    EXTENSION_COLUMN,
+    IMAGE_NAME_COLUMN,
+)
 from tracebloc_ingestor.utils.fs import DEST_DIR_MODE as _DEST_DIR_MODE
 from tracebloc_ingestor.utils.fs import ensure_reclaimable_dir
 from tracebloc_ingestor.utils.constants import (
@@ -259,8 +263,12 @@ def image_transfer(
         # Copy file with retry logic
         _copy_file_with_retry(src_path, image_dest_path)
 
-        record["filename"] = os.path.splitext(filename_with_ext)[0]
-        record["extension"] = extension
+        # THE contract (backend#1706): the stem the file was just written under
+        # is what lands in the ``filename`` column, and that column — never
+        # ``data_id`` — is how the trainer resolves this row back to the file.
+        # See tracebloc_ingestor.storage_contract.
+        record[IMAGE_NAME_COLUMN] = os.path.splitext(filename_with_ext)[0]
+        record[EXTENSION_COLUMN] = extension
 
         logger.info(f"{GREEN}Successfully copied image: {filename}{RESET}")
         return record
