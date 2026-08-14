@@ -121,6 +121,32 @@ def test_hot_loop_does_not_log_record_content(caplog):
     assert SECRET not in caplog.text
 
 
+def test_process_catch_all_never_logs_the_exception_message(caplog, monkeypatch):
+    """The catch-all in ``RecordProcessor.process`` is a content leak by default.
+
+    Everything raised inside that ``try`` has the record's own cells in scope: a
+    driver rejecting a value quotes it, and a plain ``ValueError`` from casting a
+    cell embeds it. So the handler must surface the exception CLASS, never its
+    message (backend#1879).
+
+    Pinned because the fix is a one-line substitution that reads like noise —
+    ``str(e)`` back in place would restore the leak silently, and the engine's
+    identical hole survived for exactly that reason: the concept existed, the
+    coverage did not.
+    """
+    rp = _rp()
+    monkeypatch.setattr(
+        rp, "_map_unique_id",
+        lambda *a, **k: (_ for _ in ()).throw(ValueError(f"bad value {SECRET!r} in column x")),
+    )
+    with caplog.at_level(logging.ERROR):
+        out = rp.process({"x": 1.0, "y": "a"})
+    assert out is None
+    assert SECRET not in caplog.text          # the whole point
+    assert "ValueError" in caplog.text        # the class is the actionable part
+    assert "Error processing record" in caplog.text
+
+
 def test_safe_db_error_names_classes_never_messages():
     from sqlalchemy.exc import OperationalError
 
