@@ -47,13 +47,21 @@ jobs:
           pip install -e .
 
       - name: Run pytest with coverage
-        run: |
-          pytest \
-            --cov=tracebloc_ingestor \
-            --cov-report=term \
-            --cov-report=xml \
-            --cov-report=html \
-            --cov-fail-under=95
+        # `make coverage` (backend#1606). The Makefile's comment on that target
+        # claimed it was "tests.yml exactly"; it was not — this step invoked a
+        # bare `pytest` while the target scoped to tests/. Now the claim is
+        # structural instead of maintained by hand.
+        #
+        # That scope change applies here: a bare `pytest` also collected e2e/,
+        # which SKIPS ITSELF in this job for want of a MySQL service. The e2e
+        # suite has its own required check (`e2e (real MySQL)`) that runs it
+        # against a real database, so nothing stops being tested — this job just
+        # stops collecting six files it was never going to execute.
+        #
+        # The scope is not a detail to "fix" back: a bare pytest on a developer
+        # machine with MySQL up runs real ingestion that creates and drops
+        # tables (Bugbot, #461), which is why the Makefile is the narrow one.
+        run: make coverage
 
       - name: Coverage summary
         if: always()

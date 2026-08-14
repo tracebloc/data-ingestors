@@ -98,10 +98,28 @@ lint:
 test:
 	$(PYTEST) tests/ -q
 
-# coverage: tests.yml exactly — the 95% floor included.
+# coverage: tests.yml's pytest job exactly — the 95% floor and the HTML report
+# it uploads as an artifact.
+#
+# "Exactly" is now STRUCTURAL: tests.yml calls this target (backend#1606). It
+# claimed "exactly" before and was not — the workflow invoked a bare `pytest`
+# and added --cov-report=html, so the two differed in both scope and output
+# while a comment here asserted they did not.
+#
+# THE tests/ SCOPE NOW APPLIES TO CI TOO, and that is the right direction of
+# travel rather than a concession. Scoping is the deliberate decision from
+# `test` above (Bugbot, #461): a bare `pytest` also collects e2e/, which on a
+# developer machine with a MySQL up would run real ingestion that creates and
+# drops tables. The Makefile must not widen to match CI.
+#
+# Narrowing CI loses nothing measurable: e2e/ skips itself in that job for want
+# of a MySQL, and the e2e suite has its own REQUIRED check (`e2e (real MySQL)`,
+# e2e.yml) that runs it against a real database. A unit-coverage job measuring
+# a suite that is skipped by construction was never the intent.
 .PHONY: coverage
 coverage:
-	$(PYTEST) tests/ --cov=tracebloc_ingestor --cov-report=term --cov-report=xml --cov-fail-under=95
+	$(PYTEST) tests/ --cov=tracebloc_ingestor --cov-report=term --cov-report=xml \
+	  --cov-report=html --cov-fail-under=95
 
 # e2e: e2e.yml — real ingestion against a real MySQL with an in-process
 # mock backend. Needs a database, hence the explicit target rather than
