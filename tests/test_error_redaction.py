@@ -136,14 +136,17 @@ def test_process_catch_all_never_logs_the_exception_message(caplog, monkeypatch)
     """
     rp = _rp()
     monkeypatch.setattr(
-        rp, "_map_unique_id",
-        lambda *a, **k: (_ for _ in ()).throw(ValueError(f"bad value {SECRET!r} in column x")),
+        rp,
+        "_map_unique_id",
+        lambda *a, **k: (_ for _ in ()).throw(
+            ValueError(f"bad value {SECRET!r} in column x")
+        ),
     )
     with caplog.at_level(logging.ERROR):
         out = rp.process({"x": 1.0, "y": "a"})
     assert out is None
-    assert SECRET not in caplog.text          # the whole point
-    assert "ValueError" in caplog.text        # the class is the actionable part
+    assert SECRET not in caplog.text  # the whole point
+    assert "ValueError" in caplog.text  # the class is the actionable part
     assert "Error processing record" in caplog.text
 
 
