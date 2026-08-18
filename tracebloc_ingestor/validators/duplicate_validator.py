@@ -176,23 +176,48 @@ class DuplicateValidator(BaseValidator):
         extra = int(duplicated.sum() - len(duplicated))  # rows beyond the first
         sample = list(duplicated.index[:10])
         suffix = " …" if len(duplicated) > 10 else ""
+        # Does the run's data_id column IS the filename column? Then duplicate
+        # filenames are duplicate data_ids and the upsert collapses them — the
+        # opposite of what an id column usually means (bugbot #510).
+        # ``_match_column`` is the ONLY sanctioned resolver (see base.py), and
+        # resolving both sides through it keeps the comparison consistent with
+        # how the filename column itself was found.
+        id_is_filename = bool(
+            self._unique_id_column
+            and self._match_column(header, self._unique_id_column) == filename_col
+        )
         return [
             f"{len(duplicated)} filename(s) appear more than once in the CSV "
             f"({extra} duplicate row(s)): {sample}{suffix}. "
-            f"{self._duplicate_outcome_sentence()} Remove the duplicates if "
-            f"this is unintended."
+            f"{self._duplicate_outcome_sentence(id_is_filename)} Remove the "
+            f"duplicates if this is unintended."
         ]
 
-    def _duplicate_outcome_sentence(self) -> str:
+    def _duplicate_outcome_sentence(self, id_is_filename: bool = False) -> str:
         """What actually happens to a repeated filename, per ``data_id`` source.
 
         Under the ``content_hash`` default (#350) the warning's old "these will
         be ingested as separate records" is only half-true: byte-identical rows
         now collapse into one stored row via the ``data_id`` UNIQUE upsert
         (#225), while same-filename/different-content rows still land
-        separately. ``uuid`` and an explicit id column both keep every row
-        (#377).
+        separately. ``uuid`` keeps every row, and so does an id column — UNLESS
+        that column IS the filename, in which case duplicate filenames are
+        duplicate ids and the upsert collapses them hardest of all (#377).
+
+        Args:
+            id_is_filename: The run's ``unique_id_column`` resolves to the
+                CSV's filename column. ``keypoint_detection`` and
+                ``semantic_segmentation`` both ship ``unique_id_column=
+                "filename"``, so this is the shipped default for two of the
+                categories this warning fires on — not a corner case.
         """
+        if id_is_filename:
+            return (
+                f"Every duplicate collapses into ONE stored record: data_id "
+                f"comes from the {self._unique_id_column!r} column, so rows "
+                f"sharing a filename share a data_id and the UNIQUE upsert "
+                f"keeps only the last one — regardless of their content."
+            )
         if self._unique_id_column:
             return (
                 f"Each row keeps its own record — data_id comes from the "
@@ -216,8 +241,8 @@ class DuplicateValidator(BaseValidator):
         return (
             "Depending on the run's data_id strategy these either collapse into "
             "one stored record (content_hash, when filename AND content are "
-            "identical) or are ingested as separate records (uuid, or an "
-            "explicit id column)."
+            "identical — or any id column that IS the filename) or are ingested "
+            "as separate records (uuid, or an id column with distinct values)."
         )
 
     def _check_directory_exists(self) -> bool:

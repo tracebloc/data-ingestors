@@ -165,3 +165,32 @@ def test_duplicate_warning_unknown_strategy_describes_both_outcomes(tmp_path, ma
     assert "content_hash" in warning and "uuid" in warning
     assert "collapse into one stored record" in warning
     assert "ingested as separate records" in warning
+
+
+def test_duplicate_warning_filename_as_id_column_says_rows_collapse(tmp_path, make_csv):
+    """bugbot #510: unique_id_column="filename" is what keypoint_detection and
+    semantic_segmentation ship, and it makes duplicate filenames duplicate
+    data_ids — so the upsert collapses them. Promising "each row keeps its own
+    record" there asserts the exact opposite of what ingest does."""
+    warning = _dup_warning(
+        tmp_path, make_csv, data_id_strategy="uuid", unique_id_column="filename"
+    )
+    assert "collapses into ONE stored record" in warning
+    assert "keeps only the last one" in warning
+    assert "Each row keeps its own record" not in warning
+
+
+def test_duplicate_warning_filename_as_id_column_matches_case_insensitively(
+    tmp_path, make_csv
+):
+    """The id column is resolved with _match_column, the same case/whitespace-
+    insensitive resolver that found the filename column — so a "FileName"
+    header and a "filename" id config are the same column."""
+    import pandas as pd
+
+    path = make_csv(pd.DataFrame({"FileName": ["a", "a"]}))
+    result = DuplicateValidator(
+        dest_path=str(tmp_path / "new_table"), unique_id_column=" filename "
+    ).validate(str(path))
+    warning = next(w for w in result.warnings if "appear more than once" in w)
+    assert "collapses into ONE stored record" in warning
