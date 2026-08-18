@@ -29,15 +29,29 @@ class DuplicateValidator(BaseValidator):
     """
 
     def __init__(
-        self, dest_path: Optional[str] = None, name: str = "Duplicate Validator"
+        self,
+        dest_path: Optional[str] = None,
+        name: str = "Duplicate Validator",
+        data_id_strategy: Optional[str] = None,
+        unique_id_column: Optional[str] = None,
     ):
         """Initialize the duplicate validator.
 
         Args:
             dest_path: Destination path to check (defaults to config.DEST_PATH)
             name: Human-readable name of the validator
+            data_id_strategy: The run's ``data_id`` strategy (``"content_hash"``
+                / ``"uuid"``), threaded in by ``map_validators`` so the
+                within-CSV duplicate warning describes what actually happens to
+                a duplicate row (#377). ``None`` (direct construction) keeps a
+                strategy-agnostic wording that covers both outcomes.
+            unique_id_column: The run's ``data_id`` source column, if any. It
+                wins over ``data_id_strategy`` in ``RecordProcessor``, so it
+                wins here too.
         """
         super().__init__(name)
+        self._data_id_strategy = data_id_strategy
+        self._unique_id_column = unique_id_column
         # Store the explicit override only; the config-backed default is
         # resolved lazily in the ``dest_path`` property so the run's injected
         # Config (bound by ``map_validators`` AFTER construction, P4b) wins.
@@ -164,10 +178,47 @@ class DuplicateValidator(BaseValidator):
         suffix = " …" if len(duplicated) > 10 else ""
         return [
             f"{len(duplicated)} filename(s) appear more than once in the CSV "
-            f"({extra} duplicate row(s)): {sample}{suffix}. These will be "
-            f"ingested as separate records — remove the duplicates if this is "
-            f"unintended."
+            f"({extra} duplicate row(s)): {sample}{suffix}. "
+            f"{self._duplicate_outcome_sentence()} Remove the duplicates if "
+            f"this is unintended."
         ]
+
+    def _duplicate_outcome_sentence(self) -> str:
+        """What actually happens to a repeated filename, per ``data_id`` source.
+
+        Under the ``content_hash`` default (#350) the warning's old "these will
+        be ingested as separate records" is only half-true: byte-identical rows
+        now collapse into one stored row via the ``data_id`` UNIQUE upsert
+        (#225), while same-filename/different-content rows still land
+        separately. ``uuid`` and an explicit id column both keep every row
+        (#377).
+        """
+        if self._unique_id_column:
+            return (
+                f"Each row keeps its own record — data_id comes from the "
+                f"{self._unique_id_column!r} column, so rows with distinct ids "
+                f"are ingested separately."
+            )
+        if self._data_id_strategy == "uuid":
+            return (
+                "These will be ingested as separate records (data_id strategy "
+                "'uuid' assigns a fresh id per row)."
+            )
+        if self._data_id_strategy == "content_hash":
+            return (
+                "Under data_id strategy 'content_hash', rows that are identical "
+                "in both filename and content collapse into a single stored "
+                "record; rows sharing a filename but differing in content (e.g. "
+                "a different label) are ingested separately."
+            )
+        # Strategy unknown (validator constructed outside ``map_validators``):
+        # describe both outcomes rather than assert the wrong one.
+        return (
+            "Depending on the run's data_id strategy these either collapse into "
+            "one stored record (content_hash, when filename AND content are "
+            "identical) or are ingested as separate records (uuid, or an "
+            "explicit id column)."
+        )
 
     def _check_directory_exists(self) -> bool:
         """Check if the destination directory exists.
