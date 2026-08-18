@@ -36,7 +36,10 @@ def test_is_directory_empty_true(tmp_path):
 
 def test_is_directory_empty_handles_missing(tmp_path):
     # iterdir on a nonexistent dir raises -> caught -> returns False.
-    assert DuplicateValidator(dest_path=str(tmp_path / "nope"))._is_directory_empty() is False
+    assert (
+        DuplicateValidator(dest_path=str(tmp_path / "nope"))._is_directory_empty()
+        is False
+    )
 
 
 def test_create_directory_if_needed(tmp_path):
