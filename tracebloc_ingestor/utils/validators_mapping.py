@@ -70,8 +70,17 @@ def map_validators(
     # Classification-family datasets need >= 2 distinct labels.
     if spec.is_classification:
         validators.append(label_diversity_validator(options))
-    # Universal tail: a unique table name + de-duplicated record IDs.
-    validators += [TableNameValidator(), DuplicateValidator()]
+    # Universal tail: a unique table name + de-duplicated record IDs. The
+    # duplicate warning's wording depends on how ``data_id`` is derived — an
+    # explicit id column and 'uuid' keep every duplicate row, 'content_hash'
+    # collapses the byte-identical ones — so thread both through (#377).
+    validators += [
+        TableNameValidator(),
+        DuplicateValidator(
+            data_id_strategy=options.get("data_id_strategy"),
+            unique_id_column=options.get("unique_id_column"),
+        ),
+    ]
 
     # Inject the run's Config into every validator (P4b). Optional so direct
     # callers / tests that omit it keep the prior behavior: the path-reading
