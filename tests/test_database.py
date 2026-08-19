@@ -62,6 +62,30 @@ def test_init_builds_engine(db, mock_engine_factory):
     conn.commit.assert_called()
 
 
+def test_create_database_ddl_backtick_quotes_db_name(mock_engine_factory):
+    # backend#952: DB_NAME is interpolated into a CREATE DATABASE DDL that
+    # can't be parameterized, so it must be backtick-quoted.
+    Database(
+        Config(
+            EDGE_ENV="local", DB_USER="tb_ingest", DB_PASSWORD="pw", DB_NAME="cust_db"
+        )
+    )
+    _, _, conn = mock_engine_factory
+    ddl = str(conn.execute.call_args_list[0].args[0])
+    assert ddl == "CREATE DATABASE IF NOT EXISTS `cust_db`"
+
+
+def test_create_database_ddl_escapes_injection_in_db_name(mock_engine_factory):
+    # A backtick in DB_NAME must be doubled (MySQL escaping), not passed raw —
+    # otherwise it breaks out of the identifier. backend#952.
+    Database(
+        Config(EDGE_ENV="local", DB_USER="tb_ingest", DB_PASSWORD="pw", DB_NAME="a`b")
+    )
+    _, _, conn = mock_engine_factory
+    ddl = str(conn.execute.call_args_list[0].args[0])
+    assert ddl == "CREATE DATABASE IF NOT EXISTS `a``b`"
+
+
 # ---------------------------------------------------------------------------
 # _get_sqlalchemy_type (pure)
 # ---------------------------------------------------------------------------

@@ -40,7 +40,7 @@ from tenacity import (
     before_sleep_log,
 )
 from .config import Config
-from .identifiers import MAX_COLUMN_IDENTIFIER_LENGTH
+from .identifiers import MAX_COLUMN_IDENTIFIER_LENGTH, quote_column_identifier
 from .utils.typo_suggest import suggest_type as _suggest_type
 
 # Configure unified logging with config
@@ -129,8 +129,14 @@ class Database:
         )
 
         with engine.connect() as connection:
+            # DB_NAME is operator/env-supplied and interpolated into DDL that
+            # can't be parameterized; backtick-quote it via the shared
+            # MySQL-identifier quoter so it can't inject (backend#952).
             connection.execute(
-                text(f"CREATE DATABASE IF NOT EXISTS {self.config.DB_NAME}")
+                text(
+                    "CREATE DATABASE IF NOT EXISTS "
+                    f"{quote_column_identifier(self.config.DB_NAME)}"
+                )
             )
             connection.commit()
 
