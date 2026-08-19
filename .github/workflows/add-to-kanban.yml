@@ -9,6 +9,11 @@ on:
 jobs:
   add-to-project:
     runs-on: ubuntu-latest
+    # NO GITHUB_TOKEN AT ALL (saadqbal, #2181). Every call in this job authenticates
+    # as the App, so the workflow token needs nothing -- and an empty grant is the
+    # only version of that claim a reader can check. Free, and it means the least-
+    # privilege story covers both credentials in the job rather than just the loud one.
+    permissions: {}
     steps:
       # Board writes authenticate as the tracebloc-release-train App (backend#2036),
       # not a human's PAT. `owner:` yields an ORG-scoped installation token; a
@@ -25,6 +30,60 @@ jobs:
           app-id: ${{ secrets.RELEASE_TRAIN_APP_ID }}
           private-key: ${{ secrets.RELEASE_TRAIN_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
+          # SCOPED TO THIS REPO, or the two reads below land org-wide (saadqbal,
+          # #2181). `owner:` alone does not narrow anything -- run 32239403796 says
+          # so in as many words: "Input 'repositories' is not set. Creating token for
+          # all repositories owned by tracebloc." A token calling itself
+          # least-privilege while carrying issue+PR read across all 19 installed
+          # repos is the claim this PR exists to stop making.
+          #
+          # `organization_projects` is an ORG-level permission and is not affected by
+          # repo scoping, so the board write should be unchanged -- but that is an
+          # assumption, and it is the same class of assumption that broke the first
+          # attempt, so the verification run is what settles it rather than this
+          # comment. If it is wrong the failure is LOUD (see below), which is what
+          # makes trying it cheap.
+          repositories: ${{ github.event.repository.name }}
+          # Least privilege (backend#2166): without any `permission-*` the token
+          # carries the App's FULL installation grant. actions/add-to-project needs
+          # THREE scopes, not one: it must RESOLVE the triggering issue/PR node
+          # before it can add it to the board, so it needs read on both content
+          # types (this workflow fires on `issues` and `pull_request`) in addition
+          # to the project write. Projects-write alone leaves the node unresolvable
+          # -- the add fails with "Could not resolve to a node with the global id".
+          #
+          # WHAT IS ACTUALLY DEMONSTRATED, and what is not. Stated narrowly because
+          # two earlier versions of this paragraph each overclaimed in a different
+          # direction, and this text is copied verbatim into 17 repos -- a wrong
+          # argument here is a wrong argument 17 times, in a byte-compared file
+          # nobody re-derives.
+          #
+          # DEMONSTRATED: a MISSING READ scope fails loudly. Run 32239403796 on this
+          # branch, at commit 218f0b13 (projects-write only), errored with
+          # `Could not resolve to a node with the global id` and the job went RED --
+          # `add-to-project` routes GraphQL errors through `setFailed`.
+          #
+          # NOT DEMONSTRATED: the case the FIRST version of this comment described --
+          # the token resolving the node fine and then 403ing the BOARD WRITE. No run
+          # has ever produced it. So "fails loudly" is proven for the read scopes and
+          # is an expectation, not a measurement, for the write.
+          #
+          # AND ONE RUN THAT LOOKED LIKE EVIDENCE IS NOT (aptracebloc). The previous
+          # wording cited run 32237283072 as a second scope failure. It is not one:
+          # it ran on `develop`, whose file at that sha passes NO `permission-*` at
+          # all (the App's full grant), and it failed on
+          # `Could not resolve to a node with the global id of I_kwDONNfQt88...` --
+          # a node a fully-privileged token also cannot see, i.e. an issue that no
+          # longer exists (this workflow fires on `issues: transferred`). Run
+          # 32237067262, the SAME develop sha, succeeded 2m34s earlier. A dead node,
+          # not a permission.
+          #
+          # The proof this is right is therefore still a LANDED CARD, not a passing
+          # mint: a mint can succeed with a scope the board write then needs and
+          # lacks, and that is the one path nothing here has exercised.
+          permission-issues: read
+          permission-pull-requests: read
+          permission-organization-projects: write
 
       - uses: actions/add-to-project@5afcf98fcd03f1c2f92c3c83f58ae24323cc57fd # v2.0.0
         with:
