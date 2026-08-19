@@ -608,6 +608,11 @@ class BaseIngestor(ABC):
                 # default UUID / content_hash strategies; non-grouped
                 # factories ignore the key.
                 "unique_id_column": self.unique_id_column,
+                # The run's data_id strategy, so DuplicateValidator's
+                # within-CSV duplicate-filename warning describes the real
+                # outcome: 'content_hash' collapses byte-identical rows via
+                # the data_id UNIQUE upsert, 'uuid' keeps them all (#377).
+                "data_id_strategy": self.data_id_strategy,
             },
             # Inject the run's resolved Config so path-reading validators
             # (SRC_PATH / DEST_PATH / TABLE_NAME) use it instead of a

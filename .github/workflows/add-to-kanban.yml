@@ -10,7 +10,24 @@ jobs:
   add-to-project:
     runs-on: ubuntu-latest
     steps:
+      # Board writes authenticate as the tracebloc-release-train App (backend#2036),
+      # not a human's PAT. `owner:` yields an ORG-scoped installation token; a
+      # repo-scoped one cannot write the org project. No fallback to the PAT: a
+      # fallback would let a broken App path keep working silently.
+      #
+      # This workflow also fires on DEPENDABOT PRs, which GitHub gates on a separate
+      # secret scope -- both app secrets are set there too, or Dependabot PRs would
+      # stop reaching the board with `Input required and not supplied`.
+      - name: Mint an installation token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.RELEASE_TRAIN_APP_ID }}
+          private-key: ${{ secrets.RELEASE_TRAIN_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
       - uses: actions/add-to-project@5afcf98fcd03f1c2f92c3c83f58ae24323cc57fd # v2.0.0
         with:
           project-url: https://github.com/orgs/tracebloc/projects/2
-          github-token: ${{ secrets.PROJECTS_KANBAN_TOKEN }}
+          github-token: ${{ steps.app-token.outputs.token }}
+
