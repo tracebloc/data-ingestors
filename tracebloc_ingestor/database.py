@@ -19,7 +19,6 @@ from sqlalchemy import (
     Index,
     bindparam,
     inspect,
-
 )
 from sqlalchemy.engine import Engine
 from sqlalchemy import LargeBinary
@@ -99,9 +98,7 @@ def _execute_with_retry(connection, stmt):
             # Swallow it so the original transient error propagates to
             # tenacity for the retry (or, on the last attempt, to the
             # caller's existing error path).
-            logger.debug(
-                f"connection.rollback() failed between retries: {rb_exc}"
-            )
+            logger.debug(f"connection.rollback() failed between retries: {rb_exc}")
         raise
 
 
@@ -148,7 +145,7 @@ class Database:
 
     def _get_sqlalchemy_type(self, mysql_type: str):
         """Convert MySQL type to SQLAlchemy type.
-        
+
         Extracts the base type (before parentheses) and matches exactly to avoid
         substring issues (e.g., "DATE" matching "DATETIME").
         """
@@ -175,10 +172,10 @@ class Database:
             "BLOB": BLOB,
             "LONGBLOB": LONGBLOB,
         }
-        
+
         mysql_type_upper = mysql_type.upper().strip()
         base_type = mysql_type_upper.split("(")[0].split()[0]
-        
+
         if base_type in type_mapping:
             alchemy_type = type_mapping[base_type]
             # Extract parenthesised arguments. Two shapes:
@@ -267,8 +264,16 @@ class Database:
         # is intentionally excluded — it's the user-facing label column the
         # framework maps onto the standard `label` column.
         _RESERVED = {
-            "id", "created_at", "updated_at", "status", "data_intent",
-            "data_id", "filename", "extension", "annotation", "ingestor_id",
+            "id",
+            "created_at",
+            "updated_at",
+            "status",
+            "data_intent",
+            "data_id",
+            "filename",
+            "extension",
+            "annotation",
+            "ingestor_id",
         }
         _collisions = sorted(_RESERVED & set(schema))
         if _collisions:
@@ -358,9 +363,17 @@ class Database:
             # to work around an unrelated error is exactly this case). Surface an
             # actionable error naming the drift instead.
             _STANDARD_COLUMNS = {
-                "id", "created_at", "updated_at", "status", "label",
-                "data_intent", "data_id", "filename", "extension",
-                "annotation", "ingestor_id",
+                "id",
+                "created_at",
+                "updated_at",
+                "status",
+                "label",
+                "data_intent",
+                "data_id",
+                "filename",
+                "extension",
+                "annotation",
+                "ingestor_id",
             }
             existing_features = {c.name for c in table.columns} - _STANDARD_COLUMNS
             expected_features = set(schema) - _STANDARD_COLUMNS
@@ -524,9 +537,7 @@ class Database:
                 # in #191 but dropped by the squash-merge — re-applying).
                 insert_stmt = insert(table)
                 update_dict = {
-                    column.name: text(
-                        f"VALUES(`{column.name.replace('`', '``')}`)"
-                    )
+                    column.name: text(f"VALUES(`{column.name.replace('`', '``')}`)")
                     for column in table.columns
                     if column.name not in ["id", "created_at", "data_id"]
                 }
@@ -584,9 +595,7 @@ class Database:
                             result["failures"].append(
                                 {
                                     "record": record,
-                                    "error": redaction.safe_db_error(
-                                        individual_error
-                                    ),
+                                    "error": redaction.safe_db_error(individual_error),
                                 }
                             )
                             connection.rollback()
@@ -970,7 +979,9 @@ class Database:
                             f"WHERE ingestor_id IS NOT NULL AND ingestor_id <> ''"
                         ),
                     ).fetchall()
-            except Exception as exc:  # noqa: BLE001 — skip the table, continue the sweep
+            except (
+                Exception
+            ) as exc:  # noqa: BLE001 — skip the table, continue the sweep
                 logger.warning(
                     "list_dataset_ingestor_ids: skipping table %s — could not read "
                     "ingestor_ids (%s)",
@@ -1180,7 +1191,10 @@ class Database:
                 ),
                 {"ingestor_id": ingestor_id, "limit": limit},
             ).fetchall()
-        return [{"data_id": row[0], "label": row[1] if row[1] is not None else ""} for row in rows]
+        return [
+            {"data_id": row[0], "label": row[1] if row[1] is not None else ""}
+            for row in rows
+        ]
 
     def get_table_schema(self, table_name: str) -> Dict[str, str]:
         """
@@ -1220,10 +1234,7 @@ class Database:
 
             # MySQL has no native BOOLEAN type: BOOL columns are created — and
             # therefore reflected — as TINYINT(1).
-            if (
-                type_name == "TINYINT"
-                and getattr(col_type, "display_width", None) == 1
-            ):
+            if type_name == "TINYINT" and getattr(col_type, "display_width", None) == 1:
                 schema[column["name"]] = "BOOLEAN"
                 continue
 
