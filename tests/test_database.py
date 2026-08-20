@@ -22,10 +22,12 @@ from sqlalchemy import (
     Table,
 )
 from sqlalchemy.dialects import mysql
+from sqlalchemy.engine import URL
 
 from tracebloc_ingestor import database as db_mod
 from tracebloc_ingestor.database import Database
 from tracebloc_ingestor.config import Config
+from tracebloc_ingestor.identifiers import InvalidDatabaseIdentifierError
 
 
 @pytest.fixture
@@ -60,6 +62,144 @@ def test_init_builds_engine(db, mock_engine_factory):
     # CREATE DATABASE issued + committed during _create_engine.
     conn.execute.assert_called()
     conn.commit.assert_called()
+
+
+def test_create_database_ddl_backtick_quotes_db_name(mock_engine_factory):
+    # backend#952: DB_NAME is interpolated into a CREATE DATABASE DDL that
+    # can't be parameterized, so it must be backtick-quoted.
+    Database(
+        Config(
+            EDGE_ENV="local", DB_USER="tb_ingest", DB_PASSWORD="pw", DB_NAME="cust_db"
+        )
+    )
+    _, _, conn = mock_engine_factory
+    ddl = str(conn.execute.call_args_list[0].args[0])
+    assert ddl == "CREATE DATABASE IF NOT EXISTS `cust_db`"
+
+
+def test_create_database_ddl_escapes_injection_in_db_name(mock_engine_factory):
+    # A backtick in DB_NAME must be doubled (MySQL escaping), not passed raw —
+    # otherwise it breaks out of the identifier. backend#952.
+    Database(
+        Config(EDGE_ENV="local", DB_USER="tb_ingest", DB_PASSWORD="pw", DB_NAME="a`b")
+    )
+    _, _, conn = mock_engine_factory
+    ddl = str(conn.execute.call_args_list[0].args[0])
+    assert ddl == "CREATE DATABASE IF NOT EXISTS `a``b`"
+
+
+def test_engines_are_built_from_url_components_not_concatenation(mock_engine_factory):
+    # backend#952: both engines must be handed a URL built by URL.create, so
+    # SQLAlchemy escapes each component for its own grammar.
+    Database(
+        Config(
+            EDGE_ENV="local", DB_USER="tb_ingest", DB_PASSWORD="pw", DB_NAME="cust_db"
+        )
+    )
+    ce, _, _ = mock_engine_factory
+    base_url, db_url = (c.args[0] for c in ce.call_args_list)
+    assert isinstance(base_url, URL) and isinstance(db_url, URL)
+    # The server-level engine must NOT carry a database, or CREATE DATABASE
+    # would run against a schema that may not exist yet.
+    assert base_url.database is None
+    assert db_url.database == "cust_db"
+    for u in (base_url, db_url):
+        assert (u.username, u.password, u.drivername) == (
+            "tb_ingest",
+            "pw",
+            "mysql+mysqlconnector",
+        )
+
+
+@pytest.mark.parametrize(
+    "db_name",
+    [
+        "db?ssl_disabled=true",  # the TLS-downgrade vector
+        "db#frag",
+        "db/other",
+        "a`b",
+        "db name",
+    ],
+)
+def test_db_name_cannot_smuggle_connect_args_into_the_url(db_name, mock_engine_factory):
+    """A '?' in DB_NAME used to split into a query string (backend#952).
+
+    Concatenating DB_NAME onto the URL path meant "db?ssl_disabled=true"
+    connected to `db` AND handed ssl_disabled=true to the driver as a genuine
+    connect arg — an env-driven TLS downgrade, with neither failure raising.
+    Percent-encoding the segment is not the fix either: make_url leaves the
+    path escaped, so the driver would receive a literal '%3F' name that differs
+    from the database the DDL just created.
+    """
+    Database(
+        Config(
+            EDGE_ENV="local",
+            DB_USER="tb_ingest",
+            DB_PASSWORD="pw",
+            DB_NAME=db_name,
+        )
+    )
+    ce, _, conn = mock_engine_factory
+    db_url = ce.call_args_list[1].args[0]
+    # The name survives verbatim, and nothing leaked into the query string.
+    assert db_url.database == db_name
+    assert dict(db_url.query) == {}
+    # And it is the same name the DDL created, quoted for MySQL.
+    expected = "`" + db_name.replace("`", "``") + "`"
+    assert str(conn.execute.call_args_list[0].args[0]) == (
+        f"CREATE DATABASE IF NOT EXISTS {expected}"
+    )
+
+
+@pytest.mark.parametrize(
+    ("user", "password"),
+    [
+        ("tb:admin", "pw"),  # ':' used to end the username early
+        ("tb@host", "pw"),  # '@' used to end the userinfo early
+        ("tb/x", "pw"),  # '/' used to make the username the host
+        ("tb_ingest", "p@ss:w/d"),
+    ],
+)
+def test_db_user_and_password_survive_url_construction(
+    user, password, mock_engine_factory
+):
+    # DB_USER was interpolated raw while DB_PASSWORD was hand-quoted; a ':' or
+    # '@' in the username mangled the userinfo section. backend#952.
+    Database(
+        Config(EDGE_ENV="local", DB_USER=user, DB_PASSWORD=password, DB_NAME="cust_db")
+    )
+    ce, _, _ = mock_engine_factory
+    for call in ce.call_args_list:
+        u = call.args[0]
+        assert (u.username, u.password) == (user, password)
+        assert u.host not in (user, None)
+
+
+@pytest.mark.parametrize(
+    ("db_name", "fragment"),
+    [
+        ("", "non-empty string"),
+        ("a" * 65, "65 characters"),
+        ("bad\x00name", "NUL"),
+    ],
+)
+def test_invalid_db_name_fails_with_a_db_worded_error(
+    db_name, fragment, mock_engine_factory
+):
+    # This raises before connecting, so the message is the operator's only
+    # diagnostic — it must name DB_NAME, not a column. backend#952.
+    with pytest.raises(InvalidDatabaseIdentifierError) as exc:
+        Database(
+            Config(
+                EDGE_ENV="local",
+                DB_USER="tb_ingest",
+                DB_PASSWORD="pw",
+                DB_NAME=db_name,
+            )
+        )
+    assert fragment in str(exc.value)
+    assert "DB_NAME" in str(exc.value)
+    assert "olumn" not in str(exc.value)
 
 
 # ---------------------------------------------------------------------------
