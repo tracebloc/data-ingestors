@@ -121,9 +121,7 @@ def test_engines_are_built_from_url_components_not_concatenation(mock_engine_fac
         "db name",
     ],
 )
-def test_db_name_cannot_smuggle_connect_args_into_the_url(
-    db_name, mock_engine_factory
-):
+def test_db_name_cannot_smuggle_connect_args_into_the_url(db_name, mock_engine_factory):
     """A '?' in DB_NAME used to split into a query string (backend#952).
 
     Concatenating DB_NAME onto the URL path meant "db?ssl_disabled=true"
@@ -168,9 +166,7 @@ def test_db_user_and_password_survive_url_construction(
     # DB_USER was interpolated raw while DB_PASSWORD was hand-quoted; a ':' or
     # '@' in the username mangled the userinfo section. backend#952.
     Database(
-        Config(
-            EDGE_ENV="local", DB_USER=user, DB_PASSWORD=password, DB_NAME="cust_db"
-        )
+        Config(EDGE_ENV="local", DB_USER=user, DB_PASSWORD=password, DB_NAME="cust_db")
     )
     ce, _, _ = mock_engine_factory
     for call in ce.call_args_list:
