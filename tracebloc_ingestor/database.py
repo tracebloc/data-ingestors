@@ -20,7 +20,7 @@ from sqlalchemy import (
     bindparam,
     inspect,
 )
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import URL, Engine
 from sqlalchemy import LargeBinary
 from sqlalchemy.dialects.mysql import insert, LONGBLOB, BLOB
 from sqlalchemy.exc import OperationalError, InterfaceError, DBAPIError
@@ -28,7 +28,6 @@ import logging
 import secrets
 
 from .utils import redaction
-from urllib.parse import quote
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 from tenacity import (
@@ -39,7 +38,7 @@ from tenacity import (
     before_sleep_log,
 )
 from .config import Config
-from .identifiers import MAX_COLUMN_IDENTIFIER_LENGTH, quote_column_identifier
+from .identifiers import MAX_COLUMN_IDENTIFIER_LENGTH, quote_database_identifier
 from .utils.typo_suggest import suggest_type as _suggest_type
 
 # Configure unified logging with config
@@ -113,34 +112,43 @@ class Database:
         )
 
     def _create_engine(self) -> Engine:
-        # First create database if it doesn't exist
-        base_connection_string = (
-            f"mysql+mysqlconnector://{self.config.DB_USER}:{quote(self.config.DB_PASSWORD)}"
-            f"@{self.config.DB_HOST}:{self.config.DB_PORT}"
+        # Built from components, never by string concatenation: URL.create lets
+        # SQLAlchemy escape each part for its own grammar. Concatenating
+        # DB_NAME onto the URL path made a '?' in the name a query separator —
+        # so DB_NAME="db?ssl_disabled=true" silently connected to `db` AND
+        # handed ssl_disabled=true to the driver as a real connect arg, an
+        # env-driven TLS downgrade. Percent-encoding the segment is NOT the fix:
+        # make_url decodes userinfo but leaves the path escaped, so the driver
+        # would then receive the literal 'db%3Fssl_disabled%3Dtrue' — a
+        # different database from the one the DDL below creates (backend#952).
+        base_url = URL.create(
+            "mysql+mysqlconnector",
+            username=self.config.DB_USER,
+            password=self.config.DB_PASSWORD,
+            host=self.config.DB_HOST,
+            port=self.config.DB_PORT,
         )
         # hide_parameters: SQLAlchemy otherwise appends every statement
         # parameter — i.e. whole rows of customer data — to error strings
         # that get logged (#226).
-        engine = create_engine(
-            base_connection_string, pool_pre_ping=True, hide_parameters=True
-        )
+        engine = create_engine(base_url, pool_pre_ping=True, hide_parameters=True)
 
         with engine.connect() as connection:
             # DB_NAME is operator/env-supplied and interpolated into DDL that
-            # can't be parameterized; backtick-quote it via the shared
-            # MySQL-identifier quoter so it can't inject (backend#952).
+            # can't be parameterized, so it must be quoted (backend#952).
             connection.execute(
                 text(
                     "CREATE DATABASE IF NOT EXISTS "
-                    f"{quote_column_identifier(self.config.DB_NAME)}"
+                    f"{quote_database_identifier(self.config.DB_NAME)}"
                 )
             )
             connection.commit()
 
         # Now connect to the specific database
-        connection_string = f"{base_connection_string}/{self.config.DB_NAME}"
         return create_engine(
-            connection_string, pool_pre_ping=True, hide_parameters=True
+            base_url.set(database=self.config.DB_NAME),
+            pool_pre_ping=True,
+            hide_parameters=True,
         )
 
     def _get_sqlalchemy_type(self, mysql_type: str):
