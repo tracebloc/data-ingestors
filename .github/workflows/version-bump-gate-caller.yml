@@ -5,6 +5,32 @@ name: Version bump gate
 # under is ALREADY released -- caught on the author's diff, not days later at the
 # prod hop (backend#1563; the cli + py-package surprise on 2026-08-10).
 # Override a false positive with the 'skip-version-gate' label (visible in audit).
+#
+# This is the ONLY version guard in this repo since 2026-08-19. A second one,
+# version-guard.yml ("package change => __version__ bump"), was deleted under
+# backend#2212: it demanded a bump on EVERY PR touching tracebloc_ingestor/,
+# where this gate demands one per RELEASE CYCLE -- and one per cycle is all it
+# takes to cut a tag, which is the failure that guard existed to prevent (the
+# D16 ds_<hex> write path, #408, merged and never reached a released image).
+#
+# Proved rather than argued, by driving this gate's own script against synthetic
+# state (its logic is 409 lines of shell in tracebloc/.github, so it can be
+# driven directly):
+#
+#   version == latest released tag, published path changed, no bump  -> FAIL
+#     "tracebloc_ingestor/__init__.py still says 0.8.10, v0.8.10 is ALREADY
+#      RELEASED, and this PR changes a published file"
+#   mid-cycle (0.8.12 pending vs 0.8.10 released), no bump           -> pass
+#   no published path touched                                        -> pass
+#   bumped above latest                                              -> pass
+#   version regression below latest                                  -> FAIL
+#
+# The first line is the #408 shape, and this gate blocks it. The deleted guard
+# was therefore strictly redundant for that failure and merely stricter for
+# every other PR -- while being the weaker of the two by construction: it
+# compared against the PR base and read the version with grep, where this one
+# fails closed on an unreadable file, an unlistable tag set and a paginated
+# compare it cannot fully see.
 on:
   pull_request:
     branches: [develop]
