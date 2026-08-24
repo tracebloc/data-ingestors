@@ -567,3 +567,215 @@ def test_failed_records_yield_nonzero_exit(clean_env, mock_runtime, monkeypatch)
     rc = main()
 
     assert rc == 1  # not 0, not 2 (which is reserved for fail-fast)
+
+
+# ---------------------------------------------------------------------------
+# Contract telemetry (RFC-BACKEND-1872 D2)
+#
+# Every terminal path of the entrypoint reports exactly one contract event, and
+# says WHY in a closed, low-cardinality `error.type`. Driven through the real
+# paths — not through a stubbed `_run` — because the thing worth pinning is that
+# each concrete failure keeps its own classification all the way out.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def telemetry_records(caplog):
+    """The contract records a driven run produced, in order."""
+    import tracebloc_telemetry
+
+    from tracebloc_ingestor import telemetry as job_telemetry
+
+    tracebloc_telemetry.reset()
+    job_telemetry.reset()
+    caplog.set_level(logging.DEBUG, logger="tracebloc.telemetry")
+    yield lambda: [r.telemetry for r in caplog.records if hasattr(r, "telemetry")]
+    tracebloc_telemetry.reset()
+    job_telemetry.reset()
+
+
+def _attribute_text(record):
+    """Every attribute VALUE of a record, as text, unescaped.
+
+    Not ``json.dumps``: it escapes non-ASCII, so a leak assertion written
+    against a marker containing ``ü`` passes while the value sits in the
+    record. Found by mutating ``safe_stacktrace`` and watching three
+    end-to-end tests stay green.
+    """
+    return "\n".join(f"{key}={value!r}" for key, value in record.items())
+
+
+def _sole_terminal(records):
+    from tracebloc_ingestor import telemetry as job_telemetry
+
+    terminals = [r for r in records if r["event.name"] in job_telemetry.TERMINAL_EVENTS]
+    assert len(terminals) == 1, [r["event.name"] for r in records]
+    return terminals[0]
+
+
+def _path_config_missing(monkeypatch, tmp_path, mock_runtime):
+    """INGEST_CONFIG is not set at all (clean_env already removed it)."""
+
+
+def _path_config_not_found(monkeypatch, tmp_path, mock_runtime):
+    monkeypatch.setenv("INGEST_CONFIG", str(tmp_path / "absent.yaml"))
+
+
+def _path_config_unparseable(monkeypatch, tmp_path, mock_runtime):
+    bad = tmp_path / "bad.yaml"
+    bad.write_text("apiVersion: tracebloc.io/v1\n  kind: ::: invalid", encoding="utf-8")
+    monkeypatch.setenv("INGEST_CONFIG", str(bad))
+
+
+def _path_config_not_a_mapping(monkeypatch, tmp_path, mock_runtime):
+    bad = tmp_path / "list.yaml"
+    bad.write_text("- apiVersion: tracebloc.io/v1\n", encoding="utf-8")
+    monkeypatch.setenv("INGEST_CONFIG", str(bad))
+
+
+def _path_config_invalid(monkeypatch, tmp_path, mock_runtime):
+    bad = tmp_path / "incomplete.yaml"
+    bad.write_text(
+        "apiVersion: tracebloc.io/v1\n"
+        "kind: IngestConfig\n"
+        "category: image_classification\n"
+        "intent: train\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("INGEST_CONFIG", str(bad))
+
+
+def _path_ingestion_failed(monkeypatch, tmp_path, mock_runtime):
+    monkeypatch.setenv("INGEST_CONFIG", str(EXAMPLES_DIR / "image_classification.yaml"))
+    mock_runtime["CSVIngestor"].return_value.ingest.side_effect = RuntimeError(
+        "the database went away"
+    )
+
+
+def _path_records_failed(monkeypatch, tmp_path, mock_runtime):
+    monkeypatch.setenv("INGEST_CONFIG", str(EXAMPLES_DIR / "image_classification.yaml"))
+    mock_runtime["CSVIngestor"].return_value.ingest.return_value = [
+        {"image_id": "broken"},
+        {"image_id": "also-broken"},
+    ]
+
+
+def _path_succeeded(monkeypatch, tmp_path, mock_runtime):
+    monkeypatch.setenv("INGEST_CONFIG", str(EXAMPLES_DIR / "image_classification.yaml"))
+
+
+#: (setup, exit code, expected error.type or None for the clean run). Written
+#: independently of `telemetry.ERROR_TYPES`, so the closure check below compares
+#: two sources rather than a list with itself.
+_TERMINAL_PATHS = [
+    (_path_config_missing, 2, "config_missing"),
+    (_path_config_not_found, 2, "config_not_found"),
+    (_path_config_unparseable, 2, "config_unparseable"),
+    (_path_config_not_a_mapping, 2, "config_not_a_mapping"),
+    (_path_config_invalid, 2, "config_invalid"),
+    (_path_ingestion_failed, 1, "ingestion_failed"),
+    (_path_records_failed, 1, "records_failed"),
+    (_path_succeeded, 0, None),
+]
+
+
+@pytest.mark.parametrize(
+    "setup, expected_code, expected_error_type",
+    _TERMINAL_PATHS,
+    ids=[case[0].__name__ for case in _TERMINAL_PATHS],
+)
+def test_every_terminal_path_reports_one_classified_event(
+    setup,
+    expected_code,
+    expected_error_type,
+    clean_env,
+    mock_runtime,
+    monkeypatch,
+    tmp_path,
+    telemetry_records,
+    capsys,
+):
+    from tracebloc_ingestor import telemetry as job_telemetry
+    from tracebloc_ingestor.cli.run import main
+
+    setup(monkeypatch, tmp_path, mock_runtime)
+    rc = main()
+    capsys.readouterr()
+
+    assert rc == expected_code
+    records = telemetry_records()
+    assert records[0]["event.name"] == job_telemetry.EVENT_JOB_STARTED
+
+    terminal = _sole_terminal(records)
+    if expected_error_type is None:
+        assert terminal["event.name"] == job_telemetry.EVENT_JOB_SUCCEEDED
+        assert "error.type" not in terminal
+    else:
+        assert terminal["error.type"] == expected_error_type
+        assert terminal["error.type"] in job_telemetry.ERROR_TYPES
+
+
+def test_the_driven_paths_cover_the_whole_error_vocabulary():
+    """Two sources compared, not a list against itself.
+
+    ``_TERMINAL_PATHS`` above is a hand-written list of the entrypoint's real
+    endings; ``ERROR_TYPES`` is the producer's declared vocabulary. Anything in
+    the vocabulary that no driven path reaches must be a classification the
+    FUNNEL produces, and those two are named here explicitly — so a new
+    classification that nothing can emit fails this test rather than sitting
+    unqueryable in a dashboard nobody can populate.
+    """
+    from tracebloc_ingestor import telemetry as job_telemetry
+
+    driven = {case[2] for case in _TERMINAL_PATHS if case[2] is not None}
+    funnel_only = {
+        job_telemetry.ERROR_UNHANDLED_EXCEPTION,
+        job_telemetry.ERROR_UNCLASSIFIED,
+    }
+    assert driven | funnel_only == job_telemetry.ERROR_TYPES
+    assert not driven & funnel_only
+
+
+def test_a_failed_ingestion_reports_frames_but_never_the_exception_message(
+    clean_env, mock_runtime, monkeypatch, tmp_path, telemetry_records, capsys
+):
+    """The end-to-end shape of the redaction rule, on the real failure path."""
+    secret = "patient-4711-Müller"
+    monkeypatch.setenv("INGEST_CONFIG", str(EXAMPLES_DIR / "image_classification.yaml"))
+    # side_effect, so the raising frame belongs to unittest.mock and this file's
+    # source line cannot be what carries the value into the traceback.
+    mock_runtime["CSVIngestor"].return_value.ingest.side_effect = ValueError(
+        f"Incorrect value {secret!r} for column x"
+    )
+
+    from tracebloc_ingestor.cli.run import main
+
+    assert main() == 1
+    # the operator's own console still gets the detail; it never leaves the
+    # cluster, and pinning it here keeps this test about the RECORD.
+    assert secret in capsys.readouterr().err
+
+    terminal = _sole_terminal(telemetry_records())
+    assert terminal["error.type"] == "ingestion_failed"
+    assert terminal["exception.type"] == "ValueError"
+    assert terminal["exception.stacktrace"]
+    assert "exception.message" not in terminal
+    assert secret not in _attribute_text(terminal)
+
+
+def test_the_failed_record_count_is_sent_but_never_the_records(
+    clean_env, mock_runtime, monkeypatch, tmp_path, telemetry_records
+):
+    monkeypatch.setenv("INGEST_CONFIG", str(EXAMPLES_DIR / "image_classification.yaml"))
+    mock_runtime["CSVIngestor"].return_value.ingest.return_value = [
+        {"image_id": "patient-4711"},
+        {"image_id": "patient-4712"},
+    ]
+
+    from tracebloc_ingestor.cli.run import main
+
+    assert main() == 1
+
+    terminal = _sole_terminal(telemetry_records())
+    assert terminal["tracebloc.ingest.failed_records"] == 2
+    assert "patient-4711" not in _attribute_text(terminal)

@@ -250,3 +250,56 @@ def test_column_preview_caps_wide_panels():
     assert "gene_10" not in preview  # capped at 10
     # a single error line stays bounded no matter how wide the panel is
     assert len(preview) < 300
+
+
+# ---------------------------------------------------------------------------
+# Contract telemetry (RFC-BACKEND-1872 D2) — the emitter side of the same rule
+# ---------------------------------------------------------------------------
+
+
+def test_telemetry_failure_record_never_carries_the_exception_message(caplog):
+    """A contract event leaves the process; its exception message must not.
+
+    Pinned in THIS file rather than only next to the telemetry tests because it
+    is the same gate as everything above: a cell value must not reach anything
+    that egresses. The failure record is a new egress path, and the field that
+    would carry a value is the exception message — which is why the emitter is
+    handed the frames alone.
+
+    The mutation is a one-word substitution (``format_tb`` → ``format_exc``)
+    that reads like a tidy-up, which is precisely how the engine's identical
+    hole survived.
+    """
+    import tracebloc_telemetry
+
+    from tracebloc_ingestor import telemetry
+
+    def _caught(message):
+        # A VARIABLE, so the raising frame's source line cannot contain the
+        # value; a literal here would make this test prove the wrong thing.
+        try:
+            raise ValueError(message)
+        except ValueError as exc:
+            return exc
+
+    exc = _caught(f"Incorrect value {SECRET!r} for column x")
+
+    tracebloc_telemetry.reset()
+    telemetry.reset()
+    telemetry.configure_job()
+    caplog.set_level(logging.DEBUG, logger="tracebloc.telemetry")
+    telemetry.begin_run("run-1")
+    telemetry.job_failed(telemetry.ERROR_INGESTION_FAILED, exc)
+    records = [r.telemetry for r in caplog.records if hasattr(r, "telemetry")]
+    tracebloc_telemetry.reset()
+    telemetry.reset()
+
+    assert records, "no telemetry record was emitted — the test proves nothing"
+    # The attribute VALUES, not a json.dumps of them: json escapes non-ASCII,
+    # so a dump of this very record spells the marker "M\\u00fcller" and a
+    # `SECRET not in dump` assertion passes with the value still in the record.
+    emitted = "\n".join(f"{k}={v!r}" for k, v in records[-1].items())
+    assert SECRET not in emitted
+    # the class and the frames ARE the actionable part, and they are sent
+    assert records[-1]["exception.type"] == "ValueError"
+    assert records[-1]["exception.stacktrace"]
