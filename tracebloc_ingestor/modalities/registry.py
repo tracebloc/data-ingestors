@@ -100,6 +100,10 @@ _SPECS = (
         transfer=t.token_classification,
         is_nlp=True,
         file_subdir="texts",
+        # The label column holds the whole per-token BIO tag SEQUENCE, so
+        # output_classes are the DISTINCT TAGS (exploded), not the distinct
+        # sequence strings a GROUP BY label would count (backend#1747).
+        label_is_tag_sequence=True,
     ),
     # sentence_pair_classification is SUPERVISED text classification — the class
     # label travels in the labels CSV, exactly like text_classification (so

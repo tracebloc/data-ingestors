@@ -115,3 +115,14 @@ class ModalitySpec:
     # None``, never on the category string. ``None`` for every per-row
     # category.
     grouping: Optional["Grouping"] = None
+    # Token-tagging label (backend#1747): the ``label`` column holds a
+    # whitespace-joined per-token tag SEQUENCE (token_classification's BIO/IOB2
+    # tags, one tag per word — e.g. ``"O B-PER I-PER O"``), not a single class
+    # value. The dataset's output_classes are therefore the DISTINCT TAGS, which
+    # ``ingestors/base.py`` counts by EXPLODING each sequence
+    # (``Database.get_tag_counts``) — a plain ``GROUP BY label``
+    # (``get_label_counts``) would instead count distinct sequence STRINGS as
+    # classes, so no model head links and the task is unrunnable e2e. Consumed
+    # trait-style (never on the category string), so a future tag-sequence
+    # category is a one-line registry entry. ``False`` for every other category.
+    label_is_tag_sequence: bool = False
