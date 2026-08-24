@@ -25,6 +25,7 @@ from ..utils import redaction
 from ..utils.columns import resolve_column
 from ..utils.correlation import resolve_correlation_id
 from ..utils.validators_mapping import map_validators
+from .. import telemetry
 from ..file_transfer import map_file_transfer, reclaim_dest_tree, reclaim_source
 from ..text_profile import compute_text_profile
 from ..schema_inference import canonical_dtype
@@ -1446,6 +1447,20 @@ class BaseIngestor(ABC):
         # guarded + best-effort: it never deletes a dir that contains the table
         # dir and never fails an already-successful load.
         if dataset_registered and not failed_records:
+            # The load is durable and clean, which is the earliest point this
+            # run can PROVE it succeeded -- and saying so here rather than
+            # letting the entrypoint's funnel say it later is what stops a
+            # SIGTERM during the reclaim below from reporting a committed,
+            # registered dataset as ``cancelled`` (backend#2435). The reclaim is
+            # an rmtree over a whole staged dataset, so this is the long part of
+            # that window, not a theoretical one.
+            #
+            # Derived from the same guard the reclaim is derived from, so the
+            # two cannot disagree about what "succeeded" means. This EMITS
+            # nothing: the entrypoint stays the only place a terminal event
+            # comes from, and the terminal slot stays open so anything that
+            # goes wrong from here still reports its own failure.
+            telemetry.mark_durable()
             reclaim_source(self.database.config)
 
         return failed_records

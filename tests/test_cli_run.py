@@ -736,6 +736,123 @@ def test_the_driven_paths_cover_the_whole_error_vocabulary():
     assert not driven & funnel_only
 
 
+# ---------------------------------------------------------------------------
+# A signal arriving after the work is done (backend#2435)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def restore_sigterm():
+    """Put SIGTERM's disposition back after a test that drives ``main()``.
+
+    ``main`` installs a process-wide handler and nothing uninstalls it, so a
+    test that then delivers a REAL signal would leave the handler standing for
+    everything that runs afterwards in this process.
+    """
+    import signal
+
+    previous = signal.getsignal(signal.SIGTERM)
+    yield
+    signal.signal(signal.SIGTERM, previous)
+
+
+def _sigterm_now(*_args, **_kwargs):
+    """Deliver a real SIGTERM to this process, the way the platform does.
+
+    A real signal rather than a call to the handler: the point of these two
+    tests is WHERE the interpreter happens to be when the handler runs, and
+    calling it directly would choose that for it.
+    """
+    import os
+    import signal
+
+    os.kill(os.getpid(), signal.SIGTERM)
+
+
+def test_a_signal_during_teardown_reports_the_success_it_already_earned(
+    clean_env,
+    mock_runtime,
+    monkeypatch,
+    tmp_path,
+    telemetry_records,
+    capsys,
+    restore_sigterm,
+):
+    """The reported ending of an evicted-but-finished run (backend#2435).
+
+    Every failure path classifies itself where it happens; success was reported
+    only by the funnel, after the run had unwound. ``_terminal`` is
+    first-writer-wins, so a SIGTERM in between claimed the terminal slot as
+    ``cancelled`` — for a dataset that was committed and registered. The
+    success went uncounted, and an operator reading the board saw an ingest
+    that looked aborted and was not.
+
+    The signal lands in the ingestor's context-manager exit, which is inside
+    that window and is real: the entrypoint's ``mark_durable`` runs in the
+    ``with`` body, before this. Driven through the entrypoint's own handler and
+    a real ``kill``, so removing ``telemetry.mark_durable()`` from ``_run``
+    reddens this test rather than being invisible to it.
+    """
+    import signal as signal_module
+
+    from tracebloc_ingestor import telemetry as job_telemetry
+    from tracebloc_ingestor.cli.run import main
+
+    monkeypatch.setenv("INGEST_CONFIG", str(EXAMPLES_DIR / "image_classification.yaml"))
+    ingestor = mock_runtime["CSVIngestor"].return_value
+    ingestor.ingest.return_value = []  # a clean load
+    ingestor.__exit__ = MagicMock(side_effect=_sigterm_now)
+
+    with pytest.raises(SystemExit) as exit_info:
+        main()
+    capsys.readouterr()
+
+    # ANCHOR: the signal really was delivered and really did unwind the run, so
+    # the assertion below is not passing because nothing happened.
+    assert exit_info.value.code == 128 + signal_module.SIGTERM
+    assert ingestor.__exit__.called
+
+    terminal = _sole_terminal(telemetry_records())
+    assert terminal["event.name"] == job_telemetry.EVENT_JOB_SUCCEEDED
+    assert "error.type" not in terminal
+
+
+def test_a_signal_before_the_work_is_done_still_reports_a_cancellation(
+    clean_env,
+    mock_runtime,
+    monkeypatch,
+    tmp_path,
+    telemetry_records,
+    capsys,
+    restore_sigterm,
+):
+    """The other direction, and the reason the fix is a decision and not a
+    deletion.
+
+    Without this, the test above could be satisfied by never reporting a
+    cancellation at all — which would trade an undercount of successes for an
+    undercount of evictions and lose the ending the SIGTERM handler exists to
+    record. Same harness, same real signal; the only difference is that it
+    arrives while the load is still in flight, so nothing has been earned yet.
+    """
+    import signal as signal_module
+
+    from tracebloc_ingestor import telemetry as job_telemetry
+    from tracebloc_ingestor.cli.run import main
+
+    monkeypatch.setenv("INGEST_CONFIG", str(EXAMPLES_DIR / "image_classification.yaml"))
+    ingestor = mock_runtime["CSVIngestor"].return_value
+    ingestor.ingest = MagicMock(side_effect=_sigterm_now)
+
+    with pytest.raises(SystemExit) as exit_info:
+        main()
+    capsys.readouterr()
+
+    assert exit_info.value.code == 128 + signal_module.SIGTERM
+    terminal = _sole_terminal(telemetry_records())
+    assert terminal["event.name"] == job_telemetry.EVENT_JOB_CANCELLED
+
+
 def test_a_failed_ingestion_reports_frames_but_never_the_exception_message(
     clean_env, mock_runtime, monkeypatch, tmp_path, telemetry_records, capsys
 ):
