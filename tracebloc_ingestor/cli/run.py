@@ -40,6 +40,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import signal
 import sys
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
@@ -100,6 +101,26 @@ def main(argv: List[str] | None = None) -> int:
     # run. The only cost is that a MALFORMED id logs its warning twice, which is
     # cheaper than a second copy of the id's validation rule.
     telemetry.begin_run(resolve_correlation_id())
+
+    def _on_sigterm(signum, _frame):  # pragma: no cover - driven by a real signal
+        # A run the platform ended is still a run that ended, and SIGTERM's
+        # default disposition unwinds NOTHING -- no exception, no `finally`, no
+        # `atexit` -- so the terminal event is emitted here or not at all. The
+        # funnel below catches BaseException, which covers every way Python
+        # leaves the frame and none of the ways a signal does. Measured on this
+        # branch by @shujaatTracebloc: SIGTERM at 3s gave `started` and silence.
+        #
+        # In Kubernetes this is the common ending, not an edge case: eviction,
+        # node drain and `activeDeadlineSeconds` all send SIGTERM. SIGKILL
+        # cannot be caught, so an OOMKilled run still reports `started` alone —
+        # `_terminal`'s docstring says so rather than implying otherwise.
+        #
+        # `_terminal` makes this safe against double-reporting if the signal
+        # lands while a classified path is already mid-flight.
+        telemetry.job_cancelled()
+        raise SystemExit(128 + signum)
+
+    signal.signal(signal.SIGTERM, _on_sigterm)
 
     try:
         code = _run(argv)

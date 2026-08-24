@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import ast
 import logging
+import signal
 import traceback
 from pathlib import Path
 
@@ -272,6 +273,76 @@ def test_main_reports_exactly_one_terminal_event(outcome, emitted, monkeypatch):
     assert names.count(telemetry.EVENT_JOB_STARTED) == 1
     terminals = [name for name in names if name in telemetry.TERMINAL_EVENTS]
     assert len(terminals) == 1, names
+
+
+def test_sigterm_reports_the_run_as_cancelled(emitted, monkeypatch):
+    """A run the platform ends still says how it ended (backend#2417).
+
+    SIGTERM's default disposition terminates the interpreter WITHOUT unwinding —
+    no exception, no ``finally``, no ``atexit`` — so ``main``'s ``except
+    BaseException`` funnel never sees it. @shujaatTracebloc measured that on this
+    branch: SIGTERM at 3s produced ``ingest.job.started`` and nothing else, which
+    is the silence this whole change exists to remove, on the ending where the
+    record is most useful (eviction, drain, deadline).
+
+    Driven through the REAL handler the entrypoint installs rather than a copy of
+    it, so deleting `signal.signal(...)` from ``main`` reddens this.
+    """
+    installed = {}
+    real_signal = signal.signal
+
+    def _capture(signum, handler):
+        if signum == signal.SIGTERM:
+            installed["handler"] = handler
+        return real_signal(signum, handler)
+
+    monkeypatch.setattr(cli_run.signal, "signal", _capture)
+    monkeypatch.setattr(cli_run, "_run", lambda argv=None: 0)
+    cli_run.main()
+
+    assert "handler" in installed, "main() installed no SIGTERM handler"
+
+    # A fresh run, then the signal mid-flight.
+    telemetry.reset()
+    telemetry.configure_job()
+    telemetry.begin_run("corr-sigterm")
+    before = len(emitted())
+    with pytest.raises(SystemExit) as exit_info:
+        installed["handler"](signal.SIGTERM, None)
+
+    assert exit_info.value.code == 128 + signal.SIGTERM
+    names = [record["event.name"] for record in emitted()[before:]]
+    assert telemetry.EVENT_JOB_CANCELLED in names, names
+    terminals = [name for name in names if name in telemetry.TERMINAL_EVENTS]
+    assert len(terminals) == 1, names
+
+
+def test_a_cancelled_run_does_not_double_report(emitted, monkeypatch):
+    """If the signal lands while a classified path is mid-flight, one wins.
+
+    ``_terminal`` is what makes that true; this pins it for the signal path
+    specifically, because the handler runs outside every control-flow guarantee
+    the funnel relies on.
+    """
+    installed = {}
+    real_signal = signal.signal
+    monkeypatch.setattr(
+        cli_run.signal,
+        "signal",
+        lambda num, h: (
+            installed.__setitem__("handler", h) if num == signal.SIGTERM else None
+        )
+        or real_signal(num, h),
+    )
+    monkeypatch.setattr(cli_run, "_run", lambda argv=None: 0)
+    cli_run.main()  # emits succeeded, closing the terminal slot
+
+    before = len(emitted())
+    with pytest.raises(SystemExit):
+        installed["handler"](signal.SIGTERM, None)
+    assert [
+        r["event.name"] for r in emitted()[before:]
+    ] == [], "the terminal slot was already taken; cancelling after it must be dropped"
 
 
 def test_a_clean_run_reports_success(emitted, monkeypatch):

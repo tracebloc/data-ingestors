@@ -78,9 +78,20 @@ EVENT_JOB_STARTED = "ingest.job.started"
 EVENT_JOB_SUCCEEDED = "ingest.job.succeeded"
 EVENT_JOB_REJECTED = "ingest.job.rejected"
 EVENT_JOB_FAILED = "ingest.job.failed"
+#: A run the platform ended: evicted, drained, or past `activeDeadlineSeconds`.
+#: `cancelled` is already in the emitter registry's closed OUTCOMES set, so this
+#: validates without a registry change.
+EVENT_JOB_CANCELLED = "ingest.job.cancelled"
 
-#: The three ways a run ends. Exactly one is emitted per run (see ``_terminal``).
-TERMINAL_EVENTS = frozenset({EVENT_JOB_SUCCEEDED, EVENT_JOB_REJECTED, EVENT_JOB_FAILED})
+#: The four ways a run ends. Exactly one is emitted per run (see ``_terminal``).
+TERMINAL_EVENTS = frozenset(
+    {
+        EVENT_JOB_SUCCEEDED,
+        EVENT_JOB_REJECTED,
+        EVENT_JOB_FAILED,
+        EVENT_JOB_CANCELLED,
+    }
+)
 
 #: ``error.type`` -- a stable, low-cardinality classification, closed for this
 #: domain. Not the exception class name: that is an implementation detail with
@@ -218,6 +229,16 @@ def begin_run(correlation_id: Optional[str] = None) -> bool:
     return _emit(EVENT_JOB_STARTED, "INFO")
 
 
+def job_cancelled() -> bool:
+    """The platform ended this run: evicted, drained, or deadline-exceeded.
+
+    Distinct from ``job_failed``: nothing about the ingest went wrong, and
+    counting these as failures would make the failure rate a function of cluster
+    pressure. Distinct from ``job_succeeded`` for the obvious reason.
+    """
+    return _terminal(EVENT_JOB_CANCELLED, "WARN")
+
+
 def job_succeeded() -> bool:
     """The run finished with every record ingested."""
     return _terminal(EVENT_JOB_SUCCEEDED, "INFO")
@@ -263,6 +284,19 @@ def _terminal(event_name: str, severity: str, **attributes: Any) -> bool:
     including the ones that already classified themselves; this drops the
     duplicate. So a run emits exactly one terminal event -- never two, and never
     zero, even down a path added later that forgot to say anything.
+
+    SCOPED, because "structurally" was over-claimed here and it matters. The
+    funnel catches ``BaseException``, which covers every way PYTHON leaves the
+    frame. It does not cover a signal, whose default disposition terminates the
+    interpreter without unwinding -- no exception, no ``finally``, no
+    ``atexit``. @shujaatTracebloc measured that on this branch: SIGTERM at 3s
+    produced ``ingest.job.started`` and nothing else. ``main`` now handles
+    SIGTERM for exactly that reason.
+
+    What remains uncovered, stated rather than implied: **SIGKILL cannot be
+    caught**, so an OOM-killed run still emits ``started`` alone. In Kubernetes
+    that is the OOMKilled path specifically -- eviction, node drain and
+    ``activeDeadlineSeconds`` all send SIGTERM first and are now covered.
 
     The flag is set BEFORE the emit, deliberately: a run whose terminal record
     could not be delivered is still a run that ended, and letting the funnel's
