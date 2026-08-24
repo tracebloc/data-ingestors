@@ -345,6 +345,172 @@ def test_a_cancelled_run_does_not_double_report(emitted, monkeypatch):
     ] == [], "the terminal slot was already taken; cancelling after it must be dropped"
 
 
+# ── a signal after the work is done is not a cancellation (backend#2435) ─────
+
+
+#: How to ESTABLISH each terminal outcome, keyed by the event that outcome
+#: reports. Written against the run's own vocabulary and checked for closure
+#: below, so a fifth terminal event cannot be added without either giving it a
+#: way to be established here or being named as deliberately unestablishable.
+_ESTABLISH = {
+    telemetry.EVENT_JOB_SUCCEEDED: telemetry.mark_durable,
+    telemetry.EVENT_JOB_REJECTED: lambda: telemetry.job_rejected(
+        telemetry.ERROR_CONFIG_INVALID
+    ),
+    telemetry.EVENT_JOB_FAILED: lambda: telemetry.job_failed(
+        telemetry.ERROR_INGESTION_FAILED
+    ),
+}
+
+
+def test_every_establishable_outcome_is_covered():
+    """Derived from ``TERMINAL_EVENTS``, not from the dict above.
+
+    Mutation coverage cannot see a vocabulary gap: the parametrised test below
+    would keep passing over three outcomes while a fourth went unexercised. So
+    the input domain is compared against the producer's declared set, and the
+    one member deliberately absent is named rather than silently missing.
+    """
+    assert set(_ESTABLISH) | {telemetry.EVENT_JOB_CANCELLED} == (
+        telemetry.TERMINAL_EVENTS
+    )
+    # `cancelled` is the outcome the SIGTERM handler itself reports, so it is
+    # not something a run establishes BEFORE the signal — it is what the
+    # signal means when nothing else was established.
+    assert telemetry.EVENT_JOB_CANCELLED not in _ESTABLISH
+
+
+@pytest.mark.parametrize("established", sorted(_ESTABLISH))
+def test_a_signal_never_overwrites_an_outcome_already_established(established, emitted):
+    """``cancelled`` may not relabel an ending the run already reached.
+
+    ``_terminal`` gave the classified failures this property for free — they
+    take the slot as they happen. Success did not have it, because the funnel
+    reports it only after the run unwinds, and that gap is backend#2435. Driven
+    over the whole vocabulary so the property belongs to the SET rather than to
+    the one member that was broken.
+    """
+    telemetry.begin_run("run-established")
+    _ESTABLISH[established]()
+    before = len(emitted())
+
+    telemetry.job_cancelled()
+
+    names = [record["event.name"] for record in emitted()]
+    terminals = [name for name in names if name in telemetry.TERMINAL_EVENTS]
+    assert terminals == [established], names
+    # For the two that already emitted, the cancel is dropped and adds nothing;
+    # for success, `mark_durable` emitted nothing and the cancel IS the emit.
+    if established is telemetry.EVENT_JOB_SUCCEEDED:
+        assert len(emitted()) == before + 1
+    else:
+        assert len(emitted()) == before
+
+
+def test_durability_does_not_swallow_a_later_genuine_failure(emitted):
+    """The expensive direction, pinned.
+
+    ``mark_durable`` records a fact and leaves the terminal slot OPEN, rather
+    than emitting ``succeeded`` early and closing it. The difference only shows
+    up here: something that goes wrong after the commit still reports its own
+    failure instead of being dropped as a duplicate of a success already
+    claimed. Collapsing ``mark_durable`` into a ``job_succeeded`` call reddens
+    this test, which is the point of it existing.
+    """
+    telemetry.begin_run("run-durable-then-broken")
+    telemetry.mark_durable()
+
+    # ANCHOR: the slot really is open, so the emit below is the failure being
+    # recorded rather than a duplicate being dropped.
+    assert telemetry.terminal_emitted() is False
+    assert telemetry.job_failed(telemetry.ERROR_UNHANDLED_EXCEPTION) is True
+
+    record = emitted()[-1]
+    assert record["event.name"] == telemetry.EVENT_JOB_FAILED
+    assert record["error.type"] == telemetry.ERROR_UNHANDLED_EXCEPTION
+
+
+@pytest.mark.parametrize("close_run", ["begin_run", "reset"])
+def test_durability_does_not_survive_into_the_next_run(close_run, emitted):
+    """Per RUN, not per process — the hazard ``reset``'s docstring names.
+
+    A process that completed one run and started another would otherwise carry
+    the first run's durability into the second, and report a SIGTERM during the
+    SECOND run's startup — before it has ingested anything — as a success.
+    """
+    telemetry.begin_run("run-1")
+    telemetry.mark_durable()
+    assert telemetry.durable() is True
+
+    if close_run == "begin_run":
+        telemetry.begin_run("run-2")
+    else:
+        telemetry.reset()
+        # ANCHOR: ``reset`` clears durability ON ITS OWN, asserted here rather
+        # than after the ``begin_run`` below — which clears it too, and so
+        # masks this. Measured: without this line the [reset] case stayed
+        # GREEN under a mutation that deleted ``reset``'s clear, i.e. it was
+        # proving what ``begin_run`` does twice and what ``reset`` does not at
+        # all.
+        assert telemetry.durable() is False
+        telemetry.configure_job()
+        telemetry.begin_run("run-2")
+
+    assert telemetry.durable() is False
+    telemetry.job_cancelled()
+    assert emitted()[-1]["event.name"] == telemetry.EVENT_JOB_CANCELLED
+
+
+def test_the_ingestor_claims_durability_before_it_reclaims_the_source():
+    """Read off ``base.py``, because that window is the long one.
+
+    The entrypoint's own ``mark_durable`` covers the gap after ``ingest``
+    returns; it cannot cover the reclaim of the staged source tree, which
+    happens INSIDE ``ingest`` and is an ``rmtree`` over a whole staged dataset.
+    So the ingestor claims durability at the guard it already uses to decide
+    the load is durable and clean — and it has to claim it BEFORE the reclaim,
+    or it covers nothing.
+
+    Structural rather than driven: reaching that line in a test needs a real
+    load, so an assertion about the SOURCE is what keeps a later edit from
+    quietly moving or dropping the call. Order is asserted, not just presence.
+    """
+    from tracebloc_ingestor.ingestors import base as ingestor_base
+
+    tree = ast.parse(Path(ingestor_base.__file__).read_text(encoding="utf-8"))
+
+    def _called_name(node):
+        func = node.func
+        if isinstance(func, ast.Name):
+            return func.id
+        if isinstance(func, ast.Attribute):
+            return func.attr
+        return None
+
+    guards = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.If):
+            continue
+        calls = [
+            _called_name(child)
+            for child in ast.walk(ast.Module(body=node.body, type_ignores=[]))
+            if isinstance(child, ast.Call)
+        ]
+        if "reclaim_source" in calls:
+            guards.append(calls)
+
+    assert len(guards) == 1, f"expected one reclaim_source guard, found {len(guards)}"
+    calls = guards[0]
+    assert "mark_durable" in calls, (
+        "the ingestor reclaims the staged source without first claiming "
+        "durability; a signal during the rmtree reports a committed dataset "
+        "as cancelled (backend#2435)"
+    )
+    assert calls.index("mark_durable") < calls.index(
+        "reclaim_source"
+    ), "durability is claimed after the reclaim, so the reclaim window is uncovered"
+
+
 def test_a_clean_run_reports_success(emitted, monkeypatch):
     monkeypatch.setattr(cli_run, "_run", lambda argv=None: 0)
     cli_run.main()

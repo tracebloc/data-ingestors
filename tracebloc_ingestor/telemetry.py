@@ -6,7 +6,26 @@ that failed produced free-text log lines and no countable, groupable event.
 
     configure_job()          # once, at the entry point
     begin_run(correlation_id)
-    ... exactly one of job_succeeded() / job_rejected() / job_failed() ...
+    mark_durable()           # once the work is committed; see below
+    ... exactly one of job_succeeded() / job_rejected() / job_failed()
+                     / job_cancelled() ...
+
+WHY ``mark_durable`` EXISTS, since a flag in the middle of that list looks like
+one thing too many. Every ENDING is classified the moment it becomes true except
+success, which the entrypoint's funnel reports only after the run has unwound.
+That asymmetry had a cost: ``_terminal`` is first-writer-wins, so a SIGTERM
+arriving during the post-success teardown -- reclaiming the staged source tree,
+releasing the table lock -- claimed the terminal slot as ``cancelled`` for a
+dataset that was already committed and registered, and the success went uncounted
+(backend#2435). ``mark_durable`` closes that window by recording the FACT the
+handler was missing, so ``job_cancelled`` can tell "the platform stopped the
+work" from "the platform stopped a process that had already finished the work".
+
+It records the fact rather than emitting ``succeeded`` early on purpose. The
+terminal slot stays OPEN, so anything that does go wrong after the commit still
+reports its own failure rather than being dropped as a duplicate of a success
+already claimed -- a broken run that reports success is the expensive direction
+of this bug, and it is the one not worth trading for.
 
 WHERE THESE RECORDS ACTUALLY GO, stated plainly rather than implied. This
 process runs as a Job inside the CUSTOMER's cluster. Its stdout is collected by
@@ -140,11 +159,17 @@ ERROR_TYPES = frozenset(
 # resource by configure(). Held here so no call site has to thread it through.
 _correlation_id: Optional[str] = None
 _terminal_emitted: bool = False
+_durable: bool = False
 
 
 def terminal_emitted() -> bool:
     """Has this run already reported how it ended?"""
     return _terminal_emitted
+
+
+def durable() -> bool:
+    """Has this run's work been committed? See ``mark_durable``."""
+    return _durable
 
 
 def reset() -> None:
@@ -154,10 +179,16 @@ def reset() -> None:
     was emitted" and be right for the wrong reason — the terminal flag left
     standing by the previous run suppresses the emit the test was checking for,
     and a vacuous pass looks exactly like a real one.
+
+    ``_durable`` is cleared here and in ``begin_run`` for the sharper version of
+    the same hazard: a second run in a process that already completed one would
+    inherit the first run's durability and report a cancellation during its own
+    STARTUP as a success.
     """
-    global _correlation_id, _terminal_emitted
+    global _correlation_id, _terminal_emitted, _durable
     _correlation_id = None
     _terminal_emitted = False
+    _durable = False
 
 
 # ---------------------------------------------------------------------------
@@ -223,10 +254,36 @@ def configure_job() -> bool:
 
 def begin_run(correlation_id: Optional[str] = None) -> bool:
     """Open the run: remember its correlation id and report that it started."""
-    global _correlation_id, _terminal_emitted
+    global _correlation_id, _terminal_emitted, _durable
     _correlation_id = correlation_id or None
     _terminal_emitted = False
+    _durable = False
     return _emit(EVENT_JOB_STARTED, "INFO")
+
+
+def mark_durable() -> None:
+    """This run's work is committed: rows durable, dataset registered.
+
+    From here on the run has SUCCEEDED, whatever happens to the process. What
+    remains is teardown — reclaiming the staged source tree, releasing the table
+    lock, one log line — and none of it can un-commit the load or un-register the
+    dataset.
+
+    That is worth recording because the process can still be killed during it,
+    and a SIGTERM there is not a cancellation: the platform is stopping a process
+    that has already finished its work. Without this flag the signal handler
+    could not tell those apart and called every SIGTERM a cancellation, which
+    reported ``cancelled`` for a live, registered dataset and undercounted
+    successes (backend#2435).
+
+    Idempotent and cheap, so it may be called from more than one place; the
+    run's own proof point calls it as early as it can prove it, and the
+    entrypoint calls it again as a backstop for a success path that never
+    reached that point. Cleared by ``begin_run`` / ``reset``, never set back to
+    False within a run: durability is not a thing that stops being true.
+    """
+    global _durable
+    _durable = True
 
 
 def job_cancelled() -> bool:
@@ -234,8 +291,34 @@ def job_cancelled() -> bool:
 
     Distinct from ``job_failed``: nothing about the ingest went wrong, and
     counting these as failures would make the failure rate a function of cluster
-    pressure. Distinct from ``job_succeeded`` for the obvious reason.
+    pressure.
+
+    NOT distinct from ``job_succeeded`` once the work is durable, which is the
+    only reason this function decides anything. A signal that arrives after the
+    rows are committed and the dataset is registered stopped a process, not a
+    run; reporting it as a cancellation would subtract a success that actually
+    happened and is visible in the customer's cluster. So the outcome reported
+    here is a function of ``mark_durable``, not of which signal arrived.
+
+    The severity follows the outcome (``INFO`` for the success, ``WARN`` for the
+    cancellation) because it is read off ``job_succeeded`` rather than restated.
     """
+    if _durable:
+        # Logged only if the record was actually the one sent. A run can be
+        # durable AND already classified — something broke during the teardown
+        # and said so — in which case `_terminal` drops this and a line
+        # claiming the run was reported as succeeded would be describing an
+        # emit that never happened.
+        reported = job_succeeded()
+        if reported:
+            logger.info(
+                "telemetry: signalled after the load was durable; reporting "
+                "this run as %s rather than %s — the dataset is committed and "
+                "registered.",
+                EVENT_JOB_SUCCEEDED,
+                EVENT_JOB_CANCELLED,
+            )
+        return reported
     return _terminal(EVENT_JOB_CANCELLED, "WARN")
 
 
