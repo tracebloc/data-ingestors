@@ -36,5 +36,13 @@ jsonschema>=4.0.0
 # Structured logging
 python-json-logger>=2.0.0
 
+# The shared contract emitter (RFC-BACKEND-1872 D2), pinned exactly as the other
+# Python services pin it. Safe to add to a PUBLIC package's runtime deps: it is
+# published on PyPI and declares NO dependencies of its own — the OpenTelemetry
+# SDK is an optional [otlp] extra we deliberately do not take, so without it the
+# contract is still enforced and records go to the standard library logger, which
+# is the only route out of a customer's cluster this Job has anyway.
+tracebloc-telemetry==0.1.0
+
 # Progress bar
 tqdm>=4.65.0

@@ -37,6 +37,8 @@ PyPI first. `RELEASING.md` documents how they stay aligned.
   suppressed" note (`ingestors/csv_ingestor.py:508`,
   `validators/per_group_time_ordered_validator.py:219`, `metadata_backfill_runner.py:195`).
 
+- **A telemetry attribute that could carry content.** A contract record (`tracebloc_ingestor/telemetry.py`) is a wire, and the same policy line applies to it. `exception.message` is never sent; `exception.stacktrace` is rendered with `traceback.format_tb`, whose frames are code, and NOT with `format_exc` / `format_exception`, which append `str(exc)`. Counts and closed `error.type` values are fine; a row, a cell, a driver message or an id derived from one is not.
+
 - **A validator that reads data differently from the ingestor.** Preflight readers must
   honor the run's `csv_options` via `utils/csv_dialect.read_dialect_kwargs` — a hardcoded
   `pd.read_csv(..., sep=",", encoding="utf-8")` passes or rejects manifests the real ingest
