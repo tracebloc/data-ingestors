@@ -527,6 +527,19 @@ class BaseIngestor(ABC):
         return spec.grouping if spec is not None else None
 
     @property
+    def _label_is_tag_sequence(self) -> bool:
+        """Whether the category's ``label`` column holds a whitespace-joined
+        per-token tag SEQUENCE (token_classification BIO/IOB2), so its
+        output_classes are the DISTINCT TAGS — the sequence exploded — rather
+        than the distinct sequence strings a plain ``GROUP BY label`` would
+        count (backend#1747). Read trait-style from the registry, never via a
+        category string, so a future tag-sequence category is a registry entry,
+        not a base.py edit. Selects ``get_tag_counts`` over ``get_label_counts``
+        in the ingest-summary count path."""
+        spec = _MODALITY_REGISTRY.get(self.category)
+        return bool(spec is not None and spec.label_is_tag_sequence)
+
+    @property
     def _table_lock(self) -> TableLock:
         """The run's table lock (P5b). ``TableLock`` owns the file-lock
         lifecycle — compute path, atomic acquire with stale-reclaim, release —
@@ -1200,6 +1213,7 @@ class BaseIngestor(ABC):
                 # future grouped category counting rows falls through to the
                 # standard row counts like every non-grouped category.
                 if grouping is not None and grouping.count_unit == "sequences":
+                    counts_helper = "get_label_sequence_counts"
                     label_counts = self.database.get_label_sequence_counts(
                         self.physical_table_name,
                         self.ingestor_id,
@@ -1212,7 +1226,19 @@ class BaseIngestor(ABC):
                     self.file_options["number_of_sequences"] = sum(
                         label_counts.values()
                     )
+                elif self._label_is_tag_sequence:
+                    # token_classification: the ``label`` column holds the whole
+                    # per-token BIO tag SEQUENCE, so output_classes are the
+                    # DISTINCT TAGS. Explode the sequence (get_tag_counts) rather
+                    # than GROUP BY the raw sequence string, which would count
+                    # distinct sequences as classes — no model head links then,
+                    # and the task is unrunnable e2e (backend#1747).
+                    counts_helper = "get_tag_counts"
+                    label_counts = self.database.get_tag_counts(
+                        self.physical_table_name, self.ingestor_id
+                    )
                 else:
+                    counts_helper = "get_label_counts"
                     # CEILING (review on #487, tracked in #488): this GROUP BYs
                     # the RAW label, so a regression-class dataset with a
                     # continuous target yields up to one entry per distinct
@@ -1247,11 +1273,6 @@ class BaseIngestor(ABC):
                         "skipping ingest summary."
                     )
                 elif not label_counts:
-                    counts_helper = (
-                        "get_label_sequence_counts"
-                        if grouping is not None and grouping.count_unit == "sequences"
-                        else "get_label_counts"
-                    )
                     raise RuntimeError(
                         f"Inserted {stats['inserted_records']} row(s) but "
                         f"{counts_helper} returned nothing for "
