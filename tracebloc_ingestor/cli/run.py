@@ -40,6 +40,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import signal
 import sys
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
@@ -47,10 +48,12 @@ from typing import Any, Dict, Iterable, List, Optional
 import yaml
 from jsonschema import Draft7Validator, ValidationError
 
+from .. import telemetry
 from ..api.client import APIClient
 from ..config import Config
 from ..database import Database
 from ..ingestors import CSVIngestor, JSONIngestor
+from ..utils.correlation import resolve_correlation_id
 from ..utils.logging import setup_logging
 from .conventions import ResolvedConfig, resolve
 
@@ -68,12 +71,21 @@ _SCHEMA_PATH = Path(__file__).resolve().parent.parent / "schema" / "ingest.v1.js
 # ---------------------------------------------------------------------------
 
 
-def main(argv: List[str] | None = None) -> int:  # pragma: no cover - thin shell
+def main(argv: List[str] | None = None) -> int:
     """Entrypoint registered as the ``tracebloc-ingest`` console script.
 
     Returns the process exit code. A non-zero return is converted to
     ``sys.exit`` by the console-script wrapper; using a return value (rather
     than raising) keeps the function testable from inside pytest.
+
+    THIS IS THE TELEMETRY FUNNEL, and that is the only reason the run itself
+    lives in ``_run``. Every path out of this function — a clean exit, a
+    classified failure, an exception nobody caught — reports exactly one
+    terminal event, because the funnel reports one on every branch and
+    ``telemetry._terminal`` drops the duplicate when the path already
+    classified itself. A run that ends without saying how it ended is
+    indistinguishable from a run that never started, and that silence is the
+    thing worth removing.
     """
     # Group-writable by default (umask 002) so every directory and file the run
     # writes under DEST_PATH can be reclaimed by the `data delete` teardown
@@ -83,32 +95,94 @@ def main(argv: List[str] | None = None) -> int:  # pragma: no cover - thin shell
     # containing directories do, which this guarantees for the whole tree.
     os.umask(0o002)
 
+    telemetry.configure_job()
+    # Resolved here as well as in BaseIngestor, so the config-rejection paths
+    # below — which end the run before an ingestor exists — can still name their
+    # run. The only cost is that a MALFORMED id logs its warning twice, which is
+    # cheaper than a second copy of the id's validation rule.
+    telemetry.begin_run(resolve_correlation_id())
+
+    def _on_sigterm(signum, _frame):  # pragma: no cover - driven by a real signal
+        # A run the platform ended is still a run that ended, and SIGTERM's
+        # default disposition unwinds NOTHING -- no exception, no `finally`, no
+        # `atexit` -- so the terminal event is emitted here or not at all. The
+        # funnel below catches BaseException, which covers every way Python
+        # leaves the frame and none of the ways a signal does. Measured on this
+        # branch by @shujaatTracebloc: SIGTERM at 3s gave `started` and silence.
+        #
+        # In Kubernetes this is the common ending, not an edge case: eviction,
+        # node drain and `activeDeadlineSeconds` all send SIGTERM. SIGKILL
+        # cannot be caught, so an OOMKilled run still reports `started` alone —
+        # `_terminal`'s docstring says so rather than implying otherwise.
+        #
+        # `_terminal` makes this safe against double-reporting if the signal
+        # lands while a classified path is already mid-flight.
+        #
+        # NOT ALWAYS A CANCELLATION, and the decision is `job_cancelled`'s
+        # rather than this handler's. Once the load is durable, a signal stops a
+        # process that has already finished its run, and calling that a
+        # cancellation subtracted a success that really happened
+        # (backend#2435). `mark_durable` is what tells the two apart.
+        telemetry.job_cancelled()
+        raise SystemExit(128 + signum)
+
+    signal.signal(signal.SIGTERM, _on_sigterm)
+
+    try:
+        code = _run(argv)
+    except BaseException as exc:
+        # Startup failures live here: a missing DB credential or missing backend
+        # auth raises out of Database() / APIClient() construction, and until now
+        # produced a raw traceback and no event whatsoever.
+        telemetry.job_failed(telemetry.ERROR_UNHANDLED_EXCEPTION, exc)
+        raise
+
+    if code == 0:
+        telemetry.job_succeeded()
+    else:
+        telemetry.job_failed(telemetry.ERROR_UNCLASSIFIED)
+    return code
+
+
+def _run(argv: List[str] | None = None) -> int:
+    """The run itself. See ``main`` for why it is a separate function."""
     config_path = os.environ.get("INGEST_CONFIG")
     if not config_path:
         return _fail(
             "INGEST_CONFIG env var not set. The official image expects the "
             "Helm subchart (client#86) to mount the ingest.yaml and set "
-            "INGEST_CONFIG to its path."
+            "INGEST_CONFIG to its path.",
+            telemetry.ERROR_CONFIG_MISSING,
         )
 
     raw_path = Path(config_path)
     if not raw_path.is_file():
-        return _fail(f"INGEST_CONFIG points to {config_path} which does not exist.")
+        return _fail(
+            f"INGEST_CONFIG points to {config_path} which does not exist.",
+            telemetry.ERROR_CONFIG_NOT_FOUND,
+        )
 
     try:
         raw_config = yaml.safe_load(raw_path.read_text(encoding="utf-8"))
     except yaml.YAMLError as e:
-        return _fail(f"ingest.yaml is not valid YAML:\n  {e}")
+        return _fail(
+            f"ingest.yaml is not valid YAML:\n  {e}",
+            telemetry.ERROR_CONFIG_UNPARSEABLE,
+        )
 
     if not isinstance(raw_config, dict):
         return _fail(
             "ingest.yaml must be a mapping at the top level "
-            "(apiVersion / kind / category / ...)."
+            "(apiVersion / kind / category / ...).",
+            telemetry.ERROR_CONFIG_NOT_A_MAPPING,
         )
 
     errors = list(_validate(raw_config))
     if errors:
-        return _fail("ingest.yaml validation failed:\n" + _format_errors(errors))
+        return _fail(
+            "ingest.yaml validation failed:\n" + _format_errors(errors),
+            telemetry.ERROR_CONFIG_INVALID,
+        )
 
     resolved = resolve(raw_config)
 
@@ -166,6 +240,7 @@ def main(argv: List[str] | None = None) -> int:  # pragma: no cover - thin shell
             # the exception into a clean, single-line non-zero exit rather than a
             # raw traceback, so the CLI's live log stream shows an actionable
             # reason and marks the Job failed.
+            telemetry.job_failed(telemetry.ERROR_INGESTION_FAILED, exc)
             print(f"\nIngestion failed: {exc}", file=sys.stderr)
             return 1
         if failed:
@@ -173,7 +248,29 @@ def main(argv: List[str] | None = None) -> int:  # pragma: no cover - thin shell
                 "%d record(s) failed during ingestion; see logs for details.",
                 len(failed),
             )
+            # The COUNT, never the records: counts are dataset structure and may
+            # be reported, the rows themselves may not.
+            telemetry.job_failed(
+                telemetry.ERROR_RECORDS_FAILED, failed_records=len(failed)
+            )
             return 1
+
+        # The run has succeeded HERE, not where the funnel gets to say so. The
+        # SIGTERM handler reports the ending, and between this line and
+        # ``job_succeeded`` in the funnel there is real elapsed time -- the
+        # context manager's exit, the return through the table-lock release,
+        # this log line -- during which a signal used to claim the terminal
+        # slot as ``cancelled`` for a dataset already committed and registered
+        # (backend#2435).
+        #
+        # ``BaseIngestor`` calls this too, earlier, at the point it can prove
+        # the load is durable; that is what covers the reclaim of the staged
+        # source tree, which happens inside ``ingest`` and is the LONG part of
+        # the window (an rmtree over a whole staged image dataset). This call is
+        # the backstop for a success path that returns no failed records without
+        # reaching the ingestor's own proof point, so the entrypoint does not
+        # depend on where that point currently sits. Idempotent, by design.
+        telemetry.mark_durable()
 
     logger.info("Ingestion completed successfully.")
     return 0
@@ -369,11 +466,18 @@ def _build_ingestor(
 # ---------------------------------------------------------------------------
 
 
-def _fail(message: str) -> int:
+def _fail(message: str, error_type: str) -> int:
     """Print to stderr and return non-zero. Logger may not be configured yet
     when validation fails (it depends on Config() which depends on env
-    being set), so a plain stderr write is the most reliable channel."""
+    being set), so a plain stderr write is the most reliable channel.
+
+    The single funnel for "the configuration was refused and no data was read",
+    so a rejection path cannot be added without also classifying itself.
+    ``error_type`` is a constant from ``telemetry.ERROR_TYPES``; a literal here
+    is a finding, and ``tests/test_telemetry.py`` reads this module to say so.
+    """
     print(message, file=sys.stderr)
+    telemetry.job_rejected(error_type)
     return 2
 
 

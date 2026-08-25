@@ -60,6 +60,7 @@ the file extension — drives validation and file transfer.
   - `file_transfer.py` -- secure file transfer to cluster storage
   - `storage_contract.py` -- the ingest→trainer storage contract (framework column names, `data_id` strategies, the on-disk naming rule). Stdlib-only and mirrored verbatim by tracebloc-engine's `core/utils/ingest_contract.py`; change it here first (backend#1706)
   - `config.py` -- configuration
+  - `telemetry.py` -- the ingest Job's contract telemetry (RFC-BACKEND-1872 D2): `service.name=data-ingestors`, `tracebloc.component=ingest-job`, and the closed `ingest.job.*` event set the entry point emits. Every run reports exactly one terminal event; a failure record carries the exception's type and FRAMES and never its message, because the message is where a cell value would be. The entry point is still the only place an event is EMITTED, but `mark_durable()` is called from `ingestors/base.py` too: it records that the load is committed and registered so a SIGTERM during the post-commit teardown reports the success it earned instead of `ingest.job.cancelled` (backend#2435). It emits nothing and leaves the terminal slot open, so a later real failure still classifies itself
   - `utils/` -- shared utilities (incl. `TaskCategory` constants, logging)
 - **`templates/`** -- ingestor scripts used inside Docker containers
 - **`docker-entrypoint.sh`** -- waits for MySQL, then exec's the `tracebloc-ingest` console script
@@ -67,7 +68,7 @@ the file extension — drives validation and file transfer.
 
 ## Key Dependencies
 
-Python 3.11+, `sqlalchemy`, `mysql-connector-python`, `pandas`, `Pillow`, `requests`, `tenacity`, `tqdm`.
+Python 3.11+, `sqlalchemy`, `mysql-connector-python`, `pandas`, `Pillow`, `requests`, `tenacity`, `tqdm`, `tracebloc-telemetry` (the shared contract emitter; no dependencies of its own, and the OpenTelemetry SDK extra is deliberately not taken).
 
 <!-- org-standards:begin -->
 ## tracebloc engineering standards (org-wide)
