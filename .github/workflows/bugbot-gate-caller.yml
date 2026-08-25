@@ -1,0 +1,107 @@
+name: Bugbot gate
+
+# THIN CALLER. The FLEET ROLLOUT of tracebloc/backend#2284 -- step 2 of the
+# three-step arming order the reusable's own header sets out, continued from the
+# pilot onto the rest of the org.
+#
+# WHERE THIS SITS. `bugbot-gate.yml` reached `.github`'s `main` in #305/#312 and
+# then executed NOWHERE, because a reusable with no caller runs on nothing: every
+# `repo-inventory.yml` row read `exempt`. claude-skills#36 gave it its first
+# caller on 2026-08-25, on one low-traffic private repo chosen by measured PR
+# volume. That pilot is the evidence this file rides on -- the gate was observed
+# running against real PRs before going fleet-wide, which is CLAUDE.md rule 4
+# (arm while green) done in the only order that lets a misbehaviour be attributed
+# to one repo instead of twenty. This is the other nineteen.
+#
+# THIS IS ADVICE, NOT A GATE, AND SAYING SO IS THE POINT -- it is the whole of
+# what backend#2284 asks for at this step. `bugbot / review` is NOT added to this
+# repo's required status contexts, and the PR carrying this file touches no
+# branch protection at all. Step 3 is deliberately NOT taken here, and one
+# measurement is why:
+#
+#   BUGBOT DOES NOT REVIEW DEPENDABOT PRs. Sampled 2026-08-25 over the last 30
+#   PRs each of .github, cli, release-train, tracebloc-website, averaging-service
+#   and backend: every NON-DRAFT pull request with no `Cursor Bugbot` check run
+#   on its head was authored by dependabot (cli#574, cli#575,
+#   tracebloc-website#510). The only other misses were drafts, which this gate
+#   passes by design. Bugbot re-runs only on a push or an explicit `bugbot run`
+#   comment, so a REQUIRED `bugbot / review` would park every Dependabot PR at a
+#   red check with no route to green. That question is unanswered, so the verdict
+#   is reported and nothing is required. As ADVICE the same PRs still go red --
+#   after the callee's 900s wait, visible and costing only runner minutes, which
+#   is the honest way to leave a question open.
+#
+# `repo-inventory.yml` IS NOT TOUCHED BY THIS PR. `.github`'s caller state is
+# read from its audit branch over the API, so a caller and its `required` row
+# cannot land together: the row would be checked against a branch the caller is
+# not on yet. Caller first, entry after -- the two-step blocked-gate and
+# backend#2396 were both forced into. BETWEEN THE TWO, a caller sitting against
+# an `exempt` row IS the stale-exemption finding and the org audit goes red. That
+# window is the cost of this order rather than an oversight (the alternative is a
+# PR that can never go green), and FLIPPING THE ROW TO `required` IS THE REQUIRED
+# FOLLOW-UP -- one PR against tracebloc/.github for the whole fleet.
+#
+# NO INPUTS PASSED. The callee declares four -- `min-severity` (default `high`),
+# `wait-seconds` (900), `poll-seconds` (20), `quality-ref` (`main`) -- and every
+# one is left at its default, `min-severity` DELIBERATELY. Passing `high`
+# explicitly would restate the callee's own default in twenty files, so changing
+# the fleet threshold would take twenty PRs and would silently half-apply if one
+# were missed: derive, never restate (CLAUDE.md rule 1). `high` is also the right
+# threshold today precisely because it is green fleet-wide --
+# `required_conversation_resolution` is true on every measured branch, so no
+# mergeable PR carries an open finding of ANY severity and starting stricter
+# would buy nothing while risking a red gate on day one. A caller may only pass
+# inputs the `@main` callee declares; passing one it does not have kills the run
+# at `startup_failure`. Verified before writing this line: `bugbot-gate.yml` is
+# blob 936771bb on `.github`'s `main` and `develop` alike, and declares all four.
+#
+# NO `paths:` FILTER, and none may be added. A path-filtered check never reports
+# on a PR the filter skips, so once required it parks that PR at "Expected --
+# waiting for status" forever. This org has hit that twice (client#665,
+# pii-gate/pii-check); the reusable's header, code-quality.yml's and
+# selftests.yml's all carry the same warning.
+#
+# `ready_for_review` IS LOAD-BEARING, not boilerplate. The gate deliberately
+# PASSES a draft -- a draft cannot merge, and Bugbot's behaviour on drafts is not
+# this gate's business -- so leaving that type out means the exemption is never
+# lifted and the check stays permanently green on anything opened as a draft.
+#
+# NO `secrets: inherit` -- RFC-BACKEND-1405 Q5. The callee runs on `github.token`
+# with exactly the three read scopes granted below; inheriting would hand it
+# every secret this repo holds, for no gain.
+#
+# NO `workflow_dispatch`. The callee reads `github.event.pull_request.number`,
+# which a dispatch does not carry -- the run would abort with "PR_NUMBER must be
+# a number" rather than checking anything. When the failure message says to
+# RE-RUN this check after resolving a thread, it means "Re-run jobs" on the
+# existing run, which replays the original pull_request payload. (Resolving a
+# thread is a `pull_request_review_thread` event, which actionlint 1.7.12 -- a
+# required check in tracebloc/.github -- does not know, so no caller can trigger
+# on it yet.)
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+
+# Per-PR: `github.ref` is `refs/pull/<n>/merge` on a pull_request event. The
+# callee polls for up to 900s, so without this a superseded run keeps a poll
+# alive against a head nobody is merging.
+concurrency:
+  group: bugbot-gate-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# All three are load-bearing and a called workflow cannot hold more than its
+# caller: `checks: read` reads the head's check runs, `pull-requests: read`
+# reads the review threads, `contents: read` checks out the shared checker.
+permissions:
+  contents: read
+  checks: read
+  pull-requests: read
+
+# The job id below and the callee's job id (`review`) together are the check
+# CONTEXT name, `bugbot / review` -- which is the string branch protection would
+# key on at step 3. Required checks reference job ids, never filenames, so this
+# file may be renamed and that name may not.
+jobs:
+  bugbot:
+    uses: tracebloc/.github/.github/workflows/bugbot-gate.yml@main
