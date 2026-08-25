@@ -1032,6 +1032,52 @@ class Database:
             counts[key] = counts.get(key, 0) + cnt
         return counts
 
+    def get_tag_counts(self, table_name: str, ingestor_id: str) -> Dict[str, int]:
+        """
+        Return ``{tag: token_count}`` for a token-classification run, exploding
+        each row's whitespace-joined BIO tag SEQUENCE into individual tags.
+
+        token_classification stores the whole per-row tag sequence (one tag per
+        word — e.g. ``"O B-PER I-PER O"``) in the ``label`` column, so the
+        row-unit :meth:`get_label_counts` counts distinct SEQUENCE STRINGS as
+        classes (dozens of them) instead of the handful of distinct TAGS the
+        model head is built on. output_classes must be the distinct tags, so
+        this explodes the sequence and tallies token occurrences per tag
+        (backend#1747).
+
+        The ``GROUP BY label`` still runs in SQL, so the row set materialised
+        here is bounded to the DISTINCT sequence strings; each is split once and
+        weighted by its row count, making the Python work O(distinct sequences),
+        not O(rows). A NULL/empty label carries no tags and contributes nothing
+        (unlike :meth:`get_label_counts`, which reports NULL under the ``""``
+        key — an empty class is meaningless for a per-token tag set).
+
+        Args:
+            table_name: Name of the table to query
+            ingestor_id: UUID of the current ingest run
+
+        Returns:
+            Dict mapping each distinct BIO tag to its total token-occurrence
+            count across the run's rows
+        """
+        with self.engine.connect() as conn:
+            rows = conn.execute(
+                text(
+                    f"SELECT label, COUNT(*) AS cnt "
+                    f"FROM `{table_name.replace('`', '``')}` "
+                    f"WHERE ingestor_id = :ingestor_id "
+                    f"GROUP BY label"
+                ),
+                {"ingestor_id": ingestor_id},
+            ).fetchall()
+        counts: Dict[str, int] = {}
+        for label, row_count in rows:
+            if label is None:
+                continue
+            for tag in str(label).split():
+                counts[tag] = counts.get(tag, 0) + row_count
+        return counts
+
     def get_label_sequence_counts(
         self, table_name: str, ingestor_id: str, group_column: str = "sequence_id"
     ) -> Dict[str, int]:

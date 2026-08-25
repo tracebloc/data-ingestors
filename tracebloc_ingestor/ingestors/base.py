@@ -25,6 +25,7 @@ from ..utils import redaction
 from ..utils.columns import resolve_column
 from ..utils.correlation import resolve_correlation_id
 from ..utils.validators_mapping import map_validators
+from .. import telemetry
 from ..file_transfer import map_file_transfer, reclaim_dest_tree, reclaim_source
 from ..text_profile import compute_text_profile
 from ..schema_inference import canonical_dtype
@@ -524,6 +525,19 @@ class BaseIngestor(ABC):
         group-integrity pass."""
         spec = _MODALITY_REGISTRY.get(self.category)
         return spec.grouping if spec is not None else None
+
+    @property
+    def _label_is_tag_sequence(self) -> bool:
+        """Whether the category's ``label`` column holds a whitespace-joined
+        per-token tag SEQUENCE (token_classification BIO/IOB2), so its
+        output_classes are the DISTINCT TAGS — the sequence exploded — rather
+        than the distinct sequence strings a plain ``GROUP BY label`` would
+        count (backend#1747). Read trait-style from the registry, never via a
+        category string, so a future tag-sequence category is a registry entry,
+        not a base.py edit. Selects ``get_tag_counts`` over ``get_label_counts``
+        in the ingest-summary count path."""
+        spec = _MODALITY_REGISTRY.get(self.category)
+        return bool(spec is not None and spec.label_is_tag_sequence)
 
     @property
     def _table_lock(self) -> TableLock:
@@ -1199,6 +1213,7 @@ class BaseIngestor(ABC):
                 # future grouped category counting rows falls through to the
                 # standard row counts like every non-grouped category.
                 if grouping is not None and grouping.count_unit == "sequences":
+                    counts_helper = "get_label_sequence_counts"
                     label_counts = self.database.get_label_sequence_counts(
                         self.physical_table_name,
                         self.ingestor_id,
@@ -1211,7 +1226,19 @@ class BaseIngestor(ABC):
                     self.file_options["number_of_sequences"] = sum(
                         label_counts.values()
                     )
+                elif self._label_is_tag_sequence:
+                    # token_classification: the ``label`` column holds the whole
+                    # per-token BIO tag SEQUENCE, so output_classes are the
+                    # DISTINCT TAGS. Explode the sequence (get_tag_counts) rather
+                    # than GROUP BY the raw sequence string, which would count
+                    # distinct sequences as classes — no model head links then,
+                    # and the task is unrunnable e2e (backend#1747).
+                    counts_helper = "get_tag_counts"
+                    label_counts = self.database.get_tag_counts(
+                        self.physical_table_name, self.ingestor_id
+                    )
                 else:
+                    counts_helper = "get_label_counts"
                     # CEILING (review on #487, tracked in #488): this GROUP BYs
                     # the RAW label, so a regression-class dataset with a
                     # continuous target yields up to one entry per distinct
@@ -1246,11 +1273,6 @@ class BaseIngestor(ABC):
                         "skipping ingest summary."
                     )
                 elif not label_counts:
-                    counts_helper = (
-                        "get_label_sequence_counts"
-                        if grouping is not None and grouping.count_unit == "sequences"
-                        else "get_label_counts"
-                    )
                     raise RuntimeError(
                         f"Inserted {stats['inserted_records']} row(s) but "
                         f"{counts_helper} returned nothing for "
@@ -1446,6 +1468,20 @@ class BaseIngestor(ABC):
         # guarded + best-effort: it never deletes a dir that contains the table
         # dir and never fails an already-successful load.
         if dataset_registered and not failed_records:
+            # The load is durable and clean, which is the earliest point this
+            # run can PROVE it succeeded -- and saying so here rather than
+            # letting the entrypoint's funnel say it later is what stops a
+            # SIGTERM during the reclaim below from reporting a committed,
+            # registered dataset as ``cancelled`` (backend#2435). The reclaim is
+            # an rmtree over a whole staged dataset, so this is the long part of
+            # that window, not a theoretical one.
+            #
+            # Derived from the same guard the reclaim is derived from, so the
+            # two cannot disagree about what "succeeded" means. This EMITS
+            # nothing: the entrypoint stays the only place a terminal event
+            # comes from, and the terminal slot stays open so anything that
+            # goes wrong from here still reports its own failure.
+            telemetry.mark_durable()
             reclaim_source(self.database.config)
 
         return failed_records
