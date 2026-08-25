@@ -117,6 +117,12 @@ def main(argv: List[str] | None = None) -> int:
         #
         # `_terminal` makes this safe against double-reporting if the signal
         # lands while a classified path is already mid-flight.
+        #
+        # NOT ALWAYS A CANCELLATION, and the decision is `job_cancelled`'s
+        # rather than this handler's. Once the load is durable, a signal stops a
+        # process that has already finished its run, and calling that a
+        # cancellation subtracted a success that really happened
+        # (backend#2435). `mark_durable` is what tells the two apart.
         telemetry.job_cancelled()
         raise SystemExit(128 + signum)
 
@@ -248,6 +254,23 @@ def _run(argv: List[str] | None = None) -> int:
                 telemetry.ERROR_RECORDS_FAILED, failed_records=len(failed)
             )
             return 1
+
+        # The run has succeeded HERE, not where the funnel gets to say so. The
+        # SIGTERM handler reports the ending, and between this line and
+        # ``job_succeeded`` in the funnel there is real elapsed time -- the
+        # context manager's exit, the return through the table-lock release,
+        # this log line -- during which a signal used to claim the terminal
+        # slot as ``cancelled`` for a dataset already committed and registered
+        # (backend#2435).
+        #
+        # ``BaseIngestor`` calls this too, earlier, at the point it can prove
+        # the load is durable; that is what covers the reclaim of the staged
+        # source tree, which happens inside ``ingest`` and is the LONG part of
+        # the window (an rmtree over a whole staged image dataset). This call is
+        # the backstop for a success path that returns no failed records without
+        # reaching the ingestor's own proof point, so the entrypoint does not
+        # depend on where that point currently sits. Idempotent, by design.
+        telemetry.mark_durable()
 
     logger.info("Ingestion completed successfully.")
     return 0
