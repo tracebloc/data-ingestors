@@ -13,6 +13,26 @@ name: Bugbot gate
 # (arm while green) done in the only order that lets a misbehaviour be attributed
 # to one repo instead of twenty. This is the other nineteen.
 #
+# WHAT THE PILOT DOES NOT COVER, said here rather than inherited
+# (shujaatTracebloc, model-zoo#179). The pilot repo is PRIVATE and NOT on the
+# release train. Most repos taking this caller are one or both of the opposite,
+# and the gap is real on two axes rather than rhetorical:
+#
+#   PUBLIC repos -- a misfiring advisory check is visible outside the org, which
+#   it structurally could not be on the pilot. The pilot's own safety argument
+#   leaned partly on that privacy, so the property does not carry forward and is
+#   not being claimed here. Accepted because the check blocks nothing: the verdict
+#   is reported, never enforced.
+#
+#   TRAIN repos -- promotion PRs (`develop -> staging`, `staging -> main`) are a
+#   whole class the pilot never saw, because it has no train. Whatever this gate
+#   does on one is therefore UNEXERCISED, not proven benign. Also advisory, so an
+#   unexpected result costs a red tick and no merge.
+#
+# Neither is an argument against arming it as advice. Both are limits the pilot's
+# evidence does not reach, and step 3 must not be taken on any repo until they
+# have been measured THERE.
+#
 # THIS IS ADVICE, NOT A GATE, AND SAYING SO IS THE POINT -- it is the whole of
 # what backend#2284 asks for at this step. `bugbot / review` is NOT added to this
 # repo's required status contexts, and the PR carrying this file touches no
@@ -102,6 +122,16 @@ permissions:
 # CONTEXT name, `bugbot / review` -- which is the string branch protection would
 # key on at step 3. Required checks reference job ids, never filenames, so this
 # file may be renamed and that name may not.
+#
+# THE JOB ID IS THE CONTRACT AND MUST NOT GAIN A `name:` (shujaatTracebloc,
+# start-training#73). `bugbot / review` is built from the job ID only because
+# `jobs.bugbot` carries no `name:` -- the `name:` at the top of this file is the
+# WORKFLOW's and never enters the context. Adding a cosmetic `name: Bugbot review`
+# to the job below would rename the context to `Bugbot review / review`, and once
+# step 3 arms the old string as required, that check would silently never report
+# again. Note what the clause above does and does not buy: it forbids renaming the
+# FILE, which is the one change that would NOT move the context. This is the one
+# that would.
 jobs:
   bugbot:
     uses: tracebloc/.github/.github/workflows/bugbot-gate.yml@main
