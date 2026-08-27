@@ -2,7 +2,7 @@
 <!-- 1–3 sentences. What does this PR do and why? -->
 
 ## Related
-<!-- Same repo: Closes #123 · Cross-repo: Fixes tracebloc/backend#456 (owner-qualified — a bare backend#456 closes nothing). PRs land on develop, not the default branch, so closing keywords do not fire on merge — confirm the issue actually closed. -->
+<!-- Same repo: Closes #123 · Cross-repo: Fixes tracebloc/backend#456 (owner-qualified — a bare backend#456 closes nothing). develop IS this repo's default branch, so a same-repo keyword DOES fire on merge — measured 12 for 12. A cross-repo one never does, whatever the branch: close those by hand. -->
 
 ## Type of change
 - [ ] Feature
