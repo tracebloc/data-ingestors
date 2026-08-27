@@ -255,3 +255,67 @@ class TestTheRealReposAgreeToday:
         if not (consumer / "harness").is_dir():
             pytest.skip("no e2e-test-agent checkout beside this repo")
         assert disagreements(root, consumer_contracts(consumer)) == []
+
+
+class TestTheWorkflowScopeStepFailsClosed:
+    """The scope step decides whether a missing token is tolerable.
+
+    Every path that cannot answer must choose "a contract might have changed".
+    The first cut chose the opposite by accident -- it ran `git diff` against a
+    depth-1 merge checkout, the diff failed, `2>/dev/null` ate the error and the
+    output defaulted to `false`, so a fork schema bump would have passed with a
+    notice (Bugbot, #536). That is the exact defect this workflow exists to
+    prevent, which is why it is pinned here rather than left to review.
+    """
+
+    @staticmethod
+    def _scope_step() -> str:
+        text = (
+            Path(__file__).resolve().parents[1]
+            / ".github/workflows/contract-consumers.yml"
+        ).read_text()
+        start = text.index("- name: Decide whether a contract is in play")
+        end = text.index("- name: Mint a token for the private consumer")
+        return text[start:end]
+
+    def test_it_does_not_infer_the_diff_from_git(self):
+        # `git diff` cannot answer here: checkout gives a depth-1 MERGE commit,
+        # so the head SHA is frequently absent from the local repo.
+        step = self._scope_step()
+        code = "\n".join(
+            line for line in step.splitlines() if not line.strip().startswith("#")
+        )
+        assert "git diff" not in code, (
+            "the scope step infers the diff from git again; a depth-1 merge "
+            "checkout cannot answer this and the failure is silent"
+        )
+
+    def test_every_cannot_tell_branch_chooses_in_play(self):
+        # Derived from the step itself: every `schema-touched=` it writes must be
+        # `true` except exactly one -- the branch that positively established no
+        # contract changed. A second `false` is a new way to fail open.
+        step = self._scope_step()
+        writes = [
+            line.strip()
+            for line in step.splitlines()
+            if "schema-touched=" in line and "echo" in line
+        ]
+        assert writes, "the scope step writes no output at all"
+        false_writes = [w for w in writes if "schema-touched=false" in w]
+        assert len(false_writes) == 1, (
+            f"expected exactly one `false` path (the positive 'no contract "
+            f"changed' answer); found {len(false_writes)}: {false_writes}"
+        )
+
+    def test_the_refusal_branch_still_exists_and_is_fatal(self):
+        # The other half: having decided a contract IS in play, an unreadable
+        # consumer must end the run rather than warn.
+        text = (
+            Path(__file__).resolve().parents[1]
+            / ".github/workflows/contract-consumers.yml"
+        ).read_text()
+        start = text.index("- name: Refuse to guess when a contract changed")
+        end = text.index("- name: Check out the consumer")
+        refusal = text[start:end]
+        assert 'SCHEMA_TOUCHED" = "true"' in refusal
+        assert "exit 1" in refusal, "the refusal branch does not fail the run"
