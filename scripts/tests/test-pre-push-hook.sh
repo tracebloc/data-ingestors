@@ -154,9 +154,21 @@ rm -rf "$gtbin"
 # through to make check (Bugbot, backend#1749). Stub make as an OLD Makefile:
 # guard-toolchain has no rule (exit 2), check touches a sentinel.
 sent="$(mktemp -u)"; stub="$(mktemp -d)"
-printf '#!/bin/sh\nfor a in "$@"; do case "$a" in guard-toolchain) exit 2 ;; check) : > %s ;; esac; done\nexit 0\n' "$sent" > "$stub/make"; chmod +x "$stub/make"
+printf '#!/bin/sh\nfor a in "$@"; do case "$a" in guard-toolchain) exit 2 ;; esac; done\n[ "$1" = check ] && : > %s\nexit 0\n' "$sent" > "$stub/make"; chmod +x "$stub/make"
 printf 'refs/heads/x deadbeef refs/heads/x 000\n' | env PATH="$stub:$PATH" sh "$hook" >/dev/null 2>&1 || true
 check "$([ -f "$sent" ] && echo ran || echo skipped)" "ran" "old Makefile (no guard-toolchain) still runs make check"
+rm -rf "$stub"; rm -f "$sent"
+
+# 9c) an even older branch may lack `check` itself, or the Makefile entirely.
+# `make -n guard-toolchain` fails there too, so control would reach `exec make
+# check` and hard-block on "No rule to make target check" — with no --no-verify
+# in the GUI clients this family protects. The hook probes `check` too and
+# soft-passes (Lukas, backend#2714). Stub make: -n check has no rule (exit 2).
+sent="$(mktemp -u)"; stub="$(mktemp -d)"
+printf '#!/bin/sh\nfor a in "$@"; do case "$a" in check) exit 2 ;; esac; done\n: > %s\nexit 0\n' "$sent" > "$stub/make"; chmod +x "$stub/make"
+if printf 'refs/heads/x deadbeef refs/heads/x 000\n' | env PATH="$stub:$PATH" sh "$hook"; then rc=0; else rc=$?; fi
+check "$rc" "0" "missing check target soft-passes (exit 0, no hard-block)"
+check "$([ -f "$sent" ] && echo ran || echo skipped)" "skipped" "soft-pass does not run make check"
 rm -rf "$stub"; rm -f "$sent"
 
 echo "--- pre-push hook tests: $( [ "$fails" -eq 0 ] && echo ALL GREEN || echo "$fails FAILED" ) ---"
