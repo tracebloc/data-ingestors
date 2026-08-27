@@ -19,7 +19,10 @@ from tracebloc_ingestor.modalities.layout import (
     contract_path,
     render_contract,
 )
-from tracebloc_ingestor.modalities.registry import REGISTRY
+from tracebloc_ingestor.modalities.registry import (
+    FIXED_TIME_COLUMN_BY_CATEGORY,
+    REGISTRY,
+)
 from tracebloc_ingestor.utils.constants import TaskCategory
 
 
@@ -91,6 +94,22 @@ def test_record_format_only_on_text_tasks():
             ), f"{cat} has a record_format but isn't text"
 
 
+def test_ordering_agrees_with_the_single_source():
+    # `ordering` is DERIVED, not hand-declared: its column is the category's
+    # entry in FIXED_TIME_COLUMN_BY_CATEGORY, and its scope follows whether the
+    # spec has a grouping trait — so it can't drift from what the validators and
+    # preflight enforce (backend#1870).
+    for cat, layout in _contract().items():
+        fixed = FIXED_TIME_COLUMN_BY_CATEGORY.get(cat)
+        if fixed is None:
+            assert layout["ordering"] is None, cat
+        else:
+            assert layout["ordering"] == {
+                "column": fixed,
+                "scope": "per_group" if REGISTRY[cat].grouping else "dataset",
+            }, cat
+
+
 # 3. FAITHFULNESS (spot-checks vs the ingestor's real layout) -----------------
 
 
@@ -160,3 +179,24 @@ def test_tabular_family_is_data_csv_without_file_layout():
         assert layout["manifest"]["requires_filename_column"] is False, cat
         assert layout["primary_subdir"] is None, cat
         assert layout["sidecars"] == [] and layout["record_format"] is None, cat
+
+
+def test_time_ordering_constraint_is_discoverable():
+    # The seam backend#1870 closed: the ingestor enforces timestamp ordering in
+    # its validators, and now the contract says so. Forecasting is one merged
+    # series (global TimeOrderedValidator → dataset scope); classification is
+    # ordered within each sequence (PerGroupTimeOrderedValidator → per_group).
+    contract = _contract()
+    assert contract["time_series_forecasting"]["ordering"] == {
+        "column": "timestamp",
+        "scope": "dataset",
+    }
+    assert contract["time_series_classification"]["ordering"] == {
+        "column": "timestamp",
+        "scope": "per_group",
+    }
+    # time_to_event_prediction has a time column too, but it is a per-row
+    # duration validated by TimeToEventValidator — NOT a monotonic axis. The
+    # contract must state that it is not subject to the ordering rule, so a
+    # consumer no longer has to infer it from the validator's silence.
+    assert contract["time_to_event_prediction"]["ordering"] is None
