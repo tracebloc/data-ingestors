@@ -53,8 +53,32 @@ help:
 # running and finishes in ~11 s (measured, macOS). The coverage gate is
 # the only thing held back, and only because a floor is a merge concern
 # rather than a pre-push one.
+# guard-toolchain: can this shell actually run `make check`? A GUI/IDE git client
+# (VS Code, Tower, GitKraken) launches the pre-push hook on a thin PATH that has
+# system `make` and often a bare `python3`, but NOT the virtualenv these checks
+# were installed into — so `make check` hard-fails on "No module named ruff" with
+# no --no-verify to escape (backend#1749; the make-vs-toolchain shape of
+# backend#1995). `check` depends on this and the hook runs it first, so a push
+# from such a client degrades to a skip instead of a hard block.
+#
+# It asks the TOOLS, not the DEPENDENCIES: whether $(PYTHON) can run the linters
+# and test runner check invokes, not whether every package is installed. A
+# genuinely broken venv still fails `make check` when run from a real shell.
+.PHONY: guard-toolchain
+guard-toolchain:
+	@command -v "$(PYTHON)" >/dev/null 2>&1 || { \
+	  echo "not on PATH: $(PYTHON) — activate your virtualenv, then run: make setup"; \
+	  exit 1; }
+	@missing=''; \
+	for m in ruff pytest; do \
+	  "$(PYTHON)" -m "$$m" --version >/dev/null 2>&1 || missing="$$missing $$m"; \
+	done; \
+	[ -z "$$missing" ] || { \
+	  echo "$(PYTHON) cannot run:$$missing — activate your virtualenv, then run: make setup"; \
+	  exit 1; }
+
 .PHONY: check
-check: lint test
+check: guard-toolchain lint test
 	@echo "==> check: green (the coverage gate is in 'make check-all')"
 
 .PHONY: check-all
@@ -144,6 +168,14 @@ e2e:
 # `git rev-parse --git-path hooks` (not a hard-coded `.git/hooks`) so it lands
 # in the right place inside a linked worktree or a submodule, where the git dir
 # is not `.git`.
+# test-hooks: run the install-hooks / pre-push-hook behaviour suite on demand.
+# Not a `check` dependency: it runs real `make` in throwaway repos, so an
+# environment quirk (old git, noexec /tmp) could block a local push on something
+# CI never sees. Run it directly with `make test-hooks` (backend#1749).
+.PHONY: test-hooks
+test-hooks:
+	@sh scripts/tests/test-pre-push-hook.sh
+
 .PHONY: install-hooks
 install-hooks:
 	@if ! git rev-parse --git-dir >/dev/null 2>&1; then \
@@ -151,11 +183,19 @@ install-hooks:
 	elif hp="$$(git config --get core.hooksPath 2>/dev/null || true)"; [ -n "$$hp" ] && { \
 	       hd="$$(git rev-parse --git-path hooks)"; \
 	       case "$$hd" in /*) hdd="$$hd";; *) hdd="$$PWD/$$hd";; esac; \
-	       cpar="$$(cd "$$(dirname "$$hdd")" 2>/dev/null && pwd -P || true)"; \
+	       hdx="$$hdd"; \
+	       while [ ! -d "$$hdx" ] && [ "$$hdx" != "$$(dirname "$$hdx")" ]; do \
+	         hdx="$$(dirname "$$hdx")"; \
+	       done; \
+	       chd="$$(cd "$$hdx" 2>/dev/null && pwd -P || true)"; \
 	       ctop="$$(cd "$$(git rev-parse --show-toplevel)" && pwd -P)"; \
-	       [ -z "$$cpar" ] || case "$$cpar/" in "$$ctop/"*) false;; *) true;; esac; \
+	       cgd="$$(cd "$$(git rev-parse --git-common-dir)" 2>/dev/null && pwd -P || true)"; \
+	       inr=0; \
+	       case "$$chd/" in "$$ctop/"*) inr=1;; esac; \
+	       if [ -n "$$cgd" ]; then case "$$chd/" in "$$cgd/"*) inr=1;; esac; fi; \
+	       [ -z "$$chd" ] || [ "$$inr" = 0 ]; \
 	     }; then \
-	  echo "note: core.hooksPath is set to '$$hp', outside this repo — skipping."; \
+	  echo "note: core.hooksPath is set to '$$hp' (resolves to '$$chd'), outside this repo — skipping."; \
 	  echo "      That is a shared hooks dir; installing here would run 'make check' from every repo you push."; \
 	  echo "      Add 'make check' to that hook by hand if you want it everywhere."; \
 	else \
@@ -189,8 +229,19 @@ install-hooks:
 	      '#' \
 	      '# Git exports GIT_DIR/GIT_WORK_TREE/etc into hook processes; a nested git' \
 	      '# invocation (from a test, tool, or setuptools-scm) then fails in a linked' \
-	      '# worktree with exit status 128. Clear them so make check runs as from the shell.' \
+	      '# worktree with exit status 128. Clear them so the make runs below behave' \
+	      '# as they do from an ordinary shell.' \
 	      'unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX GIT_COMMON_DIR GIT_OBJECT_DIRECTORY' \
+	      '#' \
+	      '# Guarding on make alone was not enough (backend#1749): a GUI/IDE client' \
+	      '# commonly has system make on a thin PATH but not the virtualenv these' \
+	      '# checks run in, so the skip above passed and the push then hard-failed on' \
+	      '# "No module named ruff" — the exact outcome the skip exists to prevent,' \
+	      '# with no --no-verify to escape. The hook delegates to guard-toolchain,' \
+	      '# the single place the tool list lives, rather than restating it here — so' \
+	      '# the hook cannot drift from it. guard-toolchain probes the TOOLS check' \
+	      '# runs, not installed packages (a broken venv still fails make check in a shell).' \
+	      'make guard-toolchain >/dev/null 2>&1 || exit 0' \
 	      'exec make check' > "$$hook" && \
 	    chmod +x "$$hook" && \
 	    echo "==> pre-push hook installed at $$hook" && \
