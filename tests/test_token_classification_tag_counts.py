@@ -64,10 +64,10 @@ def test_tag_sequence_trait_is_unique_to_token_classification():
 
 def test_trait_does_not_leak_into_layout_contract():
     # label_is_tag_sequence drives the ingest-summary count only; it is not part
-    # of the CLI's on-disk staging contract, so the layout JSON is untouched (no
-    # version bump, no new per-task key).
+    # of the CLI's on-disk staging contract, so it never surfaces as a per-task
+    # key in the layout JSON.
     doc = build_layout_contract()
-    assert doc["version"] == "2"
+    assert doc["version"] == "3"
     assert "label_is_tag_sequence" not in doc["tasks"][TOKEN]
 
 

@@ -149,13 +149,16 @@ def test_grouping_is_unique_to_tsc():
 
 def test_layout_contract_carries_grouping():
     doc = build_layout_contract()
-    assert doc["version"] == "2"  # shape change: the grouping block
+    assert doc["version"] == "3"  # shape now carries grouping + ordering blocks
     tsc = doc["tasks"][TSC]
     assert tsc["grouping"] == {
         "group_column": "sequence_id",
         "time_column": "timestamp",
         "count_unit": "sequences",
     }
+    # TSC's timestamps must stay monotonic WITHIN each sequence — the per-group
+    # scope matches its PerGroupTimeOrderedValidator (backend#1870).
+    assert tsc["ordering"] == {"column": "timestamp", "scope": "per_group"}
     # Non-grouped categories emit an explicit null (mirrors record_format).
     assert doc["tasks"][TaskCategory.TABULAR_CLASSIFICATION]["grouping"] is None
     assert doc["tasks"][TaskCategory.TIME_SERIES_FORECASTING]["grouping"] is None
@@ -392,10 +395,7 @@ def test_partial_sequence_deleted_despite_header_spelling_drift(make_csv):
     def _insert(table, batch):
         ok, failed = [], []
         for i, record in enumerate(batch):
-            if (
-                record.get("Sequence_ID") == "p3"
-                and record.get("heart_rate") == "72.0"
-            ):
+            if record.get("Sequence_ID") == "p3" and record.get("heart_rate") == "72.0":
                 failed.append({"record": record, "error": "dup key"})
             else:
                 ok.append(i)
