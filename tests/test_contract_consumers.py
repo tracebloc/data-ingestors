@@ -382,9 +382,9 @@ class TestTheWorkflowDoesNotReintroduceTheClassesBugbotFound:
                     for k, v in (step.get("with") or {}).items()
                     if k.startswith("permission-")
                 }
-                assert perms == {"permission-contents": "read"}, (
-                    f"the token mint is not scoped to contents:read: {perms}"
-                )
+                assert perms == {
+                    "permission-contents": "read"
+                }, f"the token mint is not scoped to contents:read: {perms}"
                 return
         raise AssertionError("no token mint found — the step was renamed or removed")
 
