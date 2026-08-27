@@ -319,3 +319,99 @@ class TestTheWorkflowScopeStepFailsClosed:
         refusal = text[start:end]
         assert 'SCHEMA_TOUCHED" = "true"' in refusal
         assert "exit 1" in refusal, "the refusal branch does not fail the run"
+
+
+class TestTheWorkflowDoesNotReintroduceTheClassesBugbotFound:
+    """Four findings on #536, each turned into something that can fail again.
+
+    All four were fail-open or over-privilege on a path no test could see, in a
+    workflow whose entire purpose is to fail closed. They are pinned as CLASSES
+    rather than as the reported lines: a sweep of the file after the first fix
+    found a fourth `printf | grep -q` that the review had not flagged, which is
+    the argument for checking the class rather than the instance.
+    """
+
+    @staticmethod
+    def _workflow():
+        return (
+            Path(__file__).resolve().parents[1]
+            / ".github/workflows/contract-consumers.yml"
+        )
+
+    @staticmethod
+    def _parsed():
+        import yaml
+
+        return yaml.safe_load(
+            (
+                Path(__file__).resolve().parents[1]
+                / ".github/workflows/contract-consumers.yml"
+            ).read_text()
+        )
+
+    def test_nothing_pipes_into_an_early_exiting_reader(self):
+        # `printf | grep -q` under `set -o pipefail`: grep exits on the first
+        # match, printf takes SIGPIPE, the pipeline returns 141, and an `if`
+        # reads that as "no match". In this workflow that answers
+        # `schema-touched=false` -- the fail-open branch it exists to close.
+        import re
+
+        code = [
+            line
+            for line in self._workflow().read_text().splitlines()
+            if not line.strip().startswith("#")
+        ]
+        offenders = [
+            line.strip()
+            for line in code
+            if re.search(r"\|\s*(grep\s+-[A-Za-z]*q|head\b)", line)
+        ]
+        assert not offenders, (
+            "a pipe into an early-exiting reader is back; under pipefail it "
+            f"returns 141 and reads as 'no match': {offenders}"
+        )
+
+    def test_the_app_token_is_scoped_rather_than_inheriting_the_installation(self):
+        # Unscoped, it inherits the App's full grant -- and checkout stores it in
+        # the consumer's .git, after which this job runs the PR's own script
+        # against that checkout.
+        for step in self._parsed()["jobs"]["agreement"]["steps"]:
+            if "create-github-app-token" in step.get("uses", ""):
+                perms = {
+                    k: v
+                    for k, v in (step.get("with") or {}).items()
+                    if k.startswith("permission-")
+                }
+                assert perms == {"permission-contents": "read"}, (
+                    f"the token mint is not scoped to contents:read: {perms}"
+                )
+                return
+        raise AssertionError("no token mint found — the step was renamed or removed")
+
+    def test_the_consumer_checkout_does_not_persist_the_token(self):
+        for step in self._parsed()["jobs"]["agreement"]["steps"]:
+            with_ = step.get("with") or {}
+            if with_.get("repository", "").endswith("e2e-test-agent"):
+                assert with_.get("persist-credentials") is False, (
+                    "the consumer checkout leaves the token in .consumer/.git, "
+                    "which the PR's own script then runs against"
+                )
+                return
+        raise AssertionError("no consumer checkout found")
+
+    def test_the_producer_is_pinned_to_the_ref_the_consumer_reads(self):
+        # A scheduled run checks out the DEFAULT branch unless told otherwise,
+        # while the consumer is pinned at `develop` — so the nightly would
+        # compare a released snapshot against the head that actually reads us.
+        steps = self._parsed()["jobs"]["agreement"]["steps"]
+        producer = next(
+            s
+            for s in steps
+            if "checkout" in s.get("uses", "")
+            and not (s.get("with") or {}).get("repository")
+        )
+        ref = (producer.get("with") or {}).get("ref", "")
+        assert "schedule" in ref and "develop" in ref, (
+            "the producer checkout does not pin `develop` on scheduled runs: "
+            f"ref={ref!r}"
+        )

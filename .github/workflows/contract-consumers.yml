@@ -64,6 +64,20 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # PIN THE PRODUCER TO THE REF THE CONSUMER ACTUALLY READS (Bugbot, #536).
+          # A `schedule` or `workflow_dispatch` run checks out this repo's
+          # DEFAULT branch, while the consumer below is pinned at `develop` --
+          # so the nightly backstop would compare a RELEASED snapshot against the
+          # head that really reads us. A support-set narrowing on `develop` could
+          # stay green until promotion, and dropping an older released version
+          # could fail while `develop` agrees. Both are the wrong answer to the
+          # question this job asks.
+          #
+          # `github.ref` is right for the other events: the merge ref on a PR
+          # (the state after merging, which is what we are gating) and the pushed
+          # commit on a push.
+          ref: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && 'develop' || github.ref }}
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -105,11 +119,18 @@ jobs:
           # an API call that fails, or an empty file list all mean "this run does
           # not know", and the safe reading of that is "a contract might have
           # changed" -- never "none did".
-          if ! printf '%s' "$PR_NUMBER" | grep -qE '^[0-9]+$'; then
-            echo "::warning::no usable PR number; assuming a contract is in play"
-            echo "schema-touched=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
+          # `case`, not `printf | grep -q`: the same SIGPIPE shape as below, and
+          # the class is worth removing entirely rather than reasoning about
+          # which instances are small enough to be safe. (This one happens to
+          # fail CLOSED under 141 -- `if !` inverts it -- which is luck, not
+          # design, and luck is not a property to leave in a fail-closed gate.)
+          case "$PR_NUMBER" in
+            ''|*[!0-9]*)
+              echo "::warning::no usable PR number; assuming a contract is in play"
+              echo "schema-touched=true" >> "$GITHUB_OUTPUT"
+              exit 0
+              ;;
+          esac
           if ! files=$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" \
                          --jq '.[].filename'); then
             echo "::warning::could not enumerate this PR's files; assuming a contract is in play"
@@ -122,12 +143,21 @@ jobs:
             exit 0
           fi
 
-          if printf '%s\n' "$files" | grep -q '^tracebloc_ingestor/schema/'; then
+          # NO PIPE INTO AN EARLY-EXITING READER (Bugbot, #536). `printf | grep -q`
+          # looks harmless and is not: `grep -q` exits on the FIRST match, `printf`
+          # then takes SIGPIPE, and under `set -o pipefail` the pipeline returns
+          # 141 -- which this `if` would read as "no match" and answer
+          # `schema-touched=false`. A large enough file list plus a schema path
+          # matching early is exactly the fork bump this branch exists to refuse.
+          # Writing the list to a file removes the pipe rather than working
+          # around it.
+          printf '%s\n' "$files" > "$RUNNER_TEMP/pr-files.txt"
+          if grep -q '^tracebloc_ingestor/schema/' "$RUNNER_TEMP/pr-files.txt"; then
             echo "schema-touched=true" >> "$GITHUB_OUTPUT"
             echo "this PR changes a published contract"
           else
             echo "schema-touched=false" >> "$GITHUB_OUTPUT"
-            echo "no published contract in this diff ($(printf '%s\n' "$files" | wc -l | tr -d ' ') file(s) changed)"
+            echo "no published contract in this diff ($(wc -l < "$RUNNER_TEMP/pr-files.txt" | tr -d ' ') file(s) changed)"
           fi
 
       - name: Mint a token for the private consumer
@@ -143,6 +173,12 @@ jobs:
           private-key: ${{ secrets.RELEASE_TRAIN_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: e2e-test-agent
+          # LEAST PRIVILEGE, EXPLICITLY (Bugbot, #536). Without this the token
+          # inherits the App's FULL installation grant -- and `actions/checkout`
+          # stores it in `.consumer/.git`, after which this job runs the PR's own
+          # `scripts/contract_consumers.py` against that checkout. Reading two
+          # files needs `contents: read` and nothing else.
+          permission-contents: read
 
       - name: Refuse to guess when a contract changed and the consumer is unreadable
         if: steps.token.outcome != 'success'
@@ -169,6 +205,11 @@ jobs:
           ref: develop
           token: ${{ steps.token.outputs.token }}
           path: .consumer
+          # DO NOT LEAVE THE TOKEN IN `.consumer/.git` (Bugbot, #536). The next
+          # step runs code from this PR against this checkout; a credential
+          # sitting in its git config is reachable by anything that runs there.
+          # Nothing here pushes or re-fetches, so persisting it buys nothing.
+          persist-credentials: false
 
       - name: Every declared consumer can read every contract we publish
         if: steps.token.outcome == 'success'
