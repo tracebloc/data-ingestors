@@ -154,7 +154,7 @@ rm -rf "$gtbin"
 # through to make check (Bugbot, backend#1749). Stub make as an OLD Makefile:
 # guard-toolchain has no rule (exit 2), check touches a sentinel.
 sent="$(mktemp -u)"; stub="$(mktemp -d)"
-printf '#!/bin/sh\nfor a in "$@"; do case "$a" in guard-toolchain) exit 2 ;; check) : > %s ;; esac; done\nexit 0\n' "$sent" > "$stub/make"; chmod +x "$stub/make"
+printf '#!/bin/sh\nfor a in "$@"; do case "$a" in guard-toolchain) exit 2 ;; esac; done\n[ "$1" = check ] && : > %s\nexit 0\n' "$sent" > "$stub/make"; chmod +x "$stub/make"
 printf 'refs/heads/x deadbeef refs/heads/x 000\n' | env PATH="$stub:$PATH" sh "$hook" >/dev/null 2>&1 || true
 check "$([ -f "$sent" ] && echo ran || echo skipped)" "ran" "old Makefile (no guard-toolchain) still runs make check"
 rm -rf "$stub"; rm -f "$sent"
