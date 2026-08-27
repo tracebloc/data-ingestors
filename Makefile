@@ -183,11 +183,14 @@ install-hooks:
 	elif hp="$$(git config --get core.hooksPath 2>/dev/null || true)"; [ -n "$$hp" ] && { \
 	       hd="$$(git rev-parse --git-path hooks)"; \
 	       case "$$hd" in /*) hdd="$$hd";; *) hdd="$$PWD/$$hd";; esac; \
-	       hdx="$$hdd"; \
+	       hdx="$$hdd"; tail=''; \
 	       while [ ! -d "$$hdx" ] && [ "$$hdx" != "$$(dirname "$$hdx")" ]; do \
-	         hdx="$$(dirname "$$hdx")"; \
+	         tail="$$(basename "$$hdx")/$$tail"; hdx="$$(dirname "$$hdx")"; \
 	       done; \
 	       chd="$$(cd "$$hdx" 2>/dev/null && pwd -P || true)"; \
+	       oIFS="$$IFS"; IFS=/; for seg in $$tail; do \
+	         case "$$seg" in ''|.) : ;; ..) chd="$${chd%/*}"; [ -n "$$chd" ] || chd=/ ;; *) chd="$$chd/$$seg" ;; esac; \
+	       done; IFS="$$oIFS"; \
 	       ctop="$$(cd "$$(git rev-parse --show-toplevel)" && pwd -P)"; \
 	       cgd="$$(cd "$$(git rev-parse --git-common-dir)" 2>/dev/null && pwd -P || true)"; \
 	       inr=0; \

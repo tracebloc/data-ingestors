@@ -75,16 +75,18 @@ make -s install-hooks >/dev/null
 check "$(grep -c 'tracebloc pre-push hook' "$work/.githooks/pre-push" 2>/dev/null || echo 0)" "1" "core.hooksPath inside repo: hook installed there"
 git config --unset core.hooksPath
 
-# 4c) core.hooksPath=.. (or ./..) points at the worktree's PARENT — a shared dir
-# one level up. The earlier guard canonicalised dirname(hooksdir), which for a
-# bare `..` stays inside the worktree, so install-hooks wrote pre-push into the
-# parent: the exact shared-dir stomp the guard exists to prevent (backend#1749).
-# A throwaway repo whose parent is a known-empty dir makes the stomp observable.
+# 4c) core.hooksPath escapes to the worktree's PARENT — a shared dir one level
+# up — in three shapes: a bare `..`, `./..`, and `missing/../..` where a
+# not-yet-created prefix hides the `..`. The dirname-of-hooksdir guard missed
+# bare `..`, and the ancestor-walk that replaced it missed the hidden-prefix
+# form — both wrote pre-push into the parent, the stomp the guard exists to
+# prevent (backend#1749). A throwaway repo whose parent is a known-empty dir
+# makes the stomp observable.
 esc=$(mktemp -d)
 mkdir -p "$esc/repo"
 ( cd "$esc/repo" && git init -q . && git config user.email t@t && git config user.name t \
   && cp "$MAKEFILE" ./Makefile )
-for form in ".." "./.."; do
+for form in ".." "./.." "missing/../.."; do
   ( cd "$esc/repo" && git config core.hooksPath "$form" && make -s install-hooks >/dev/null )
   check "$( [ -e "$esc/pre-push" ] && echo present || echo absent )" "absent" "core.hooksPath parent-escape refused: $form"
   rm -f "$esc/pre-push"
