@@ -82,6 +82,54 @@ class TestItDiscoversTheParingRatherThanBeingToldIt:
         root = _consumer(tmp_path, a=only_path, b=only_versions)
         assert consumer_contracts(root) == []
 
+    def test_an_ANNOTATED_declaration_is_found_too(self, tmp_path):
+        # Only `ast.Assign` was handled, so `SUPPORTED_VERSIONS: frozenset = {...}`
+        # -- a shape this codebase uses elsewhere -- was dropped as if the module
+        # declared nothing. The zero-pairs guard does NOT cover that: it fires
+        # only when every module is missed, so one still-parseable sibling kept
+        # the check green while the module gating the bumped contract was
+        # ignored (Bugbot, #536).
+        annotated = (
+            "from pathlib import Path\n"
+            "from typing import FrozenSet\n"
+            'CONTRACT_RELPATH: Path = Path("tracebloc_ingestor") / "schema" / "layout.v1.json"\n'
+            'SUPPORTED_VERSIONS: FrozenSet[str] = {"2"}\n'
+        )
+        root = _consumer(tmp_path, annotated=annotated)
+        found = consumer_contracts(root)
+        assert len(found) == 1
+        assert found[0].supported == frozenset({"2"})
+
+    def test_a_module_missed_while_a_SIBLING_parses_is_still_caught(self, tmp_path):
+        # The precise hole: zero-pairs cannot see a PARTIAL miss. With one plain
+        # and one annotated module, dropping the annotated one leaves a non-empty
+        # result -- green, while the contract it gates goes unchecked.
+        plain = MODULE.replace("layout.v1.json", "runtime_env.v1.json")
+        annotated = (
+            "from pathlib import Path\n"
+            'CONTRACT_RELPATH: Path = Path("tracebloc_ingestor") / "schema" / "layout.v1.json"\n'
+            'SUPPORTED_VERSIONS: frozenset = {"2"}\n'
+        )
+        root = _consumer(tmp_path, runtime_env=plain, layout=annotated)
+        paths = {c.relpath for c in consumer_contracts(root)}
+        assert paths == {
+            "tracebloc_ingestor/schema/layout.v1.json",
+            "tracebloc_ingestor/schema/runtime_env.v1.json",
+        }, f"an annotated module was dropped while its sibling kept the walk non-empty: {paths}"
+
+    def test_a_bare_annotation_with_no_value_declares_nothing(self, tmp_path):
+        # `SUPPORTED_VERSIONS: set` states a type, not a value. Treating it as a
+        # declaration would invent a supported set nobody wrote.
+        root = _consumer(
+            tmp_path,
+            layout=(
+                "from pathlib import Path\n"
+                "CONTRACT_RELPATH: Path\n"
+                "SUPPORTED_VERSIONS: set\n"
+            ),
+        )
+        assert consumer_contracts(root) == []
+
     def test_a_commented_out_declaration_does_not_count(self, tmp_path):
         # THE REASON THIS READS THE AST. A substring search would accept this
         # module and report agreement with something that declares nothing.

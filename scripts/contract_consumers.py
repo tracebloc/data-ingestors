@@ -158,11 +158,21 @@ def consumer_contracts(consumer_root: Path) -> List[ConsumerContract]:
         relpath: Optional[str] = None
         supported: Optional[frozenset] = None
         for node in tree.body:  # module level only
-            if not isinstance(node, ast.Assign):
+            # BOTH ASSIGNMENT FORMS. Only `ast.Assign` was handled, so an
+            # ANNOTATED declaration -- `SUPPORTED_VERSIONS: frozenset = {"2"}`,
+            # a shape this codebase already uses elsewhere -- was dropped as if
+            # the module declared nothing. The zero-pairs guard does not save
+            # that case: it fires only when EVERY module is missed, so one
+            # still-parseable sibling kept the check green while the module
+            # that actually gates the bumped contract was ignored (Bugbot, #536).
+            if isinstance(node, ast.Assign):
+                targets = [t for t in node.targets if isinstance(t, ast.Name)]
+            elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+                # An annotation with no value (`X: frozenset`) declares nothing.
+                targets = [node.target] if node.value is not None else []
+            else:
                 continue
-            for target in node.targets:
-                if not isinstance(target, ast.Name):
-                    continue
+            for target in targets:
                 if target.id == RELPATH_NAME:
                     relpath = _path_from_expr(node.value)
                 elif target.id == VERSIONS_NAME:
