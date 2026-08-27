@@ -19,7 +19,10 @@ from tracebloc_ingestor.modalities.layout import (
     contract_path,
     render_contract,
 )
-from tracebloc_ingestor.modalities.registry import REGISTRY
+from tracebloc_ingestor.modalities.registry import (
+    FIXED_TIME_COLUMN_BY_CATEGORY,
+    REGISTRY,
+)
 from tracebloc_ingestor.utils.constants import TaskCategory
 
 
@@ -91,6 +94,24 @@ def test_record_format_only_on_text_tasks():
             ), f"{cat} has a record_format but isn't text"
 
 
+def test_ordering_agrees_with_the_registry():
+    # `ordering` is DERIVED, not hand-declared: its column is the category's
+    # entry in FIXED_TIME_COLUMN_BY_CATEGORY and its scope follows the spec's
+    # grouping trait, so mutating `_ordering` reddens this. This pins the
+    # derivation to the REGISTRY only — that scope actually matches the validator
+    # the ingestor runs is the separate, stronger guarantee in
+    # test_ordering_scope_is_anchored_to_the_enforcing_validator (backend#1870).
+    for cat, layout in _contract().items():
+        fixed = FIXED_TIME_COLUMN_BY_CATEGORY.get(cat)
+        if fixed is None:
+            assert layout["ordering"] is None, cat
+        else:
+            assert layout["ordering"] == {
+                "column": fixed,
+                "scope": "per_group" if REGISTRY[cat].grouping else "dataset",
+            }, cat
+
+
 # 3. FAITHFULNESS (spot-checks vs the ingestor's real layout) -----------------
 
 
@@ -160,3 +181,74 @@ def test_tabular_family_is_data_csv_without_file_layout():
         assert layout["manifest"]["requires_filename_column"] is False, cat
         assert layout["primary_subdir"] is None, cat
         assert layout["sidecars"] == [] and layout["record_format"] is None, cat
+
+
+def test_time_ordering_constraint_is_discoverable():
+    # The seam backend#1870 closed: the ingestor enforces timestamp ordering in
+    # its validators, and now the contract says so. Forecasting is one merged
+    # series (global TimeOrderedValidator → dataset scope); classification is
+    # ordered within each sequence (PerGroupTimeOrderedValidator → per_group).
+    contract = _contract()
+    assert contract["time_series_forecasting"]["ordering"] == {
+        "column": "timestamp",
+        "scope": "dataset",
+    }
+    assert contract["time_series_classification"]["ordering"] == {
+        "column": "timestamp",
+        "scope": "per_group",
+    }
+    # time_to_event_prediction has a time column too, but it is a per-row
+    # duration validated by TimeToEventValidator — NOT a monotonic axis. The
+    # contract must state that it is not subject to the ordering rule, so a
+    # consumer no longer has to infer it from the validator's silence.
+    assert contract["time_to_event_prediction"]["ordering"] is None
+
+
+def test_ordering_scope_is_anchored_to_the_enforcing_validator():
+    # The derivation ties `scope` to a CORRELATED trait (grouping), not to the
+    # thing that enforces ordering — the per-category validator factory, which
+    # hardcodes its choice (validators.py: TSF appends TimeOrderedValidator, TSC
+    # appends PerGroupTimeOrderedValidator; neither consults `grouping`). Today
+    # they agree only because TSC is the sole grouped category AND the sole
+    # per-group user — coincidence, not construction. A future grouped category
+    # wired to the global validator would make the contract declare `per_group`
+    # while the ingestor enforces dataset-wide ordering: the exact seam
+    # backend#1870 is about, reopened. Pin the two together so it's true by test.
+    #
+    # Instantiating a factory is side-effect-free (no DB/file), so we can read
+    # the validator types directly. The superset options satisfy every factory's
+    # required keys (extension/target_size for the image tasks); values are only
+    # touched at validate() time, which we never call.
+    from tracebloc_ingestor.utils.constants import FileExtension
+    from tracebloc_ingestor.validators.per_group_time_ordered_validator import (
+        PerGroupTimeOrderedValidator,
+    )
+    from tracebloc_ingestor.validators.time_ordered_validator import (
+        TimeOrderedValidator,
+    )
+
+    opts = {"schema": {}, "extension": FileExtension.JPG, "target_size": (1, 1)}
+    contract = _contract()
+    for cat, spec in REGISTRY.items():
+        validators = spec.build_validators(dict(opts))
+        # PerGroup does not subclass the global validator, but guard anyway so a
+        # later class change can't silently count a per-group run as dataset.
+        dataset_scoped = any(
+            isinstance(v, TimeOrderedValidator)
+            and not isinstance(v, PerGroupTimeOrderedValidator)
+            for v in validators
+        )
+        per_group_scoped = any(
+            isinstance(v, PerGroupTimeOrderedValidator) for v in validators
+        )
+        ordering = contract[cat]["ordering"]
+        if ordering is None:
+            assert not dataset_scoped and not per_group_scoped, (
+                f"{cat}: contract declares no ordering, but its factory runs a "
+                f"time-ordering validator"
+            )
+        elif ordering["scope"] == "per_group":
+            assert per_group_scoped and not dataset_scoped, cat
+        else:
+            assert ordering["scope"] == "dataset" and dataset_scoped, cat
+            assert not per_group_scoped, cat

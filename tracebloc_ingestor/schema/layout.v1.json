@@ -8,6 +8,7 @@
         "kind": "labels_csv",
         "requires_filename_column": true
       },
+      "ordering": null,
       "primary_subdir": "texts",
       "record_format": {
         "enforced": false,
@@ -28,6 +29,7 @@
         "kind": "labels_csv",
         "requires_filename_column": true
       },
+      "ordering": null,
       "primary_subdir": "texts",
       "record_format": {
         "enforced": true,
@@ -49,6 +51,7 @@
         "kind": "labels_csv",
         "requires_filename_column": true
       },
+      "ordering": null,
       "primary_subdir": "images",
       "record_format": null,
       "sidecars": []
@@ -61,6 +64,7 @@
         "kind": "labels_csv",
         "requires_filename_column": true
       },
+      "ordering": null,
       "primary_subdir": "images",
       "record_format": null,
       "sidecars": []
@@ -73,6 +77,7 @@
         "kind": "labels_csv",
         "requires_filename_column": true
       },
+      "ordering": null,
       "primary_subdir": "sequences",
       "record_format": null,
       "sidecars": []
@@ -85,6 +90,7 @@
         "kind": "labels_csv",
         "requires_filename_column": true
       },
+      "ordering": null,
       "primary_subdir": "images",
       "record_format": null,
       "sidecars": [
@@ -104,6 +110,7 @@
         "kind": "labels_csv",
         "requires_filename_column": true
       },
+      "ordering": null,
       "primary_subdir": "images",
       "record_format": null,
       "sidecars": [
@@ -123,6 +130,7 @@
         "kind": "labels_csv",
         "requires_filename_column": true
       },
+      "ordering": null,
       "primary_subdir": "texts",
       "record_format": {
         "enforced": true,
@@ -143,6 +151,7 @@
         "kind": "labels_csv",
         "requires_filename_column": true
       },
+      "ordering": null,
       "primary_subdir": "texts",
       "record_format": {
         "enforced": false,
@@ -163,6 +172,7 @@
         "kind": "data_csv",
         "requires_filename_column": false
       },
+      "ordering": null,
       "primary_subdir": null,
       "record_format": null,
       "sidecars": []
@@ -175,6 +185,7 @@
         "kind": "data_csv",
         "requires_filename_column": false
       },
+      "ordering": null,
       "primary_subdir": null,
       "record_format": null,
       "sidecars": []
@@ -187,6 +198,7 @@
         "kind": "labels_csv",
         "requires_filename_column": true
       },
+      "ordering": null,
       "primary_subdir": "texts",
       "record_format": null,
       "sidecars": []
@@ -203,6 +215,10 @@
         "kind": "data_csv",
         "requires_filename_column": false
       },
+      "ordering": {
+        "column": "timestamp",
+        "scope": "per_group"
+      },
       "primary_subdir": null,
       "record_format": null,
       "sidecars": []
@@ -214,6 +230,10 @@
         "has_label_column": true,
         "kind": "data_csv",
         "requires_filename_column": false
+      },
+      "ordering": {
+        "column": "timestamp",
+        "scope": "dataset"
       },
       "primary_subdir": null,
       "record_format": null,
@@ -227,6 +247,7 @@
         "kind": "data_csv",
         "requires_filename_column": false
       },
+      "ordering": null,
       "primary_subdir": null,
       "record_format": null,
       "sidecars": []
@@ -239,10 +260,11 @@
         "kind": "labels_csv",
         "requires_filename_column": true
       },
+      "ordering": null,
       "primary_subdir": "texts",
       "record_format": null,
       "sidecars": []
     }
   },
-  "version": "2"
+  "version": "3"
 }

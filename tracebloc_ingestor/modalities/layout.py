@@ -35,7 +35,12 @@ from typing import Any, Dict, Optional, Tuple
 # not when a task's values change — those are caught by the drift test.
 # "2": added the per-task ``grouping`` block (sequence-grouped categories,
 #      backend#1054 Decision-4 — time_series_classification).
-LAYOUT_CONTRACT_VERSION = "2"
+# "3": added the per-task ``ordering`` block — the column the ingestor requires
+#      to stay monotonic and the scope it holds over (dataset-wide vs per
+#      group). Surfaces the time-ordering constraint that used to live only in
+#      the validators, so a consumer can read from the contract which tasks are
+#      subject to it (backend#1870).
+LAYOUT_CONTRACT_VERSION = "3"
 
 
 @dataclass(frozen=True)
@@ -124,7 +129,37 @@ def _grouping_dict(g: Grouping) -> Dict[str, Any]:
     }
 
 
-def _task_layout(spec: Any) -> Dict[str, Any]:
+def _ordering(spec: Any, fixed_time_column: Optional[str]) -> Optional[Dict[str, Any]]:
+    """The cross-row ordering the ingestor enforces on this task, or ``None``
+    when it enforces none (backend#1870).
+
+    ``column`` is the physical column that must be monotonically non-decreasing;
+    ``scope`` is ``"per_group"`` when that must hold WITHIN each
+    ``grouping.group_column`` (time_series_classification's
+    ``PerGroupTimeOrderedValidator``) and ``"dataset"`` when it must hold across
+    the whole manifest (time_series_forecasting's global ``TimeOrderedValidator``
+    — forecasting is treated as one merged series). A consumer that reshapes or
+    grows such a dataset now learns from the contract which column to keep
+    monotonic instead of discovering it from a validator rejection.
+
+    Derived, single-source: ``column`` is the category's entry in
+    ``registry.FIXED_TIME_COLUMN_BY_CATEGORY`` (the same map preflight rejects a
+    decorative ``time_column`` override against), and ``scope`` follows the
+    presence of a ``grouping`` trait. Tasks with no fixed ordering column emit
+    ``None`` — every non-time-series task, and ``time_to_event_prediction``
+    (whose ``time_column`` is a per-row duration, not a monotonic axis, and is
+    validated per-row by ``TimeToEventValidator``) — so the contract states,
+    rather than hides, that they are not subject to the rule.
+    """
+    if fixed_time_column is None:
+        return None
+    return {
+        "column": fixed_time_column,
+        "scope": "per_group" if spec.grouping is not None else "dataset",
+    }
+
+
+def _task_layout(spec: Any, fixed_time_column: Optional[str]) -> Dict[str, Any]:
     """Compose one task's layout: the two declared pieces (sidecars,
     record_format) plus the facts DERIVED from the spec's existing flags."""
     return {
@@ -149,6 +184,11 @@ def _task_layout(spec: Any) -> Dict[str, Any]:
         # item spans MANY manifest rows keyed by ``group_column`` and the
         # ingest summary counts sequences, not rows.
         "grouping": _grouping_dict(spec.grouping) if spec.grouping else None,
+        # Cross-row ordering the ingestor enforces (backend#1870): the column
+        # that must stay monotonic and whether that holds dataset-wide or per
+        # group. ``None`` for tasks with no such rule, so which tasks it applies
+        # to is readable from the contract, not only from the validators.
+        "ordering": _ordering(spec, fixed_time_column),
     }
 
 
@@ -158,9 +198,12 @@ def build_layout_contract() -> Dict[str, Any]:
 
     Imported lazily to avoid a circular import (registry.py imports this
     module's dataclasses)."""
-    from .registry import REGISTRY
+    from .registry import REGISTRY, FIXED_TIME_COLUMN_BY_CATEGORY
 
-    tasks = {cat: _task_layout(spec) for cat, spec in REGISTRY.items()}
+    tasks = {
+        cat: _task_layout(spec, FIXED_TIME_COLUMN_BY_CATEGORY.get(cat))
+        for cat, spec in REGISTRY.items()
+    }
     return {"version": LAYOUT_CONTRACT_VERSION, "tasks": tasks}
 
 

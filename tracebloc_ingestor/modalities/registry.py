@@ -323,14 +323,17 @@ NLP_CATEGORIES = frozenset(c for c, s in REGISTRY.items() if s.is_nlp)
 # Categories whose time column is a FIXED physical name (Decision-2,
 # backend#1054): rows are ALWAYS ordered by this column and a config
 # ``time_column`` is never consumed — the schema documents ``time_column`` as
-# time_to_event_prediction only. Maps each such category to its fixed column so
-# preflight can reject a decorative override that would otherwise give false
-# confidence a custom time column is honored (#441 review — saadqbal). TSC's
-# name is derived from its grouping trait (single source); TSF has no grouping,
-# so the literal ``timestamp`` its validators (TimeFormatValidator /
-# TimeOrderedValidator) hardcode is spelled here. time_to_event_prediction is
-# deliberately ABSENT — its ``time_column`` IS user-configurable and validated
-# (exactly) by TimeToEventValidator, so it must not be caught here.
+# time_to_event_prediction only. This map is the single source for two facts:
+# preflight rejects a decorative override that would otherwise give false
+# confidence a custom time column is honored (#441 review — saadqbal), and it
+# populates the layout contract's per-task ``ordering.column`` so the ordering
+# rule is discoverable from the contract, not only from the validators
+# (backend#1870). TSC's name is derived from its grouping trait (single source);
+# TSF has no grouping, so the literal ``timestamp`` its validators
+# (TimeFormatValidator / TimeOrderedValidator) hardcode is spelled here.
+# time_to_event_prediction is deliberately ABSENT — its ``time_column`` IS
+# user-configurable and validated (exactly) by TimeToEventValidator, so it must
+# not be caught here, and it correctly emits ``ordering: null`` in the contract.
 FIXED_TIME_COLUMN_BY_CATEGORY: Dict[str, str] = {
     TaskCategory.TIME_SERIES_FORECASTING: "timestamp",
     TaskCategory.TIME_SERIES_CLASSIFICATION: REGISTRY[
