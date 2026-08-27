@@ -242,7 +242,13 @@ install-hooks:
 	      '# the single place the tool list lives, rather than restating it here — so' \
 	      '# the hook cannot drift from it. guard-toolchain probes the TOOLS check' \
 	      '# runs, not installed packages (a broken venv still fails make check in a shell).' \
-	      'make guard-toolchain >/dev/null 2>&1 || exit 0' \
+	      '#' \
+	      '# guard-toolchain may be ABSENT on an older branch: this hook lives in' \
+	      '# .git/hooks and runs against whatever Makefile the pushed branch has, and' \
+	      '# make exits 2 for a MISSING TARGET just as for a failed recipe. Probe with' \
+	      '# -n so a missing target falls through to make check instead of silently' \
+	      '# skipping it (Bugbot, backend#1749).' \
+	      'if make -n guard-toolchain >/dev/null 2>&1; then make guard-toolchain >/dev/null 2>&1 || exit 0; fi' \
 	      'exec make check' > "$$hook" && \
 	    chmod +x "$$hook" && \
 	    echo "==> pre-push hook installed at $$hook" && \

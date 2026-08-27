@@ -147,5 +147,17 @@ if make -s guard-toolchain PYTHON="$gtbin/py-bad" >/dev/null 2>&1; then rc=0; el
 check "$( [ "$rc" != 0 ] && echo nonzero || echo zero )" "nonzero" "guard-toolchain fails when a tool cannot run"
 rm -rf "$gtbin"
 
+# 9b) the installed hook runs against whatever Makefile the pushed branch has
+# (it lives in .git/hooks, shared across branches). make exits 2 for a MISSING
+# guard-toolchain target just as for a failed recipe, so the hook must not read
+# "no such target" as "toolchain absent" and skip — it probes with -n and falls
+# through to make check (Bugbot, backend#1749). Stub make as an OLD Makefile:
+# guard-toolchain has no rule (exit 2), check touches a sentinel.
+sent="$(mktemp -u)"; stub="$(mktemp -d)"
+printf '#!/bin/sh\nfor a in "$@"; do case "$a" in guard-toolchain) exit 2 ;; check) : > %s ;; esac; done\nexit 0\n' "$sent" > "$stub/make"; chmod +x "$stub/make"
+printf 'refs/heads/x deadbeef refs/heads/x 000\n' | env PATH="$stub:$PATH" sh "$hook" >/dev/null 2>&1 || true
+check "$([ -f "$sent" ] && echo ran || echo skipped)" "ran" "old Makefile (no guard-toolchain) still runs make check"
+rm -rf "$stub"; rm -f "$sent"
+
 echo "--- pre-push hook tests: $( [ "$fails" -eq 0 ] && echo ALL GREEN || echo "$fails FAILED" ) ---"
 [ "$fails" -eq 0 ]
