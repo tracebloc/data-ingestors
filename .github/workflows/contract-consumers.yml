@@ -1,0 +1,139 @@
+name: contract consumers
+
+# Refuse a schema-version bump the consuming repo cannot read.
+#
+# WHY (backend#2695). On 2026-08-27 `layout.v1.json` went 2 -> 3 (#535). It
+# landed green here and turned the REQUIRED `unit` context red on every open PR
+# in `tracebloc/e2e-test-agent` -- which reads that file and accepts an explicit
+# version set -- for 68 minutes. The consumer's guard caught it at RUN time;
+# nothing caught it at MERGE time, because nothing connected the two repos.
+#
+# The comparison lives in `scripts/contract_consumers.py` and its LOGIC is
+# covered by `tests/test_contract_consumers.py`, which runs inside the REQUIRED
+# `pytest` context. That split is deliberate: this job needs a token and a second
+# checkout, so it cannot be required on a fork PR, and a check whose only
+# exercise is an unrequired job is advice rather than a gate (CLAUDE.md rule 2).
+# CI supplies the real inputs; the required suite proves the comparison works.
+#
+# THE PUBLIC/PRIVATE ASYMMETRY, AND WHY THE SKIP IS NARROW. This repo is PUBLIC
+# and the consumer is PRIVATE, so reading it needs an App token -- and GitHub
+# withholds secrets from fork PRs. Rather than fail every external contribution,
+# the job asks what the PR actually changed:
+#
+#   * no schema file touched  -> there is nothing this check could tell us, so a
+#     missing token is a NOTICE and the job passes. Not a hole: the risk it
+#     guards does not exist on such a PR.
+#   * a schema file touched, no token -> FAILS. An external contributor cannot
+#     know the private consumer's state, and a contract bump is exactly the
+#     change that needs an internal look. "Cannot tell" must not read as "fine".
+
+on:
+  pull_request:
+    paths:
+      # Only PRs that can actually break a consumer. A version cannot change in
+      # a file that is not in the diff, and running this on every PR would spend
+      # a token mint to re-answer a question nothing changed.
+      - 'tracebloc_ingestor/schema/**'
+      - 'scripts/contract_consumers.py'
+      - '.github/workflows/contract-consumers.yml'
+  push:
+    branches: [develop]
+    paths:
+      - 'tracebloc_ingestor/schema/**'
+  # A BACKSTOP, because the consumer can drift without us: it may NARROW its
+  # supported set in its own repo, which no PR here would ever notice.
+  schedule:
+    - cron: '37 5 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: contract-consumers-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  agreement:
+    name: consumers can read what we publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11'
+
+      # Does this run actually touch a contract? Drives whether an absent token
+      # is tolerable, so it is answered from the diff rather than assumed.
+      - name: Decide whether a contract is in play
+        id: scope
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" != "pull_request" ]; then
+            # A scheduled or pushed run has no diff to consult and exists to
+            # check the current state, so it always needs the real comparison.
+            echo "schema-touched=true" >> "$GITHUB_OUTPUT"
+            echo "not a pull request — treating the contract as in play"
+            exit 0
+          fi
+          git fetch --no-tags --depth=1 origin "$BASE" 2>/dev/null || true
+          if git diff --name-only "$BASE" "$HEAD" 2>/dev/null \
+               | grep -q '^tracebloc_ingestor/schema/'; then
+            echo "schema-touched=true" >> "$GITHUB_OUTPUT"
+            echo "this PR changes a published contract"
+          else
+            echo "schema-touched=false" >> "$GITHUB_OUTPUT"
+            echo "no published contract in this diff"
+          fi
+
+      - name: Mint a token for the private consumer
+        id: token
+        # `continue-on-error` so an ABSENT secret (a fork PR) reaches the step
+        # below, which decides what that means. Without it the job dies here
+        # with "missing input", which reads as a broken workflow rather than as
+        # the deliberate refusal it should be on a schema PR.
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.RELEASE_TRAIN_APP_ID }}
+          private-key: ${{ secrets.RELEASE_TRAIN_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: e2e-test-agent
+
+      - name: Refuse to guess when a contract changed and the consumer is unreadable
+        if: steps.token.outcome != 'success'
+        env:
+          SCHEMA_TOUCHED: ${{ steps.scope.outputs.schema-touched }}
+        run: |
+          set -euo pipefail
+          if [ "$SCHEMA_TOUCHED" = "true" ]; then
+            echo "::error::This PR changes a published contract, but the consumer could not be read (no token — forks do not receive secrets)."
+            echo "::error::Refusing to report agreement this run could not verify: a version bump the consumer cannot read turns its REQUIRED checks red on every open PR."
+            echo "::error::A maintainer must run this from a branch in this repo, where the token is available."
+            exit 1
+          fi
+          echo "::notice::No published contract in this diff and no consumer token available — nothing this check could verify, so it is not claiming anything."
+
+      - name: Check out the consumer
+        if: steps.token.outcome == 'success'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: tracebloc/e2e-test-agent
+          # `develop` NAMED, not the repo default: that is the ref its own CI
+          # reads this repo at, so this compares the two heads that actually
+          # meet. A default-branch read here would answer a question nobody asked.
+          ref: develop
+          token: ${{ steps.token.outputs.token }}
+          path: .consumer
+
+      - name: Every declared consumer can read every contract we publish
+        if: steps.token.outcome == 'success'
+        run: |
+          set -euo pipefail
+          python3 scripts/contract_consumers.py --producer . --consumer .consumer
