@@ -183,22 +183,20 @@ install-hooks:
 	elif hp="$$(git config --get core.hooksPath 2>/dev/null || true)"; [ -n "$$hp" ] && { \
 	       hd="$$(git rev-parse --git-path hooks)"; \
 	       case "$$hd" in /*) hdd="$$hd";; *) hdd="$$PWD/$$hd";; esac; \
-	       hdx="$$hdd"; tail=''; \
+	       hdx="$$hdd"; sfx=''; \
 	       while [ ! -d "$$hdx" ] && [ "$$hdx" != "$$(dirname "$$hdx")" ]; do \
-	         tail="$$(basename "$$hdx")/$$tail"; hdx="$$(dirname "$$hdx")"; \
+	         sfx="$$(basename "$$hdx")/$$sfx"; hdx="$$(dirname "$$hdx")"; \
 	       done; \
 	       chd="$$(cd "$$hdx" 2>/dev/null && pwd -P || true)"; \
-	       oIFS="$$IFS"; IFS=/; for seg in $$tail; do \
-	         case "$$seg" in ''|.) : ;; ..) chd="$${chd%/*}"; [ -n "$$chd" ] || chd=/ ;; *) chd="$$chd/$$seg" ;; esac; \
-	       done; IFS="$$oIFS"; \
 	       ctop="$$(cd "$$(git rev-parse --show-toplevel)" && pwd -P)"; \
 	       cgd="$$(cd "$$(git rev-parse --git-common-dir)" 2>/dev/null && pwd -P || true)"; \
 	       inr=0; \
 	       case "$$chd/" in "$$ctop/"*) inr=1;; esac; \
 	       if [ -n "$$cgd" ]; then case "$$chd/" in "$$cgd/"*) inr=1;; esac; fi; \
+	       case "/$$sfx" in */../*) inr=0;; esac; \
 	       [ -z "$$chd" ] || [ "$$inr" = 0 ]; \
 	     }; then \
-	  echo "note: core.hooksPath is set to '$$hp' (resolves to '$$chd'), outside this repo — skipping."; \
+	  echo "note: core.hooksPath is set to '$$hp', outside this repo — skipping."; \
 	  echo "      That is a shared hooks dir; installing here would run 'make check' from every repo you push."; \
 	  echo "      Add 'make check' to that hook by hand if you want it everywhere."; \
 	else \

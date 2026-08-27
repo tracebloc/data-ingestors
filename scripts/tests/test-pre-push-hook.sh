@@ -75,23 +75,34 @@ make -s install-hooks >/dev/null
 check "$(grep -c 'tracebloc pre-push hook' "$work/.githooks/pre-push" 2>/dev/null || echo 0)" "1" "core.hooksPath inside repo: hook installed there"
 git config --unset core.hooksPath
 
-# 4c) core.hooksPath escapes to the worktree's PARENT — a shared dir one level
-# up — in three shapes: a bare `..`, `./..`, and `missing/../..` where a
-# not-yet-created prefix hides the `..`. The dirname-of-hooksdir guard missed
-# bare `..`, and the ancestor-walk that replaced it missed the hidden-prefix
-# form — both wrote pre-push into the parent, the stomp the guard exists to
-# prevent (backend#1749). A throwaway repo whose parent is a known-empty dir
-# makes the stomp observable.
+# 4c) core.hooksPath escapes to a shared dir OUTSIDE the worktree, in the shapes
+# earlier guards missed: a bare `..`/`./..` (the dirname guard resolved it back
+# inside), and a `..` hidden behind a not-yet-created prefix — `missing/../..`,
+# `missing/../../shared` — where the ancestor-walk climbed past the missing
+# prefix and read the worktree as the target. Both wrote pre-push above the
+# worktree, the stomp the guard exists to prevent (backend#1749). A `..` in the
+# not-yet-existing suffix cannot be resolved until the prefix exists, so the
+# guard refuses it (Lukas, backend#2714). Assert nothing lands outside the repo.
 esc=$(mktemp -d)
 mkdir -p "$esc/repo"
 ( cd "$esc/repo" && git init -q . && git config user.email t@t && git config user.name t \
   && cp "$MAKEFILE" ./Makefile )
-for form in ".." "./.." "missing/../.."; do
+for form in ".." "./.." "missing/../.." "missing/../../shared"; do
   ( cd "$esc/repo" && git config core.hooksPath "$form" && make -s install-hooks >/dev/null )
-  check "$( [ -e "$esc/pre-push" ] && echo present || echo absent )" "absent" "core.hooksPath parent-escape refused: $form"
-  rm -f "$esc/pre-push"
+  check "$(find "$esc" -name pre-push -not -path "$esc/repo/*" 2>/dev/null | head -1 | grep -q . && echo present || echo absent)" "absent" "core.hooksPath parent-escape refused: $form"
+  find "$esc" -name pre-push -not -path "$esc/repo/*" -delete 2>/dev/null
+  ( cd "$esc/repo" && rm -rf missing shared )
 done
 rm -rf "$esc"
+
+# 4d) a not-yet-created IN-REPO hooks dir still INSTALLS — the fresh-clone case
+# the ancestor-walk exists for, and the arm the suffix-`..` refusal must not
+# over-block (Lukas, backend#2714). No `..`, so it is unambiguously in-repo.
+git config core.hooksPath freshhooks
+make -s install-hooks >/dev/null
+check "$(grep -c 'tracebloc pre-push hook' "$work/freshhooks/pre-push" 2>/dev/null || echo 0)" "1" "core.hooksPath in-repo but not-yet-created: hook installed"
+git config --unset core.hooksPath
+rm -rf "$work/freshhooks"
 
 # reinstall a clean ours-hook for the behavioural cases
 make -s install-hooks >/dev/null
