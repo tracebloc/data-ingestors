@@ -10,6 +10,7 @@ That split is the point: CI supplies the real inputs, these supply the hard ones
 A check whose only exercise is the happy path against today's repos is a check
 that has never been shown to fail.
 """
+
 from __future__ import annotations
 
 import json
@@ -46,15 +47,14 @@ def _producer(tmp_path: Path, relpath: str, doc: object) -> Path:
     return tmp_path
 
 
-MODULE = '''
+MODULE = """
 from pathlib import Path
 CONTRACT_RELPATH = Path("tracebloc_ingestor") / "schema" / "layout.v1.json"
 SUPPORTED_VERSIONS = {"2"}
-'''
+"""
 
 
 class TestItDiscoversTheParingRatherThanBeingToldIt:
-
     def test_a_module_declaring_both_names_is_found(self, tmp_path):
         root = _consumer(tmp_path, layout=MODULE)
         found = consumer_contracts(root)
@@ -63,8 +63,9 @@ class TestItDiscoversTheParingRatherThanBeingToldIt:
         assert found[0].supported == frozenset({"2"})
 
     def test_several_modules_each_yield_their_own_contract(self, tmp_path):
-        other = MODULE.replace("layout.v1.json", "runtime_env.v1.json") \
-                      .replace('{"2"}', '{"1"}')
+        other = MODULE.replace("layout.v1.json", "runtime_env.v1.json").replace(
+            '{"2"}', '{"1"}'
+        )
         root = _consumer(tmp_path, layout=MODULE, runtime_env=other)
         assert {c.relpath for c in consumer_contracts(root)} == {
             "tracebloc_ingestor/schema/layout.v1.json",
@@ -74,7 +75,9 @@ class TestItDiscoversTheParingRatherThanBeingToldIt:
     def test_a_module_with_only_one_of_the_two_names_is_not_a_consumer(self, tmp_path):
         # Half a declaration is not a dependency this check can verify, and
         # guessing the other half is how a pairing table gets born.
-        only_path = 'from pathlib import Path\nCONTRACT_RELPATH = Path("a") / "b.json"\n'
+        only_path = (
+            'from pathlib import Path\nCONTRACT_RELPATH = Path("a") / "b.json"\n'
+        )
         only_versions = 'SUPPORTED_VERSIONS = {"1"}\n'
         root = _consumer(tmp_path, a=only_path, b=only_versions)
         assert consumer_contracts(root) == []
@@ -82,26 +85,35 @@ class TestItDiscoversTheParingRatherThanBeingToldIt:
     def test_a_commented_out_declaration_does_not_count(self, tmp_path):
         # THE REASON THIS READS THE AST. A substring search would accept this
         # module and report agreement with something that declares nothing.
-        root = _consumer(tmp_path, layout=(
-            'from pathlib import Path\n'
-            'CONTRACT_RELPATH = Path("tracebloc_ingestor") / "schema" / "layout.v1.json"\n'
-            '# SUPPORTED_VERSIONS = {"2"}\n'))
+        root = _consumer(
+            tmp_path,
+            layout=(
+                "from pathlib import Path\n"
+                'CONTRACT_RELPATH = Path("tracebloc_ingestor") / "schema" / "layout.v1.json"\n'
+                '# SUPPORTED_VERSIONS = {"2"}\n'
+            ),
+        )
         assert consumer_contracts(root) == []
 
     def test_a_runtime_built_version_set_does_not_count(self, tmp_path):
         # Not a literal, so this check cannot know what it will hold. Reporting
         # a guess would be worse than reporting nothing -- and reporting nothing
         # is itself caught, by the zero-pairs rule below.
-        root = _consumer(tmp_path, layout=(
-            'from pathlib import Path\n'
-            'CONTRACT_RELPATH = Path("a") / "b.json"\n'
-            'SUPPORTED_VERSIONS = set(_load_versions())\n'))
+        root = _consumer(
+            tmp_path,
+            layout=(
+                "from pathlib import Path\n"
+                'CONTRACT_RELPATH = Path("a") / "b.json"\n'
+                "SUPPORTED_VERSIONS = set(_load_versions())\n"
+            ),
+        )
         assert consumer_contracts(root) == []
 
 
 class TestItFailsClosed:
-
-    def test_a_missing_consumer_directory_raises_rather_than_returning_empty(self, tmp_path):
+    def test_a_missing_consumer_directory_raises_rather_than_returning_empty(
+        self, tmp_path
+    ):
         with pytest.raises(AgreementError) as caught:
             consumer_contracts(tmp_path / "nowhere")
         assert "missing" in str(caught.value)
@@ -122,7 +134,9 @@ class TestItFailsClosed:
         with pytest.raises(AgreementError):
             consumer_contracts(root)
 
-    def test_a_contract_the_consumer_names_but_we_do_not_publish_is_a_finding(self, tmp_path):
+    def test_a_contract_the_consumer_names_but_we_do_not_publish_is_a_finding(
+        self, tmp_path
+    ):
         producer = _producer(tmp_path / "p", "other.json", {"version": 1})
         with pytest.raises(AgreementError) as caught:
             published_version(producer, "tracebloc_ingestor/schema/layout.v1.json")
@@ -138,19 +152,20 @@ class TestItFailsClosed:
 
 
 class TestTheComparison:
-
     def test_a_version_the_consumer_accepts_is_no_problem(self, tmp_path):
         consumer = _consumer(tmp_path / "c", layout=MODULE)
-        producer = _producer(tmp_path / "p",
-                             "tracebloc_ingestor/schema/layout.v1.json",
-                             {"version": 2})
+        producer = _producer(
+            tmp_path / "p", "tracebloc_ingestor/schema/layout.v1.json", {"version": 2}
+        )
         assert check(producer, consumer) == []
 
-    def test_a_version_the_consumer_refuses_is_reported_with_the_fix_order(self, tmp_path):
+    def test_a_version_the_consumer_refuses_is_reported_with_the_fix_order(
+        self, tmp_path
+    ):
         consumer = _consumer(tmp_path / "c", layout=MODULE)
-        producer = _producer(tmp_path / "p",
-                             "tracebloc_ingestor/schema/layout.v1.json",
-                             {"version": 3})
+        producer = _producer(
+            tmp_path / "p", "tracebloc_ingestor/schema/layout.v1.json", {"version": 3}
+        )
         problems = check(producer, consumer)
         assert len(problems) == 1
         # The message has to say what to do, not just that something is wrong:
@@ -163,11 +178,11 @@ class TestTheComparison:
         # The producer writes `3` as JSON number; a consumer may write "3" or 3.
         # A type mismatch between two repos is not the drift this check is for,
         # and letting it fail here would produce a confusing red for a real pair.
-        numeric = MODULE.replace('{"2"}', '{2, 3}')
+        numeric = MODULE.replace('{"2"}', "{2, 3}")
         consumer = _consumer(tmp_path / "c", layout=numeric)
-        producer = _producer(tmp_path / "p",
-                             "tracebloc_ingestor/schema/layout.v1.json",
-                             {"version": 3})
+        producer = _producer(
+            tmp_path / "p", "tracebloc_ingestor/schema/layout.v1.json", {"version": 3}
+        )
         assert check(producer, consumer) == []
 
     def test_one_bad_pair_among_several_is_still_reported(self, tmp_path):
@@ -180,7 +195,9 @@ class TestTheComparison:
         consumer = _consumer(tmp_path / "c", layout=MODULE, runtime_env=other)
         producer = tmp_path / "p"
         _producer(producer, "tracebloc_ingestor/schema/layout.v1.json", {"version": 9})
-        _producer(producer, "tracebloc_ingestor/schema/runtime_env.v1.json", {"version": 5})
+        _producer(
+            producer, "tracebloc_ingestor/schema/runtime_env.v1.json", {"version": 5}
+        )
         problems = check(producer, consumer)
         assert len(problems) == 2, "each disagreeing pair should be named"
         assert any("layout.v1.json" in p for p in problems)
@@ -198,9 +215,9 @@ class TestItWouldHaveCaughtTheIncidentItWasWrittenFor:
 
     def test_the_real_pairing_reddens_on_the_real_bump(self, tmp_path):
         consumer = _consumer(tmp_path / "c", layout=MODULE)  # accepts {"2"}
-        producer = _producer(tmp_path / "p",
-                             "tracebloc_ingestor/schema/layout.v1.json",
-                             {"version": 3})               # what #535 published
+        producer = _producer(
+            tmp_path / "p", "tracebloc_ingestor/schema/layout.v1.json", {"version": 3}
+        )  # what #535 published
         problems = check(producer, consumer)
         assert problems, "the check would NOT have caught the outage it exists for"
         assert "'3'" in problems[0] and "'2'" in problems[0]
@@ -210,9 +227,9 @@ class TestItWouldHaveCaughtTheIncidentItWasWrittenFor:
         # unrelated to the version -- #290 is what made this true in reality.
         fixed = MODULE.replace('{"2"}', '{"2", "3"}')
         consumer = _consumer(tmp_path / "c", layout=fixed)
-        producer = _producer(tmp_path / "p",
-                             "tracebloc_ingestor/schema/layout.v1.json",
-                             {"version": 3})
+        producer = _producer(
+            tmp_path / "p", "tracebloc_ingestor/schema/layout.v1.json", {"version": 3}
+        )
         assert check(producer, consumer) == []
 
 

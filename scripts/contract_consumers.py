@@ -45,6 +45,7 @@ whole exercise is about. An unreadable consumer, a contract file the consumer
 names but this repo does not publish, and a contract with no `version` field are
 all findings for the same reason.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -69,13 +70,14 @@ VERSIONS_NAME = "SUPPORTED_VERSIONS"
 class ConsumerContract:
     """One consumer module's declared dependency on one contract file."""
 
-    module: str          #: e.g. "harness/layout.py", for the message
-    relpath: str         #: the contract file, as the consumer names it
+    module: str  #: e.g. "harness/layout.py", for the message
+    relpath: str  #: the contract file, as the consumer names it
     supported: frozenset  #: the versions it will accept, as strings
 
     def describe(self) -> str:
         return "{} reads {} and accepts {}".format(
-            self.module, self.relpath, sorted(self.supported))
+            self.module, self.relpath, sorted(self.supported)
+        )
 
 
 class AgreementError(RuntimeError):
@@ -98,7 +100,11 @@ def _path_from_expr(node: ast.AST) -> Optional[str]:
         if isinstance(n, ast.Constant) and isinstance(n.value, str):
             parts.append(n.value)
             return True
-        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "Path":
+        if (
+            isinstance(n, ast.Call)
+            and isinstance(n.func, ast.Name)
+            and n.func.id == "Path"
+        ):
             return all(walk(a) for a in n.args)
         return False
 
@@ -137,7 +143,8 @@ def consumer_contracts(consumer_root: Path) -> List[ConsumerContract]:
         raise AgreementError(
             "no {}/ directory under {} -- the consumer checkout is missing or "
             "its layout changed. Refusing to report agreement with a repo this "
-            "could not read.".format(CONSUMER_MODULE_DIR, consumer_root))
+            "could not read.".format(CONSUMER_MODULE_DIR, consumer_root)
+        )
 
     found: List[ConsumerContract] = []
     for path in sorted(module_dir.glob("*.py")):
@@ -146,10 +153,11 @@ def consumer_contracts(consumer_root: Path) -> List[ConsumerContract]:
         except (OSError, SyntaxError) as exc:
             raise AgreementError(
                 "could not parse {}: {}. A consumer module that cannot be read "
-                "is a finding, not a skip.".format(path, exc))
+                "is a finding, not a skip.".format(path, exc)
+            )
         relpath: Optional[str] = None
         supported: Optional[frozenset] = None
-        for node in tree.body:                       # module level only
+        for node in tree.body:  # module level only
             if not isinstance(node, ast.Assign):
                 continue
             for target in node.targets:
@@ -160,9 +168,13 @@ def consumer_contracts(consumer_root: Path) -> List[ConsumerContract]:
                 elif target.id == VERSIONS_NAME:
                     supported = _versions_from_expr(node.value)
         if relpath and supported:
-            found.append(ConsumerContract(
-                module="{}/{}".format(CONSUMER_MODULE_DIR, path.name),
-                relpath=relpath, supported=supported))
+            found.append(
+                ConsumerContract(
+                    module="{}/{}".format(CONSUMER_MODULE_DIR, path.name),
+                    relpath=relpath,
+                    supported=supported,
+                )
+            )
     return found
 
 
@@ -173,7 +185,8 @@ def published_version(producer_root: Path, relpath: str) -> str:
         raise AgreementError(
             "a consumer reads {!r}, which this repo does not publish. Either the "
             "file moved (update the consumer in the same change) or the consumer "
-            "names a path that never existed.".format(relpath))
+            "names a path that never existed.".format(relpath)
+        )
     try:
         doc = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
@@ -182,12 +195,14 @@ def published_version(producer_root: Path, relpath: str) -> str:
         raise AgreementError(
             "{} carries no `version` field, but a consumer gates on one. An "
             "absent version is not a passing check -- the consumer would refuse "
-            "the file at run time.".format(relpath))
+            "the file at run time.".format(relpath)
+        )
     return str(doc["version"])
 
 
-def disagreements(producer_root: Path,
-                  contracts: Sequence[ConsumerContract]) -> List[str]:
+def disagreements(
+    producer_root: Path, contracts: Sequence[ConsumerContract]
+) -> List[str]:
     """Human-readable problems; empty means every consumer can read us."""
     problems: List[str] = []
     for contract in contracts:
@@ -199,9 +214,15 @@ def disagreements(producer_root: Path,
                 "merging this bump turns its required checks red on every open "
                 "PR until it is taught to read {!r}.\n"
                 "    Fix order: land the consumer change FIRST (read the diff, "
-                "then add the version to its {}), then merge this."
-                .format(contract.relpath, version, contract.module,
-                        sorted(contract.supported), version, VERSIONS_NAME))
+                "then add the version to its {}), then merge this.".format(
+                    contract.relpath,
+                    version,
+                    contract.module,
+                    sorted(contract.supported),
+                    version,
+                    VERSIONS_NAME,
+                )
+            )
     return problems
 
 
@@ -213,18 +234,27 @@ def check(producer_root: Path, consumer_root: Path) -> List[str]:
             "found no contract consumers under {}/{} -- zero parsed pairs "
             "compares equal to zero parsed pairs, so reporting agreement here "
             "would be a check that passes for ever. Either the consumer stopped "
-            "declaring {} / {} at module level, or its layout moved."
-            .format(consumer_root, CONSUMER_MODULE_DIR, RELPATH_NAME,
-                    VERSIONS_NAME))
+            "declaring {} / {} at module level, or its layout moved.".format(
+                consumer_root, CONSUMER_MODULE_DIR, RELPATH_NAME, VERSIONS_NAME
+            )
+        )
     return disagreements(producer_root, contracts)
 
 
 def _main(argv: Optional[Iterable[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--consumer", required=True, type=Path,
-                        help="path to a checkout of the consuming repo")
-    parser.add_argument("--producer", default=Path("."), type=Path,
-                        help="path to this repo (default: cwd)")
+    parser.add_argument(
+        "--consumer",
+        required=True,
+        type=Path,
+        help="path to a checkout of the consuming repo",
+    )
+    parser.add_argument(
+        "--producer",
+        default=Path("."),
+        type=Path,
+        help="path to this repo (default: cwd)",
+    )
     args = parser.parse_args(list(argv) if argv is not None else None)
 
     try:
@@ -237,8 +267,7 @@ def _main(argv: Optional[Iterable[str]] = None) -> int:
         sys.stdout.flush()
         problems = check(args.producer, args.consumer)
     except AgreementError as exc:
-        print("contract-consumer check could not run: {}".format(exc),
-              file=sys.stderr)
+        print("contract-consumer check could not run: {}".format(exc), file=sys.stderr)
         return 2
     if problems:
         print("", file=sys.stderr)
