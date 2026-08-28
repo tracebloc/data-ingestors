@@ -223,6 +223,7 @@ class APIClient:
         meta_data: Optional[Dict[str, Any]] = None,
         physical_table: Optional[str] = None,
         label_policy: str = label_policy_module.PASSTHROUGH,
+        record_count: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         Send a single ingest summary to the backend, creating the UserDataSet in one
@@ -255,6 +256,16 @@ class APIClient:
                 (tracebloc/backend#1206). ``None`` (legacy shared-table
                 ingests) omits the field entirely, keeping the payload
                 byte-identical to today's.
+            record_count: The dataset's item count, carried EXPLICITLY so the
+                backend stops inferring it from ``sum(labels.values())``
+                (backend#2770). That inference is only right when ``labels``
+                partitions the rows; token_classification's exploded per-tag
+                counts (data-ingestors#527) and any sequence-grouped
+                category's per-sequence counts both break it. The caller
+                passes the category's SAMPLE UNIT (rows, or sequences for a
+                grouped category). ``None`` omits the field, so an older
+                backend that predates it is unaffected and the payload stays
+                byte-identical to today's — the two repos ship in either order.
 
         Returns:
             ``{"dataset_id": ..., "dataset_key": ...}``
@@ -290,6 +301,12 @@ class APIClient:
             }
             if physical_table:
                 payload_fields["physical_table"] = physical_table
+            # `is not None`, not truthiness: an explicit count is always sent
+            # when the caller computed one (a 0-row run never reaches here, but
+            # the guard keeps a legitimate 0 from silently dropping to the
+            # backend's sum-of-labels fallback).
+            if record_count is not None:
+                payload_fields["record_count"] = record_count
             payload = json.dumps(payload_fields)
             logger.info(
                 f"Sending ingest summary for {table_name}: "

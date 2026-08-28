@@ -411,6 +411,23 @@ def test_summary_default_policy_sends_raw_labels():
     assert [s["label"] for s in sent["samples"]] == ["1", "0"]
 
 
+def test_summary_includes_record_count_when_set():
+    """backend#2770: an explicit record_count rides the payload as its own
+    field, independent of sum(labels.values()) — here labels sum to 30 while
+    the item count is 7."""
+    sent = _captured_summary_payload(_client(), record_count=7)
+    assert sent["record_count"] == 7
+    assert sum(sent["labels"].values()) == 30
+
+
+def test_summary_omits_record_count_when_unset():
+    """Default None omits the field, so a backend predating it is unaffected
+    and the payload stays byte-identical to today's (the two repos ship in
+    either order)."""
+    sent = _captured_summary_payload(_client())
+    assert "record_count" not in sent
+
+
 def test_summary_bucket_policy_buckets_labels_and_samples():
     from tracebloc_ingestor.utils.label_policy import BUCKET, apply
 
