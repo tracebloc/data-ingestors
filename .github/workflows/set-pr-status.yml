@@ -2,7 +2,25 @@ name: Set PR Status
 
 on:
   pull_request:
-    types: [opened, reopened, ready_for_review, converted_to_draft]
+    # `edited` is load-bearing, not decoration (tracebloc/backend#2556). The
+    # `closing-ref` job decides its verdict from the PR TITLE and the PR BODY, and
+    # `edited` is the ONLY event GitHub fires when either changes. Without it the
+    # two fields the gate reads are the two fields that can change without
+    # re-running it, which is a bypass rather than a gap: open a PR titled
+    # `chore: tidy up`, the gate records NOTHING_NAMED and goes green, then
+    # retitle it to `fix(1234): …` with nothing linked -- no event fires, the
+    # green stands, and the PR merges having defeated the check.
+    #
+    # It also makes the remediation usable at all. Retitling or editing a body to
+    # SATISFY the gate did not re-run it either, so a red persisted on a PR that
+    # now complied: 20 sync PRs had to be cleared with 20 manual `gh run rerun`
+    # calls (backend#2555), because the only in-band re-trigger was closing and
+    # reopening someone else's PR.
+    #
+    # Same one-word fix, same reason, as `fr-gate-caller.yml` (backend#1945): a
+    # gate whose verdict depends on a mutable field must re-run when that field
+    # mutates.
+    types: [opened, reopened, ready_for_review, converted_to_draft, edited]
 
 jobs:
   set-status:
