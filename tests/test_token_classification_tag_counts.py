@@ -150,6 +150,13 @@ def test_ingest_counts_distinct_tags_not_sequences():
     # Distinct TAGS (3), not distinct sequence strings (2).
     assert summary_kwargs["labels"] == {"O": 4, "B-PER": 2, "I-PER": 1}
     assert summary_kwargs["category"] == TOKEN
+    # backend#2770: the record count rides the payload EXPLICITLY and is the
+    # ROW count (2 texts) — NOT sum(labels.values()) (7 tag occurrences). This
+    # is exactly the fixture where the two diverge, which is the whole point:
+    # before this the backend inferred the count from the label sum, so #527's
+    # exploded tag counts silently inflated it by ~mean(sequence length)×.
+    assert summary_kwargs["record_count"] == 2
+    assert summary_kwargs["record_count"] != sum(summary_kwargs["labels"].values())
 
 
 def test_non_tag_category_keeps_row_counts():
