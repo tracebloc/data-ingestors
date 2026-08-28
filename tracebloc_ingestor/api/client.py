@@ -301,10 +301,14 @@ class APIClient:
             }
             if physical_table:
                 payload_fields["physical_table"] = physical_table
-            # `is not None`, not truthiness: an explicit count is always sent
-            # when the caller computed one (a 0-row run never reaches here, but
-            # the guard keeps a legitimate 0 from silently dropping to the
-            # backend's sum-of-labels fallback).
+            # `is not None`, not truthiness: send the count the caller computed
+            # even when it is a legitimate 0, rather than letting THIS side omit
+            # it. A 0-row run never reaches this call (the summary is skipped
+            # upstream when nothing was inserted), so the 0 is unreachable in
+            # practice — this guard does not by itself protect it end to end,
+            # because for an explicit 0 to survive the backend's fallback the
+            # reader must use the same `is not None` (not `or`); tracked with
+            # the backend half on backend#2770.
             if record_count is not None:
                 payload_fields["record_count"] = record_count
             payload = json.dumps(payload_fields)
