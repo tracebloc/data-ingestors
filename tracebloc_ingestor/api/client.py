@@ -223,6 +223,7 @@ class APIClient:
         meta_data: Optional[Dict[str, Any]] = None,
         physical_table: Optional[str] = None,
         label_policy: str = label_policy_module.PASSTHROUGH,
+        record_count: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         Send a single ingest summary to the backend, creating the UserDataSet in one
@@ -255,6 +256,16 @@ class APIClient:
                 (tracebloc/backend#1206). ``None`` (legacy shared-table
                 ingests) omits the field entirely, keeping the payload
                 byte-identical to today's.
+            record_count: The dataset's item count, carried EXPLICITLY so the
+                backend stops inferring it from ``sum(labels.values())``
+                (backend#2770). That inference is only right when ``labels``
+                partitions the rows; token_classification's exploded per-tag
+                counts (data-ingestors#527) and any sequence-grouped
+                category's per-sequence counts both break it. The caller
+                passes the category's SAMPLE UNIT (rows, or sequences for a
+                grouped category). ``None`` omits the field, so an older
+                backend that predates it is unaffected and the payload stays
+                byte-identical to today's — the two repos ship in either order.
 
         Returns:
             ``{"dataset_id": ..., "dataset_key": ...}``
@@ -290,6 +301,16 @@ class APIClient:
             }
             if physical_table:
                 payload_fields["physical_table"] = physical_table
+            # `is not None`, not truthiness: send the count the caller computed
+            # even when it is a legitimate 0, rather than letting THIS side omit
+            # it. A 0-row run never reaches this call (the summary is skipped
+            # upstream when nothing was inserted), so the 0 is unreachable in
+            # practice — this guard does not by itself protect it end to end,
+            # because for an explicit 0 to survive the backend's fallback the
+            # reader must use the same `is not None` (not `or`); tracked with
+            # the backend half on backend#2770.
+            if record_count is not None:
+                payload_fields["record_count"] = record_count
             payload = json.dumps(payload_fields)
             logger.info(
                 f"Sending ingest summary for {table_name}: "
