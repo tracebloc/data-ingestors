@@ -1326,6 +1326,24 @@ class BaseIngestor(ABC):
                         self.physical_table_name, self.ingestor_id
                     )
 
+                    # backend#2770: carry the item count EXPLICITLY so the
+                    # backend stops inferring it from sum(labels.values()) — a
+                    # sum that equals the item count only when labels partition
+                    # the rows. It is the category's SAMPLE UNIT: a sequence-
+                    # grouped category counts sequences (already tallied into
+                    # number_of_sequences, backend#1054), every other category
+                    # counts rows. Passing rows for a grouped category would
+                    # re-inflate total by ~mean(sequence length) — the exact
+                    # shape of the token_classification bug #527 surfaced, one
+                    # category over. Mirrors the count-path branch selection
+                    # above; a future grouped-by-rows category (count_unit !=
+                    # "sequences") falls to inserted_records like every row unit.
+                    record_count = (
+                        self.file_options["number_of_sequences"]
+                        if grouping is not None and grouping.count_unit == "sequences"
+                        else stats["inserted_records"]
+                    )
+
                     self.api_client.send_ingest_summary(
                         table_name=self.table_name,
                         physical_table=(
@@ -1348,6 +1366,7 @@ class BaseIngestor(ABC):
                         # earlier, so the stored rows keep the values training
                         # needs (#486).
                         label_policy=self.label_policy,
+                        record_count=record_count,
                     )
                     dataset_registered = True
                     stats["api_sent_records"] = stats["inserted_records"]
