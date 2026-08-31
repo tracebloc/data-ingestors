@@ -192,6 +192,20 @@ class IngestionSummary(NamedTuple):
     failed_records: int
     skipped_records: int
     file_transfer_failures: int = 0
+    # THE PHYSICAL TABLE THIS RUN WROTE (tracebloc/backend#2895).
+    #
+    # Under PER_INGESTION_TABLES the row store is ``ds_<uuid4().hex>`` while
+    # ``table_name`` stays the user-facing LABEL -- so the label names no table
+    # that exists. The summary banner is the only channel the CLI parses, and it
+    # carried the label, so a successful ingest reported a destination that could
+    # not be deleted or listed. Reported here so the CLI can say what was
+    # actually created instead of echoing the operator's --name.
+    #
+    # Populated from ``self.physical_table_name``, which is ALREADY correct in
+    # both modes (the label when the flag is off, the handle when it is on), so
+    # this restates no naming rule -- it forwards the one the ingestor derived.
+    # Defaulted and trailing: every existing constructor stays valid.
+    destination_table: str = ""
 
     @property
     def has_failures(self) -> bool:
@@ -1371,6 +1385,8 @@ class BaseIngestor(ABC):
                     dataset_registered = True
                     stats["api_sent_records"] = stats["inserted_records"]
 
+                # Forwarded, not recomputed — see IngestionSummary.destination_table.
+                stats["destination_table"] = self.physical_table_name
                 summary = IngestionSummary(**stats)
                 self._log_summary(summary)
 

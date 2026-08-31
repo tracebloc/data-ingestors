@@ -23,6 +23,7 @@ from tracebloc_ingestor.database import Database
 from tracebloc_ingestor.ingestors import base as base_mod
 from tracebloc_ingestor.ingestors.base import BaseIngestor
 from tracebloc_ingestor.ingestors.csv_ingestor import CSVIngestor
+from tracebloc_ingestor.utils.constants import TaskCategory
 
 # ── Config flag ──────────────────────────────────────────────────────────────
 
@@ -331,3 +332,109 @@ def test_flag_on_threads_the_physical_name_end_to_end():
     summary_kwargs = api.send_ingest_summary.call_args.kwargs
     assert summary_kwargs["table_name"] == "tbl"
     assert summary_kwargs["physical_table"] == phys
+
+
+# ---------------------------------------------------------------------------
+#  backend#2895 — the run summary must carry the PHYSICAL table.
+#
+#  The handle already reaches the BACKEND (``physical_table`` on the ingest
+#  summary payload, backend#1206). It did not reach the summary BANNER, which
+#  is the only channel the CLI parses — so `tracebloc data ingest --name X`
+#  reported `"table": "X"` for a table that does not exist, and `data delete X`
+#  then failed on a dataset that had just been created. Both the delete and a
+#  follow-up `data list | grep X` came back empty, which reads as "already
+#  clean": the failure is silent in the direction that loses data.
+# ---------------------------------------------------------------------------
+
+
+class _SummaryRecorder:
+    """Captures the IngestionSummary handed to _log_summary.
+
+    Same shape as test_file_transfer_summary._Recorder: installed as a CLASS
+    attribute, and with no ``__get__`` the instance access returns the recorder
+    itself, so ``self._log_summary(s)`` reduces to ``recorder(s)``.
+    """
+
+    def __init__(self):
+        self.summary = None
+
+    def __call__(self, summary):
+        self.summary = summary
+
+
+def _drive_ingest(monkeypatch, *, per_ingestion_tables: bool, label: str):
+    """Run one fully-mocked ingest and return (summary, ingestor)."""
+    records = [{"filename": "row0", "extension": ".jpeg"}]
+
+    monkeypatch.setattr(
+        "tracebloc_ingestor.ingestors.base.map_file_transfer",
+        lambda category, record, options, cfg=None, source_record=None: record,
+    )
+
+    class _FakePbar:
+        def __init__(self, *a, **k):
+            pass
+
+        def update(self, n):
+            pass
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("tracebloc_ingestor.ingestors.base.tqdm", _FakePbar)
+
+    captured = _SummaryRecorder()
+    monkeypatch.setattr(BaseIngestor, "_log_summary", captured)
+
+    mock_api = MagicMock()
+    mock_api.send_generate_edge_label_meta.return_value = True
+    mock_api.send_global_meta_meta.return_value = True
+    mock_api.prepare_dataset.return_value = True
+
+    mock_db = MagicMock()
+    mock_db.get_or_create_table_salt.return_value = "0" * 64
+    mock_db.create_table.return_value = MagicMock()
+    mock_db.get_table_schema.return_value = {}
+    mock_db.insert_batch.return_value = ([], [])
+    # `is True` in base.py is deliberate — a truthy MagicMock must NOT flip the
+    # storage model — so the flag has to be set to the literal.
+    mock_db.config.PER_INGESTION_TABLES = per_ingestion_tables
+
+    with patch.object(BaseIngestor, "__abstractmethods__", set()):
+        ingestor = BaseIngestor(
+            database=mock_db,
+            api_client=mock_api,
+            table_name=label,
+            schema={"filename": "VARCHAR(255)"},
+            category=TaskCategory.IMAGE_CLASSIFICATION,
+            intent="train",
+        )
+        ingestor.read_data = lambda source: iter(records)
+        ingestor._count_records = lambda source: len(records)
+        ingestor.validate_data = lambda source: True
+        ingestor.ingest("fake-source", batch_size=10)
+
+    return captured.summary, ingestor
+
+
+def test_summary_carries_the_ds_handle_not_the_label(monkeypatch):
+    summary, ingestor = _drive_ingest(
+        monkeypatch, per_ingestion_tables=True, label="dropcheck_train"
+    )
+    assert summary is not None, "summary was never logged"
+    # The finding: the label names no table that exists.
+    assert summary.destination_table != "dropcheck_train"
+    assert summary.destination_table.startswith("ds_")
+    # Forwarded from the ingestor's own derivation — not recomputed here.
+    assert summary.destination_table == ingestor.physical_table_name
+
+
+def test_summary_carries_the_label_when_the_flag_is_off(monkeypatch):
+    # Flag off: label IS the physical table, so the reported name is the label
+    # and the CLI's output stays byte-for-byte today's.
+    summary, ingestor = _drive_ingest(
+        monkeypatch, per_ingestion_tables=False, label="dropcheck_train"
+    )
+    assert summary is not None
+    assert summary.destination_table == "dropcheck_train"
+    assert summary.destination_table == ingestor.physical_table_name
