@@ -247,6 +247,14 @@ class BaseIngestor(ABC):
         category: Data category
     """
 
+    # Whether this ingestor enumerates ONE RECORD PER SOURCE FILE rather than
+    # one per manifest row. ``VOCIngestor`` sets it (backend#1006): one record
+    # per image means filenames are unique by construction, which is what makes
+    # the content_hash data_id safe for object_detection. Read in ``__init__``
+    # below, so it must be a CLASS attribute — a subclass instance attribute
+    # would not be set yet.
+    enumerates_one_record_per_file: bool = False
+
     def __init__(
         self,
         database: Database,
@@ -304,14 +312,20 @@ class BaseIngestor(ABC):
             category == TaskCategory.OBJECT_DETECTION
             and data_id_strategy == "content_hash"
             and not unique_id_column
+            and not self.enumerates_one_record_per_file
         ):
-            # Objdet manifests list one row PER OBJECT: duplicate
+            # Objdet MANIFESTS list one row PER OBJECT: duplicate
             # (filename, label) rows are distinct objects, but they produce
             # identical content digests, so the data_id UNIQUE upsert keeps
-            # only one of them (bugbot High on #383). The YAML resolver
-            # defaults objdet to uuid; this guards the direct-constructor
-            # path, which can't distinguish an explicit choice from the
-            # signature default — hence a warning, not an override.
+            # only one of them (bugbot High on #383). This guards the
+            # direct-constructor path, which can't distinguish an explicit
+            # choice from the signature default — hence a warning, not an
+            # override.
+            #
+            # It does NOT apply to the XML enumerator, which emits one record
+            # per IMAGE with a unique filename and for which content_hash is
+            # the recommended strategy (backend#1006) — warning there would
+            # tell the user to undo the correct setting.
             logger.warning(
                 "object_detection with data_id_strategy='content_hash': "
                 "duplicate (filename, label) manifest rows collapse into one "
@@ -554,6 +568,18 @@ class BaseIngestor(ABC):
         return bool(spec is not None and spec.label_is_tag_sequence)
 
     @property
+    def _label_is_class_histogram(self) -> bool:
+        """Whether the category's ``label`` column holds an encoded PER-IMAGE
+        CLASS HISTOGRAM ("car:3 sign:1") rather than one class per row, because
+        the record model is one row per image (object_detection, backend#1006).
+        Read trait-style from the registry, never via a category string, for the
+        same reason as ``_label_is_tag_sequence``. Selects
+        ``get_class_histogram_counts`` over ``get_label_counts`` in the
+        ingest-summary count path."""
+        spec = _MODALITY_REGISTRY.get(self.category)
+        return bool(spec is not None and spec.label_is_class_histogram)
+
+    @property
     def _table_lock(self) -> TableLock:
         """The run's table lock (P5b). ``TableLock`` owns the file-lock
         lifecycle — compute path, atomic acquire with stale-reclaim, release —
@@ -647,6 +673,17 @@ class BaseIngestor(ABC):
             # module-global Config() that reads os.environ (P4b).
             self.database.config,
         )
+        return self._run_validators(validators, source)
+
+    def _run_validators(self, validators: List[Any], source: Any) -> bool:
+        """Run an assembled validator list against *source*, collecting every
+        failure before raising.
+
+        Split out of :meth:`validate_data` so a subclass that assembles a
+        DIFFERENT validator set — ``VOCIngestor``, whose object_detection run
+        has no CSV manifest for the CSV-reading validators to read (backend#1006)
+        — reuses this reporting behaviour instead of copying the loop.
+        """
         logger.info(f"Running {len(validators)} validator(s) on data source")
         all_valid = True
         validation_errors = []
@@ -1239,6 +1276,19 @@ class BaseIngestor(ABC):
                     # sequence counts sum to the sequence total.
                     self.file_options["number_of_sequences"] = sum(
                         label_counts.values()
+                    )
+                elif self._label_is_class_histogram:
+                    # object_detection: one row per IMAGE, whose ``label`` cell
+                    # is that image's encoded class multiset. Decode and weight
+                    # by row count (get_class_histogram_counts) rather than
+                    # GROUP BY the raw cell, which would report whole
+                    # compositions as classes. NOTE the deliberate two units in
+                    # the resulting summary — ``labels`` counts BOXES while
+                    # ``record_count`` (inserted_records, below) counts IMAGES.
+                    # See utils/od_label_semantics for why that split is chosen.
+                    counts_helper = "get_class_histogram_counts"
+                    label_counts = self.database.get_class_histogram_counts(
+                        self.physical_table_name, self.ingestor_id
                     )
                 elif self._label_is_tag_sequence:
                     # token_classification: the ``label`` column holds the whole

@@ -15,7 +15,7 @@ from .identifiers import (
     validate_column_identifier,
 )
 from .api.client import APIClient
-from .ingestors import BaseIngestor, CSVIngestor, JSONIngestor
+from .ingestors import BaseIngestor, CSVIngestor, JSONIngestor, VOCIngestor
 from .utils.template_runner import run_ingestion
 from .validators import (
     BaseValidator,
@@ -36,6 +36,7 @@ __all__ = [
     "APIClient",
     "BaseIngestor",
     "CSVIngestor",
+    "VOCIngestor",
     "JSONIngestor",
     "BaseValidator",
     "ValidationResult",

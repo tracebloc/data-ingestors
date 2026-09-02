@@ -128,39 +128,18 @@
     {
       "id": "object_detection-default",
       "category": "object_detection",
-      "data_id_strategy": "uuid",
+      "data_id_strategy": "content_hash",
       "unique_id_column": null,
-      "total_rows_ingested": 128,
+      "total_rows_ingested": 1,
       "dest_files": [
         "0000001_02999_d_0000005.jpg",
         "0000001_02999_d_0000005.xml"
       ],
       "rows": [
         {
-          "label": "car",
+          "label": "awning-tricycle:17 bicycle:2 car:14 ignored_regions:1 motor:50 pedestrian:9 people:30 tricycle:2 truck:1 van:2",
           "data_intent": "train",
-          "data_id": "<uuid4>",
-          "filename": "0000001_02999_d_0000005",
-          "extension": ".jpg"
-        },
-        {
-          "label": "car",
-          "data_intent": "train",
-          "data_id": "<uuid4>",
-          "filename": "0000001_02999_d_0000005",
-          "extension": ".jpg"
-        },
-        {
-          "label": "car",
-          "data_intent": "train",
-          "data_id": "<uuid4>",
-          "filename": "0000001_02999_d_0000005",
-          "extension": ".jpg"
-        },
-        {
-          "label": "motor",
-          "data_intent": "train",
-          "data_id": "<uuid4>",
+          "data_id": "ee1db16b00e66934c234c717b9dad8fa9292aae3a1074a9105ff61f100b5a9f7",
           "filename": "0000001_02999_d_0000005",
           "extension": ".jpg"
         }
@@ -171,37 +150,16 @@
       "category": "object_detection",
       "data_id_strategy": "column",
       "unique_id_column": "filename",
-      "total_rows_ingested": 128,
+      "total_rows_ingested": 1,
       "dest_files": [
         "0000001_02999_d_0000005.jpg",
         "0000001_02999_d_0000005.xml"
       ],
       "rows": [
         {
-          "label": "car",
+          "label": "awning-tricycle:17 bicycle:2 car:14 ignored_regions:1 motor:50 pedestrian:9 people:30 tricycle:2 truck:1 van:2",
           "data_intent": "train",
-          "data_id": "0000001_02999_d_0000005",
-          "filename": "0000001_02999_d_0000005",
-          "extension": ".jpg"
-        },
-        {
-          "label": "car",
-          "data_intent": "train",
-          "data_id": "0000001_02999_d_0000005",
-          "filename": "0000001_02999_d_0000005",
-          "extension": ".jpg"
-        },
-        {
-          "label": "car",
-          "data_intent": "train",
-          "data_id": "0000001_02999_d_0000005",
-          "filename": "0000001_02999_d_0000005",
-          "extension": ".jpg"
-        },
-        {
-          "label": "motor",
-          "data_intent": "train",
-          "data_id": "0000001_02999_d_0000005",
+          "data_id": "0000001_02999_d_0000005.jpg",
           "filename": "0000001_02999_d_0000005",
           "extension": ".jpg"
         }
