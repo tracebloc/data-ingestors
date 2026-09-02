@@ -17,8 +17,8 @@ assumed all along: the engine samples OD by ``DISTINCT filename`` and reads
 A per-image record has no scalar class, so the ``label`` cell holds an encoded
 class multiset. Every decision about what that encoding means lives in
 :mod:`tracebloc_ingestor.utils.od_label_semantics` — deliberately not here, so
-the pending DS call on backend#1006 (box counts vs image-presence counts) is a
-one-file change rather than a sweep through this enumerator.
+the box-vs-presence unit (settled as BOXES on backend#1006) stays a one-file
+change rather than a sweep through this enumerator.
 """
 
 import logging

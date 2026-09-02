@@ -8,7 +8,7 @@ change is mechanical everywhere except here: a per-image record has no single
 Everything about "what does a class count MEAN for object detection" lives in
 this module. The enumerator (:mod:`tracebloc_ingestor.ingestors.voc_ingestor`)
 calls :func:`encode_image_label` and never reasons about class counting itself,
-so the pending DS decision is a change to *this file*, not a sweep through the
+so revisiting the unit is a change to *this file*, not a sweep through the
 ingestor.
 
 Two units, deliberately
@@ -32,12 +32,35 @@ rows, which is exactly why backend#2770 added the explicit ``record_count`` and
 backend#2787 stopped comparing ``dataset_meta['total']`` against
 ``sum(count.label)``.
 
-PENDING — the box-vs-presence decision (@divyasinghds, backend#1006)
---------------------------------------------------------------------
-If DS rules that OD class balance is defined on *images containing the class*
-rather than on boxes, the change is confined to :func:`encode_image_label`:
-emit each class once (``collections.Counter`` -> ``dict.fromkeys``) and every
-count below becomes a presence count. Nothing else in the enumerator moves.
+DECIDED — boxes, not image-presence (backend#1006, 2026-09-02)
+--------------------------------------------------------------
+Settled on the ticket rather than left open. Three things made it decidable
+without a data-science sign-off:
+
+* The training side never sees it. ``tracebloc-engine``'s OD reader parses the
+  sidecar ``<image_name>.xml`` directly and never reads a row's ``label``, so
+  the unit chosen here does not reach model training at all.
+* Two of the three backend consumers are unaffected or advisory:
+  ``check_same_labels`` compares label NAMES only, and
+  ``_m_label_distribution_skew`` / ``_m_min_class_support`` are WARN-only.
+* Boxes are the STATUS QUO. Every OD dataset ingested before #1006 reported box
+  counts, so choosing them leaves the existing corpus meaning exactly what it
+  already meant. Image-presence would have been the change — silently
+  redefining class balance across every historical dataset.
+
+Known wart, deliberately inherited rather than introduced: the one blocking
+consumer, ``validate_training_classes``, bounds a user's requested per-class
+counts against this histogram, so a request can be admitted in BOXES and then
+satisfied in IMAGES. That mismatch already exists on develop today (the engine
+LIMITs distinct filenames by ``sum(label_counts.values())``); box counts
+preserve it unchanged rather than creating it, and image-presence would not
+have fixed it either. The fix is an explicit image count plumbed to the engine
+— tracked separately on backend#1006, not this module's job.
+
+If that decision is ever revisited, the change is confined to
+:func:`encode_image_label`: emit each class once (``collections.Counter`` ->
+``dict.fromkeys``) and every count below becomes a presence count. Nothing else
+in the enumerator moves. That is why this module exists.
 
 Why the encoding is ``cls:count`` and not a repeated-class multiset
 ------------------------------------------------------------------
