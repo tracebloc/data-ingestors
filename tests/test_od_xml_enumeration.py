@@ -90,6 +90,47 @@ def test_unencodable_class_names_are_rejected(bad):
         encode_image_label([bad])
 
 
+@pytest.mark.parametrize("bad", ["traffic light", "secret:value", "PATIENT-42 x"])
+def test_encoding_errors_do_not_echo_the_class_name(bad):
+    """A class name is a customer LABEL value and this exception surfaces on the
+    ingest failure path into install logs (Bugbot). The rule must hold for the
+    message itself, not just for what the caller chooses to print."""
+    with pytest.raises(ODLabelEncodingError) as excinfo:
+        encode_image_label([bad])
+    assert bad not in str(excinfo.value)
+    assert bad.split()[0] not in str(excinfo.value) or bad.split()[0] in {"a"}
+
+
+def test_encoding_error_names_the_annotation_file(tmp_path):
+    """Suppressing the value must not make the error unactionable: the
+    enumerator prefixes the FILE, which is what the user needs to find it."""
+    ann = tmp_path / "annotations"
+    ann.mkdir()
+    _write_voc(ann, "bad_one", ["traffic light"])
+    with pytest.raises(ODLabelEncodingError) as excinfo:
+        list(_ingestor(tmp_path).read_data(str(ann)))
+    assert "bad_one.xml" in str(excinfo.value)
+    assert "traffic light" not in str(excinfo.value)
+
+
+def test_dest_collision_validator_is_not_skipped(tmp_path):
+    """The DEST_PATH collision guard must still run for object_detection.
+
+    Its name says "Duplicate", but its main job is rejecting a POPULATED
+    DEST_PATH — only its secondary probe reads a manifest, and that probe
+    already no-ops on a non-.csv source. Filtering it by name dropped a live
+    guard against a re-ingest writing into an existing dest tree on the shared
+    PVC (Bugbot). This pins the narrowed skip-set.
+    """
+    from tracebloc_ingestor.ingestors.voc_ingestor import _CSV_READING_VALIDATORS
+
+    assert "Duplicate Validator" not in _CSV_READING_VALIDATORS
+    assert "Ingestable Records" not in _CSV_READING_VALIDATORS
+    # The two that genuinely cannot run without a manifest stay skipped.
+    assert "Data Validator" in _CSV_READING_VALIDATORS
+    assert "Label Diversity Validator" in _CSV_READING_VALIDATORS
+
+
 def test_decode_is_total_against_malformed_cells():
     """Decoding runs in the summary path AFTER rows are committed, so a raise
     there would leave an ingested dataset unregistered."""

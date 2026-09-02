@@ -37,19 +37,36 @@ from ..utils.od_label_semantics import (
 
 logger = logging.getLogger(__name__)
 
-# Validators that read the record source as a CSV manifest. With no manifest
-# there is nothing for them to read, and handing them the annotations DIRECTORY
-# makes them fail on a file they were never pointed at. The diversity gate they
-# include is not dropped — it is re-derived from the XML in
-# ``_validate_label_diversity`` below, which is the only correct source once the
-# manifest is gone.
+# Validators skipped for the manifest-free object_detection run. Deliberately
+# NARROW — the first cut of this set filtered every validator that *mentions* a
+# CSV, which silently dropped a live guard (Bugbot):
+#
+#   Duplicate Validator      NOT skipped. Its name is misleading: its main job
+#                            is rejecting a POPULATED DEST_PATH, and only its
+#                            secondary within-manifest duplicate probe reads a
+#                            CSV — and that probe already returns [] unless the
+#                            source ends in ".csv". Skipping it let a re-ingest
+#                            write into an existing dest tree on the shared PVC.
+#   Ingestable Records       NOT skipped. Self-no-ops on a non-CSV source
+#                            (returns checked=False), so there is nothing to
+#                            suppress and an entry here would only be
+#                            misleading.
+#
+# The two below genuinely cannot run without a manifest:
+#
+#   Data Validator           Reads the source as a CSV to type-check declared
+#                            schema columns. object_detection declares no
+#                            schema so it self-no-ops today, but it is skipped
+#                            explicitly so a future OD schema cannot make it
+#                            read the annotations DIRECTORY as a CSV.
+#   Label Diversity          Counts distinct values in the manifest's label
+#                            column. Skipped but NOT dropped: re-derived from
+#                            <object><name> in ``_validate_label_diversity``,
+#                            the only correct source once the manifest is gone.
 _CSV_READING_VALIDATORS = frozenset(
     {
         "Data Validator",
         "Label Diversity Validator",
-        "Duplicate Validator",
-        "Ingestable Records",
-        "Ingestable Records Validator",
     }
 )
 
@@ -201,9 +218,18 @@ class VOCIngestor(BaseIngestor):
             )
             return None
 
+        try:
+            encoded = encode_image_label(classes)
+        except ODLabelEncodingError as exc:
+            # Re-raise naming the FILE, not the offending value. The message
+            # from od_label_semantics deliberately carries no class name (it is
+            # a customer label value, and this reaches install logs), so the
+            # file name is what makes it actionable.
+            raise ODLabelEncodingError(f"{xml_path.name}: {exc}") from exc
+
         return {
             "filename": self._record_filename(root, xml_path),
-            self.label_column or "label": encode_image_label(classes),
+            self.label_column or "label": encoded,
         }
 
     # --------------------------------------------------------- base overrides

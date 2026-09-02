@@ -105,15 +105,25 @@ def _validate_class_name(name: str) -> str:
     cleaned = str(name).strip()
     if not cleaned:
         raise ODLabelEncodingError(
-            "Object-detection annotation contains an empty <object><name>. "
-            "Every <object> must declare a non-empty class name."
+            "an <object> declares an empty <name>. Every <object> must carry a "
+            "non-empty class name."
         )
-    if any(ch.isspace() for ch in cleaned) or _PAIR_SEPARATOR in cleaned:
+    # The offending value is NOT interpolated. A class name is a customer LABEL
+    # value, and this exception surfaces on the ingest failure path into install
+    # logs — the same house rule that keeps parser text out of them (Bugbot).
+    # The caller (VOCIngestor._record_from_xml) prefixes the annotation file
+    # name, which is what makes this actionable without echoing the value.
+    if any(ch.isspace() for ch in cleaned):
         raise ODLabelEncodingError(
-            f"Object-detection class name {cleaned!r} contains whitespace or "
-            f"'{_PAIR_SEPARATOR}', which the per-image label encoding uses as "
-            f"separators. Rename the class in the Pascal-VOC XML "
-            f"(<object><name>) to remove them and re-ingest."
+            "a class name contains whitespace, which the per-image label "
+            "encoding uses as its pair separator. Rename the class in the "
+            "Pascal-VOC XML (<object><name>) and re-ingest."
+        )
+    if _PAIR_SEPARATOR in cleaned:
+        raise ODLabelEncodingError(
+            f"a class name contains '{_PAIR_SEPARATOR}', which the per-image "
+            f"label encoding uses to separate a class from its count. Rename "
+            f"the class in the Pascal-VOC XML (<object><name>) and re-ingest."
         )
     return cleaned
 
@@ -134,8 +144,9 @@ def encode_image_label(class_names: Iterable[str]) -> str:
     counts = Counter(_validate_class_name(name) for name in class_names)
     encoded = " ".join(f"{cls}{_PAIR_SEPARATOR}{counts[cls]}" for cls in sorted(counts))
     if len(encoded) > MAX_LABEL_LENGTH:
+        # Lengths and a class COUNT only — no class names (see above).
         raise ODLabelEncodingError(
-            f"Encoded per-image label is {len(encoded)} chars, over the "
+            f"encoded per-image label is {len(encoded)} chars, over the "
             f"{MAX_LABEL_LENGTH}-char limit of the `label` column "
             f"({len(counts)} distinct classes in one image). Truncating would "
             f"silently corrupt the class histogram, so this is rejected."
