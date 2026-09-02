@@ -63,12 +63,35 @@ logger = logging.getLogger(__name__)
 #                            column. Skipped but NOT dropped: re-derived from
 #                            <object><name> in ``_validate_label_diversity``,
 #                            the only correct source once the manifest is gone.
+# The image extensions object_detection actually ships (FileTypeValidator
+# restricts OD images to these). Used only to decide whether a <filename> tag's
+# trailing segment is an EXTENSION or part of the stem.
+_RECOGNISED_IMAGE_SUFFIXES = frozenset({".jpg", ".jpeg", ".png"})
+
 _CSV_READING_VALIDATORS = frozenset(
     {
         "Data Validator",
         "Label Diversity Validator",
     }
 )
+
+
+def _declared_stem(declared: str) -> str:
+    """The stem a ``<filename>`` tag names, for comparison against the on-disk one.
+
+    Strips only a RECOGNISED image extension — the same rule
+    ``file_transfer._has_extension`` applies, and for the same reason it gives:
+    a value with no recognised extension (a bare stem, or an internal dot like
+    ``image.001``) must be kept WHOLE. Stripping after the last dot
+    unconditionally made a tag that already equalled the on-disk stem look like
+    a different image, so the mismatch warning told users to rename files that
+    already paired (Bugbot).
+    """
+    base = os.path.basename(str(declared).replace("\\", "/")).strip()
+    root, dot, ext = base.rpartition(".")
+    if dot and root and f".{ext.lower()}" in _RECOGNISED_IMAGE_SUFFIXES:
+        return root
+    return base
 
 
 class VOCIngestor(BaseIngestor):
@@ -164,9 +187,7 @@ class VOCIngestor(BaseIngestor):
         node = root.find("filename")
         declared = (node.text or "").strip() if node is not None else ""
         if declared:
-            declared_stem = os.path.basename(declared.replace("\\", "/")).strip()
-            if "." in declared_stem:
-                declared_stem = declared_stem.rsplit(".", 1)[0]
+            declared_stem = _declared_stem(declared)
             if declared_stem and declared_stem != stem:
                 logger.warning(
                     f"{YELLOW}{xml_path.name}: <filename> names "

@@ -254,6 +254,35 @@ def test_disagreeing_filename_tag_warns(tmp_path, caplog):
     assert "something_else" in caplog.text and "real_stem" in caplog.text
 
 
+@pytest.mark.parametrize(
+    "stem,declared",
+    [
+        ("image.001", "image.001"),  # bare dotted stem, no extension
+        ("image.001", "image.001.jpg"),  # same, WITH a recognised extension
+        ("frame.v2", "frame.v2"),
+        ("plain", "plain.png"),
+    ],
+)
+def test_dotted_stems_do_not_warn_when_the_tag_matches(
+    tmp_path, caplog, stem, declared
+):
+    """Only a RECOGNISED image extension may be stripped from <filename>.
+
+    Stripping after the last dot unconditionally made a tag that already
+    equalled the on-disk stem look like a different image, so the warning told
+    users to rename files that already paired (Bugbot). Same rule, and same
+    reason, as file_transfer._has_extension.
+    """
+    ann = tmp_path / "annotations"
+    ann.mkdir()
+    _write_voc(ann, stem, ["car"], filename=declared)
+
+    with caplog.at_level(logging.WARNING):
+        (record,) = list(_ingestor(tmp_path).read_data(str(ann)))
+    assert record["filename"] == stem
+    assert "rename" not in caplog.text, f"spurious mismatch warning: {caplog.text}"
+
+
 def test_matching_filename_tag_is_silent(tmp_path, caplog):
     """The common case must not emit a warning — a tag that agrees with the
     stem is the normal, correct export."""
