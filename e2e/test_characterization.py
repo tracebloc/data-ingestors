@@ -357,9 +357,13 @@ def test_characterization(case, tmp_path, monkeypatch, capture_api):
     # row per ANNOTATION FILE (i.e. per image), so the source of truth for its
     # row count is annotations/*.xml.
     if "csv" in cfg:
-        expected_rows = len(pd.read_csv(cfg["csv"]))
+        # `source` also feeds the tabular feature round-trip below; only the
+        # manifest-driven categories have one (and only they set roundtrip_col).
+        source = pd.read_csv(cfg["csv"])
+        expected_rows = len(source)
         expected_label_total = expected_rows
     else:
+        source = None
         annotations = sorted(Path(cfg["annotations"]).glob("*.xml"))
         expected_rows = len(annotations)
         # The deliberate SECOND unit (backend#1006): `labels` counts BOXES
