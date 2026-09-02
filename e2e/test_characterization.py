@@ -25,6 +25,7 @@ hardcoded magic values), so the harness stays honest if a template changes.
 """
 
 import os
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import mysql.connector
@@ -207,15 +208,16 @@ CASES = [
         cfg=_cfg(
             table="char_od",
             category="object_detection",
-            csv=str(T / "object_detection/data/labels_file_sample.csv"),
+            # No csv / label: object_detection is enumerated from
+            # annotations/*.xml, one record per image (backend#1006).
             images=str(T / "object_detection/data/images"),
             annotations=str(T / "object_detection/data/annotations"),
-            label="image_label",
             target_size=[1920, 1080],
-            # #350: fixture is 10 unique rows repeated to 128; pin uuid so the
-            # row-per-source-row golden holds (content_hash would dedup to 10).
-            # See the image_classification note above.
-            data_id={"strategy": "uuid"},
+            # No uuid pin any more. It existed because the manifest repeated 10
+            # unique rows to 128 and content_hash would have deduped them to 10
+            # (#350). Per-image enumeration ingests one row per annotation file,
+            # so there are no duplicates to collapse and this exercises the
+            # shipped default (content_hash) instead of a test-only strategy.
         ),
         sidecars=[
             str(T / "object_detection/data/images"),
@@ -350,8 +352,22 @@ def test_characterization(case, tmp_path, monkeypatch, capture_api):
     rc = run.main()
     assert rc == 0, f"{case['id']}: ingest exited {rc}"
 
-    source = pd.read_csv(cfg["csv"])
-    expected_rows = len(source)
+    # Expected DB rows. Manifest-driven categories ingest one row per manifest
+    # line; object_detection has no manifest since backend#1006 and ingests one
+    # row per ANNOTATION FILE (i.e. per image), so the source of truth for its
+    # row count is annotations/*.xml.
+    if "csv" in cfg:
+        expected_rows = len(pd.read_csv(cfg["csv"]))
+        expected_label_total = expected_rows
+    else:
+        annotations = sorted(Path(cfg["annotations"]).glob("*.xml"))
+        expected_rows = len(annotations)
+        # The deliberate SECOND unit (backend#1006): `labels` counts BOXES
+        # while the row count is IMAGES, so these two numbers differ on purpose
+        # here — asserting both is what pins that contract end to end.
+        expected_label_total = sum(
+            len(ET.parse(a).getroot().findall(".//object")) for a in annotations
+        )
     rows = _fetch_rows(table)
 
     # ── Dimension 1: MySQL rows ──────────────────────────────────────────
@@ -414,12 +430,23 @@ def test_characterization(case, tmp_path, monkeypatch, capture_api):
         f"{case['id']}: data_intent {summary_kw.get('data_intent')!r} != "
         f"{cfg['intent']!r}"
     )
-    # Label counts: the sum of all label bucket counts must equal the total
-    # inserted rows (every row lands in exactly one bucket).
+    # Label counts. For manifest-driven categories the labels PARTITION the
+    # rows, so their sum is the row count. object_detection does not partition:
+    # one row is one IMAGE carrying a whole class multiset, so its labels sum to
+    # BOXES while `record_count` carries the image count (backend#1006, the same
+    # split token_classification already has). Assert whichever unit applies,
+    # and for object_detection assert the image count too — the two-unit
+    # contract is only pinned if BOTH halves are checked.
     total_labelled = sum(summary_kw.get("labels", {}).values())
-    assert total_labelled == expected_rows, (
-        f"{case['id']}: labels total {total_labelled} != {expected_rows} expected rows"
+    assert total_labelled == expected_label_total, (
+        f"{case['id']}: labels total {total_labelled} != "
+        f"{expected_label_total} expected"
     )
+    if "csv" not in cfg:
+        assert summary_kw.get("record_count") == expected_rows, (
+            f"{case['id']}: record_count {summary_kw.get('record_count')!r} != "
+            f"{expected_rows} images (labels sum to {total_labelled} boxes)"
+        )
     # Schema: the user-declared feature columns must all be present in the
     # schema payload sent to the backend. The label column maps to the
     # framework's standard `label` column and is excluded from the check.
