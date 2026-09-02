@@ -114,27 +114,51 @@ class VOCIngestor(BaseIngestor):
     # ------------------------------------------------------------- xml parsing
 
     @staticmethod
-    def _image_filename(root: ET.Element, xml_path: Path) -> str:
-        """The image name this annotation belongs to.
+    def _record_filename(root: ET.Element, xml_path: Path) -> str:
+        """The stem the transfer step keys on: the ANNOTATION FILE's own stem.
 
-        Prefers ``<annotation><filename>``, falling back to the XML's own stem
-        (the documented ``{image_name}.xml`` pairing, which ``FilePairingValidator``
-        already enforces).
+        Deliberately NOT ``<annotation><filename>``. That tag is a *description*
+        of the image; the pairing KEY is the on-disk stem, and the two are
+        independent. ``FilePairingValidator`` matches ``images/<stem>.<ext>`` to
+        ``annotations/<stem>.xml``, and ``file_transfer`` re-resolves both sides
+        from this one record field — appending the configured image extension,
+        and forcing ``.xml`` for the sidecar. A bare stem therefore resolves
+        BOTH correctly, which is exactly the "with or without extension"
+        contract the manifest format already documented.
 
-        The XML is user-supplied, so the value is reduced to its basename before
-        it is ever used to build a path. ``file_transfer._safe_join`` rejects
-        traversal independently (data-ingestors#239, already fixed and closed) —
-        this is the enumerator not manufacturing a hostile value in the first
-        place, not a replacement for that guard.
+        Trusting the tag instead is a silent-corruption bug (Bugbot, high): a
+        VOC file whose ``<filename>`` was left stale by a rename still PAIRS on
+        disk and still passes preflight, but transfer would then look for a
+        different image and a different ``.xml`` — skipping the row, or staging
+        a mismatched image/annotation pair. Nothing downstream would notice,
+        because the CSV path's ``IngestableRecordsValidator`` (which caught
+        unresolved filenames) reads a manifest that no longer exists here.
+
+        Keying on the stem closes that structurally rather than by adding
+        another check, and it also removes the traversal surface completely: the
+        value now originates from a real directory entry, never from XML
+        content, so no attacker-controlled string reaches a path join at all.
+
+        A disagreeing tag is still worth surfacing — it usually means the
+        dataset was renamed without re-exporting — so it warns rather than
+        passing in silence.
         """
+        stem = xml_path.stem
         node = root.find("filename")
-        raw = (node.text or "").strip() if node is not None else ""
-        if not raw:
-            return xml_path.stem
-        basename = os.path.basename(raw.replace("\\", "/")).strip()
-        if not basename or basename in {".", ".."}:
-            return xml_path.stem
-        return basename
+        declared = (node.text or "").strip() if node is not None else ""
+        if declared:
+            declared_stem = os.path.basename(declared.replace("\\", "/")).strip()
+            if "." in declared_stem:
+                declared_stem = declared_stem.rsplit(".", 1)[0]
+            if declared_stem and declared_stem != stem:
+                logger.warning(
+                    f"{YELLOW}{xml_path.name}: <filename> names "
+                    f"'{declared_stem}' but the annotation pairs with "
+                    f"'{stem}' on disk. Using '{stem}' — that is the pairing "
+                    f"key. If the tag is the correct image, rename the files "
+                    f"so the stems match and re-ingest.{RESET}"
+                )
+        return stem
 
     @staticmethod
     def _object_classes(root: ET.Element) -> List[str]:
@@ -158,8 +182,13 @@ class VOCIngestor(BaseIngestor):
         try:
             root = ET.parse(xml_path).getroot()
         except ET.ParseError as exc:
+            # Type name only, never the parser's message: ParseError text can
+            # quote the offending document content, and this line reaches
+            # install logs (Bugbot, house rule — logs must not embed customer
+            # data). The file name is enough to find it.
             logger.warning(
-                f"{YELLOW}Skipping unparseable annotation {xml_path.name}: {exc}{RESET}"
+                f"{YELLOW}Skipping unparseable annotation {xml_path.name} "
+                f"({type(exc).__name__}).{RESET}"
             )
             return None
 
@@ -173,7 +202,7 @@ class VOCIngestor(BaseIngestor):
             return None
 
         return {
-            "filename": self._image_filename(root, xml_path),
+            "filename": self._record_filename(root, xml_path),
             self.label_column or "label": encode_image_label(classes),
         }
 

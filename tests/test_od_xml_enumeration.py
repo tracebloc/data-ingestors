@@ -9,6 +9,7 @@ keeps the exactly-one guarantee).
 """
 
 import json
+import logging
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -148,7 +149,8 @@ def test_one_record_per_image_not_per_box(tmp_path):
     records = list(_ingestor(tmp_path).read_data(str(ann)))
 
     assert len(records) == 2, "one record per IMAGE, not one per bounding box"
-    assert records[0] == {"filename": "a.jpg", "image_label": "car:3 sign:1"}
+    # The stem, not <filename> — that is the key transfer and pairing agree on.
+    assert records[0] == {"filename": "a", "image_label": "car:3 sign:1"}
     # Boxes are preserved in the label, so the histogram can still count them.
     assert sum(decode_image_label(r["image_label"])["car"] for r in records) == 4
 
@@ -171,30 +173,74 @@ def test_enumeration_order_is_stable(tmp_path):
     ing = _ingestor(tmp_path)
     first = [r["filename"] for r in ing.read_data(str(ann))]
     second = [r["filename"] for r in ing.read_data(str(ann))]
-    assert first == second == ["a.jpg", "b.jpg", "c.jpg"]
+    assert first == second == ["a", "b", "c"]
 
 
-def test_filename_is_reduced_to_a_basename(tmp_path):
-    """The XML is user-supplied. The enumerator must not manufacture a
-    traversing filename for the transfer step to resolve — independent of
-    ``file_transfer._safe_join``, which rejects one (data-ingestors#239)."""
+@pytest.mark.parametrize(
+    "declared",
+    ["../../../../etc/passwd", "/etc/passwd", "", "..", "totally_other.jpg"],
+)
+def test_xml_content_never_reaches_the_path(tmp_path, declared):
+    """The record's filename is the annotation file's own stem, whatever the
+    XML says (Bugbot, high).
+
+    Two things ride on this. Correctness: ``FilePairingValidator`` pairs on the
+    on-disk stem and ``file_transfer`` re-resolves BOTH the image and the .xml
+    from this field, so a stale ``<filename>`` — the normal result of renaming
+    a VOC dataset without re-exporting — would pass preflight and then skip the
+    row or stage a mismatched pair. Security: keying on the directory entry
+    means no attacker-controlled string reaches a path join at all, rather than
+    relying on ``_safe_join`` to reject one after the fact.
+    """
     ann = tmp_path / "annotations"
     ann.mkdir()
-    _write_voc(ann, "evil", ["car"], filename="../../../../etc/passwd")
+    _write_voc(ann, "real_stem", ["car"], filename=declared)
+
     (record,) = list(_ingestor(tmp_path).read_data(str(ann)))
-    assert record["filename"] == "passwd"
-    assert ".." not in record["filename"]
+    assert record["filename"] == "real_stem"
 
 
-def test_filename_falls_back_to_the_xml_stem(tmp_path):
-    """``<filename>`` absent or unusable ⇒ the documented ``{image_name}.xml``
-    pairing that FilePairingValidator already enforces."""
+def test_disagreeing_filename_tag_warns(tmp_path, caplog):
+    """A mismatch is used-but-flagged, not silently ignored: it almost always
+    means the dataset was renamed without re-exporting the annotations."""
     ann = tmp_path / "annotations"
     ann.mkdir()
-    _write_voc(ann, "img7", ["car"], filename="")
-    _write_voc(ann, "img8", ["car"], filename="..")
-    names = sorted(r["filename"] for r in _ingestor(tmp_path).read_data(str(ann)))
-    assert names == ["img7", "img8"]
+    _write_voc(ann, "real_stem", ["car"], filename="something_else.jpg")
+
+    with caplog.at_level(logging.WARNING):
+        (record,) = list(_ingestor(tmp_path).read_data(str(ann)))
+    assert record["filename"] == "real_stem"
+    assert "something_else" in caplog.text and "real_stem" in caplog.text
+
+
+def test_matching_filename_tag_is_silent(tmp_path, caplog):
+    """The common case must not emit a warning — a tag that agrees with the
+    stem is the normal, correct export."""
+    ann = tmp_path / "annotations"
+    ann.mkdir()
+    _write_voc(ann, "img7", ["car"], filename="img7.jpg")
+
+    with caplog.at_level(logging.WARNING):
+        list(_ingestor(tmp_path).read_data(str(ann)))
+    assert "img7" not in caplog.text
+
+
+def test_parse_warning_does_not_leak_document_text(tmp_path, caplog):
+    """ParseError messages can quote the offending document, and this line
+    reaches install logs — log the exception TYPE, never its text."""
+    ann = tmp_path / "annotations"
+    ann.mkdir()
+    _write_voc(ann, "good", ["car"])
+    _write_voc(ann, "good2", ["sign"])
+    (ann / "broken.xml").write_text(
+        "<annotation><secret>PATIENT-12345</secret>", encoding="utf-8"
+    )
+
+    with caplog.at_level(logging.WARNING):
+        list(_ingestor(tmp_path).read_data(str(ann)))
+    assert "broken.xml" in caplog.text, "the file must still be named"
+    assert "PATIENT-12345" not in caplog.text
+    assert "ParseError" in caplog.text
 
 
 def test_unparseable_and_objectless_annotations_are_skipped(tmp_path):
@@ -207,7 +253,7 @@ def test_unparseable_and_objectless_annotations_are_skipped(tmp_path):
     (ann / "broken.xml").write_text("<annotation><unclosed>", encoding="utf-8")
 
     records = list(_ingestor(tmp_path).read_data(str(ann)))
-    assert [r["filename"] for r in records] == ["good.jpg"]
+    assert [r["filename"] for r in records] == ["good"]
 
 
 def test_missing_annotations_directory_names_the_path_it_was_given(tmp_path):

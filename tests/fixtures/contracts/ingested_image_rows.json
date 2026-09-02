@@ -139,7 +139,7 @@
         {
           "label": "awning-tricycle:17 bicycle:2 car:14 ignored_regions:1 motor:50 pedestrian:9 people:30 tricycle:2 truck:1 van:2",
           "data_intent": "train",
-          "data_id": "ee1db16b00e66934c234c717b9dad8fa9292aae3a1074a9105ff61f100b5a9f7",
+          "data_id": "106f5aa3aae136d89bb1307915b277ffba072b343aa280976ed6373155236837",
           "filename": "0000001_02999_d_0000005",
           "extension": ".jpg"
         }
@@ -159,7 +159,7 @@
         {
           "label": "awning-tricycle:17 bicycle:2 car:14 ignored_regions:1 motor:50 pedestrian:9 people:30 tricycle:2 truck:1 van:2",
           "data_intent": "train",
-          "data_id": "0000001_02999_d_0000005.jpg",
+          "data_id": "0000001_02999_d_0000005",
           "filename": "0000001_02999_d_0000005",
           "extension": ".jpg"
         }
