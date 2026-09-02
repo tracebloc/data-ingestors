@@ -93,6 +93,14 @@ class ModalitySpec:
     # regression / self-supervised / token-classification (per-token BIO) and
     # the time families.
     is_classification: bool = False
+    # The ``label`` column holds an ENCODED PER-IMAGE CLASS HISTOGRAM
+    # ("car:3 sign:1") rather than one class per row, because the record model
+    # is one row per IMAGE and an image has no scalar class (backend#1006).
+    # Selects ``get_class_histogram_counts`` in the ingest-summary count path,
+    # which decodes each cell instead of GROUP BY-ing the raw string (that would
+    # report whole compositions as classes, exactly the token_classification
+    # failure of backend#1747, one category over).
+    label_is_class_histogram: bool = False
     # The two per-task LAYOUT facts not already implied by the flags above
     # (data-ingestors#347). Everything else about the on-disk layout is derived
     # from the existing flags by ``modalities.layout.build_layout_contract``.

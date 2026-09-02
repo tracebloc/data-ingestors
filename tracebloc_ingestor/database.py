@@ -1078,6 +1078,59 @@ class Database:
                 counts[tag] = counts.get(tag, 0) + row_count
         return counts
 
+    def get_class_histogram_counts(
+        self, table_name: str, ingestor_id: str
+    ) -> Dict[str, int]:
+        """
+        Return ``{class: box_count}`` for an object-detection run, decoding each
+        row's encoded per-image class histogram (backend#1006).
+
+        Under the per-image record model one row is one IMAGE, and its ``label``
+        cell is that image's class multiset encoded as ``"car:3 sign:1"``
+        (:mod:`tracebloc_ingestor.utils.od_label_semantics`). The row-unit
+        :meth:`get_label_counts` would therefore count distinct COMPOSITIONS as
+        classes — ``"car:3 sign:1"`` reported as one class — which is the
+        token_classification failure of backend#1747 one category over. This
+        decodes each cell and weights it by the number of rows carrying it.
+
+        The two units this produces are deliberate and documented at the point
+        of emission: ``labels`` counts BOXES (so class balance stays comparable
+        with every OD dataset ingested before #1006), while ``record_count``
+        counts IMAGES. See ``od_label_semantics`` for why.
+
+        The ``GROUP BY label`` still runs in SQL, so the row set materialised
+        here is bounded to DISTINCT compositions; each is decoded once and
+        weighted by its row count, making the Python work O(distinct
+        compositions), not O(rows). A NULL/empty label carries no classes and
+        contributes nothing.
+
+        Args:
+            table_name: Name of the table to query
+            ingestor_id: UUID of the current ingest run
+
+        Returns:
+            Dict mapping each distinct class name to its total box count
+        """
+        from .utils.od_label_semantics import decode_image_label
+
+        with self.engine.connect() as conn:
+            rows = conn.execute(
+                text(
+                    f"SELECT label, COUNT(*) AS cnt "
+                    f"FROM `{table_name.replace('`', '``')}` "
+                    f"WHERE ingestor_id = :ingestor_id "
+                    f"GROUP BY label"
+                ),
+                {"ingestor_id": ingestor_id},
+            ).fetchall()
+        counts: Dict[str, int] = {}
+        for label, row_count in rows:
+            if label is None:
+                continue
+            for cls, per_image in decode_image_label(str(label)).items():
+                counts[cls] = counts.get(cls, 0) + per_image * row_count
+        return counts
+
     def get_label_sequence_counts(
         self, table_name: str, ingestor_id: str, group_column: str = "sequence_id"
     ) -> Dict[str, int]:

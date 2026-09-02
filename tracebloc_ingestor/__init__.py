@@ -15,7 +15,7 @@ from .identifiers import (
     validate_column_identifier,
 )
 from .api.client import APIClient
-from .ingestors import BaseIngestor, CSVIngestor, JSONIngestor
+from .ingestors import BaseIngestor, CSVIngestor, JSONIngestor, VOCIngestor
 from .utils.template_runner import run_ingestion
 from .validators import (
     BaseValidator,
@@ -28,7 +28,7 @@ from .validators import (
 # Single source of truth for the package version. setup.py parses this literal
 # (see _read_version in setup.py) so the two can't drift again (#175). Bump here
 # only — setup.py picks it up automatically.
-__version__ = "0.8.16"
+__version__ = "0.8.17"
 
 __all__ = [
     "Config",
@@ -36,6 +36,7 @@ __all__ = [
     "APIClient",
     "BaseIngestor",
     "CSVIngestor",
+    "VOCIngestor",
     "JSONIngestor",
     "BaseValidator",
     "ValidationResult",

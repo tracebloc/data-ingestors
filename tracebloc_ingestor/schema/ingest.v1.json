@@ -360,11 +360,22 @@
 
   "allOf": [
     {
-      "description": "Exactly one data source: csv or json.",
-      "oneOf": [
-        { "required": ["csv"], "not": { "required": ["json"] } },
-        { "required": ["json"], "not": { "required": ["csv"] } }
-      ]
+      "description": "Exactly one data source: csv or json — except object_detection, whose records are enumerated from the Pascal-VOC XML in annotations/ and which therefore declares NEITHER (backend#1006). Written as a per-category conditional rather than a blanket relaxation so every other category keeps the exactly-one guarantee: without the `if/then/else` split, a missing data source would become legal everywhere and a typo'd `csv:` key would validate as a source-less config.",
+      "if": {
+        "properties": { "category": { "const": "object_detection" } },
+        "required": ["category"]
+      },
+      "then": {
+        "description": "object_detection: no manifest. `csv`/`json` are rejected outright rather than ignored, so a stale labels.csv config fails loudly instead of being silently dropped while the XML is enumerated behind it.",
+        "not": { "anyOf": [ { "required": ["csv"] }, { "required": ["json"] } ] }
+      },
+      "else": {
+        "description": "Every other category: exactly one data source.",
+        "oneOf": [
+          { "required": ["csv"], "not": { "required": ["json"] } },
+          { "required": ["json"], "not": { "required": ["csv"] } }
+        ]
+      }
     },
     {
       "description": "Image-based categories require `images`.",
@@ -519,13 +530,12 @@
       "then": { "required": ["target_size", "number_of_keypoints"] }
     },
     {
-      "description": "Most categories require `label`.",
+      "description": "Most categories require `label`. object_detection is deliberately ABSENT: since backend#1006 its records are enumerated from the Pascal-VOC XML and the per-image label is DERIVED from <object><name>, so there is no user-named label column to point at. It is not in the self-supervised MUST-NOT-set list either — that list is about categories with no labels at all; OD has labels, they are just not user-declared.",
       "if": {
         "properties": {
           "category": {
             "enum": [
               "image_classification",
-              "object_detection",
               "keypoint_detection",
               "semantic_segmentation",
               "text_classification",

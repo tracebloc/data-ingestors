@@ -49,6 +49,9 @@ _SPECS = (
         # Pascal-VOC XML, one per image, paired by filename stem (transfer.py
         # object_detection; xml_validator; file_pairing_validator).
         sidecars=(Sidecar(subdir="annotations", glob="*.xml", required=True),),
+        # backend#1006: one record per IMAGE, so the label cell is that image's
+        # encoded class histogram — see utils/od_label_semantics.
+        label_is_class_histogram=True,
     ),
     ModalitySpec(
         TaskCategory.KEYPOINT_DETECTION,

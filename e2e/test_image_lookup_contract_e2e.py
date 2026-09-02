@@ -78,10 +78,10 @@ CASES = [
         _cfg(
             table="e2e_lookup_od",
             category="object_detection",
-            csv=str(T / "object_detection/data/labels_file_sample.csv"),
+            # No csv / label: object_detection is enumerated from
+            # annotations/*.xml, one record per image (backend#1006).
             images=str(T / "object_detection/data/images"),
             annotations=str(T / "object_detection/data/annotations"),
-            label="image_label",
             target_size=[1920, 1080],
         ),
         id="object_detection",
