@@ -233,8 +233,20 @@ class APIClient:
         Args:
             table_name: Dataset table name (used as the URL path segment)
             ingestor_id: UUID identifying this ingest run
-            labels: ``{label: row_count}`` — computed locally after DB insert,
-                keyed by the RAW label as stored
+            labels: ``{label: count}`` — computed locally after DB insert, keyed
+                by the RAW label as stored. The COUNT UNIT is per category and
+                is NOT always rows:
+                  * most categories      one row per label occurrence (rows)
+                  * token_classification tag OCCURRENCES, from the exploded
+                                         per-row BIO sequence (di#527)
+                  * object_detection     BOXES, from each image's class
+                                         multiset — while ``record_count``
+                                         below counts IMAGES (backend#1006)
+                Two units in one payload is deliberate for object_detection:
+                class balance stays comparable with every OD dataset ingested
+                before #1006, while the item count becomes the image count.
+                Never infer an item count from ``sum(labels.values())`` —
+                that is what ``record_count`` is for.
             dataset_title: Human-readable name for the new dataset
             data_format: One of "image", "tabular", "text", "audio", "video"
             data_intent: "train" or "test"
@@ -259,11 +271,13 @@ class APIClient:
             record_count: The dataset's item count, carried EXPLICITLY so the
                 backend stops inferring it from ``sum(labels.values())``
                 (backend#2770). That inference is only right when ``labels``
-                partitions the rows; token_classification's exploded per-tag
-                counts (data-ingestors#527) and any sequence-grouped
-                category's per-sequence counts both break it. The caller
-                passes the category's SAMPLE UNIT (rows, or sequences for a
-                grouped category). ``None`` omits the field, so an older
+                partitions the rows, and three kinds of category break that:
+                token_classification's exploded per-tag counts
+                (data-ingestors#527), any sequence-grouped category's
+                per-sequence counts, and object_detection's per-class BOX
+                counts (backend#1006). The caller passes the category's SAMPLE
+                UNIT — rows, sequences for a grouped category, or IMAGES for
+                object_detection, where one row IS one image. ``None`` omits the field, so an older
                 backend that predates it is unaffected and the payload stays
                 byte-identical to today's — the two repos ship in either order.
 

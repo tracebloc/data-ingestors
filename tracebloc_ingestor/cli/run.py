@@ -15,7 +15,7 @@ flow:
     5. Construct ``Database`` and ``APIClient`` with that Config (injected
        onward to the ingestor, its validators and file transfer). ``APIClient``
        triggers ``Config.validate()`` which fails fast on missing auth (#43).
-    6. Dispatch to ``CSVIngestor`` or ``JSONIngestor`` based on
+    6. Dispatch to ``CSVIngestor``, ``JSONIngestor`` or ``VOCIngestor`` based on
        ``source_type``.
     7. Run ``ingestor.ingest(source_path, batch_size=...)``.
 
@@ -52,7 +52,7 @@ from .. import telemetry
 from ..api.client import APIClient
 from ..config import Config
 from ..database import Database
-from ..ingestors import CSVIngestor, JSONIngestor
+from ..ingestors import CSVIngestor, JSONIngestor, VOCIngestor
 from ..utils.correlation import resolve_correlation_id
 from ..utils.logging import setup_logging
 from .conventions import ResolvedConfig, resolve
@@ -437,6 +437,15 @@ def _build_ingestor(
         label_policy=resolved.label_policy,
     )
 
+    if resolved.source_type == "annotations":
+        # object_detection: no manifest — records are enumerated from the
+        # Pascal-VOC XML, one per image (backend#1006). ``source_path`` is the
+        # annotations directory rather than a file.
+        return VOCIngestor(
+            **common_kwargs,
+            file_options=resolved.file_options,
+        )
+
     if resolved.source_type == "csv":
         return CSVIngestor(
             **common_kwargs,
@@ -457,7 +466,8 @@ def _build_ingestor(
 
     raise ValueError(
         f"Unknown source_type {resolved.source_type!r}; "
-        "this is a bug — the schema's oneOf should have rejected the config."
+        "this is a bug — the schema's category-conditional data-source rule "
+        "should have rejected the config."
     )
 
 

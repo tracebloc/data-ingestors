@@ -210,10 +210,10 @@ CASES = [
         _cfg(
             table="e2e_od",
             category="object_detection",
-            csv=str(T / "object_detection/data/labels_file_sample.csv"),
+            # No csv / label: object_detection is enumerated from
+            # annotations/*.xml, one record per image (backend#1006).
             images=str(T / "object_detection/data/images"),
             annotations=str(T / "object_detection/data/annotations"),
-            label="image_label",
             target_size=[1920, 1080],
         ),
         id="object_detection",
@@ -339,8 +339,7 @@ def test_tsc_sequence_semantics(tmp_path, monkeypatch):
     rows = ["sequence_id,timestamp,heart_rate,label"]
     for pid, T, label in (("p1", 5, "1"), ("p2", 3, "0"), ("p3", 7, "0")):
         rows += [
-            f"{pid},2024-01-01 {8 + t:02d}:00:00,{70 + t}.0,{label}"
-            for t in range(T)
+            f"{pid},2024-01-01 {8 + t:02d}:00:00,{70 + t}.0,{label}" for t in range(T)
         ]
     csv_path = tmp_path / "toy.csv"
     csv_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
@@ -385,7 +384,10 @@ def test_tsc_sequence_semantics(tmp_path, monkeypatch):
     composite = [
         sorted(cols) for name, cols in by_index.items() if name.startswith("ix_")
     ]
-    assert [(1, "sequence_id"), (2, "timestamp")] in composite, (
+    assert [
+        (1, "sequence_id"),
+        (2, "timestamp"),
+    ] in composite, (
         f"composite (sequence_id, timestamp) index missing; indexes: {by_index}"
     )
     cur.close()
@@ -462,9 +464,7 @@ def test_hard_killed_prior_run_reclaimed_by_retry(tmp_path, monkeypatch):
     assert _rows(table) == 8
     conn = _connect()
     cur = conn.cursor()
-    cur.execute(
-        f"SELECT COUNT(*) FROM `{table}` WHERE ingestor_id = %s", (dead,)
-    )
+    cur.execute(f"SELECT COUNT(*) FROM `{table}` WHERE ingestor_id = %s", (dead,))
     assert cur.fetchone()[0] == 0
     cur.close()
     conn.close()
