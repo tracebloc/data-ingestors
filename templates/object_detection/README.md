@@ -18,11 +18,16 @@ kind: IngestConfig
 category: object_detection
 table: visdrone_train
 intent: train
-csv: /data/shared/visdrone/labels.csv
 images: /data/shared/visdrone/images/
 annotations: /data/shared/visdrone/annotations/
-label: image_label
 ```
+
+> **No `csv:` and no `label:`** — since backend#1006 records are enumerated from
+> `annotations/*.xml`, one per IMAGE, with the class read from `<object><name>`.
+> There is no manifest to point at and no user-named label column, so both keys
+> are **rejected** for this category rather than ignored: a stale `labels.csv`
+> config fails loudly instead of being silently dropped while the XML is
+> enumerated behind it.
 
 **3. Install:**
 
@@ -45,11 +50,10 @@ object_detection/
     │   ├── image1.png
     │   ├── image2.png
     │   └── image3.png
-    ├── annotations/             # XML annotation files
-    │   ├── image1.xml
-    │   ├── image2.xml
-    │   └── image3.xml
-    └── labels_file_sample.csv   # CSV file with object labels
+    └── annotations/             # XML annotation files — the RECORD SOURCE
+        ├── image1.xml
+        ├── image2.xml
+        └── image3.xml
 ```
 
 ## Data Format
@@ -66,25 +70,18 @@ object_detection/
   **stem** (its name with no extension). The annotation for `images/image1.jpg` is
   `annotations/image1.xml`.
 
-### CSV Labels File
-The CSV file contains the following columns:
-- `object_id`: Unique identifier for each object (format: `{image_name}_obj_{index}`)
-- `filename`: Image filename. Accepted **with or without an extension** — `image1`
-  and `image1.jpg` are equivalent. The two sidecar files are resolved from it
-  independently:
-  - **Image** — the configured extension is appended when the stem has none
-    (`image1` → `images/image1.jpg`); an extension already present is kept.
-  - **Annotation** — always resolved from the **stem** as `<image_name>.xml`, so
-    both `image1` and `image1.jpg` pair with `annotations/image1.xml`. A
-    `filename` carrying `.jpg` does **not** make the ingestor look for
-    `annotations/image1.jpg`; the image extension is swapped for `.xml`.
+### Labels
 
-  > If a run reports 0 committed rows with "Source file not found:
-  > `annotations/…`", it's almost always a real missing/mis-stemmed annotation —
-  > not the `filename` extension. Object detection is atomic: a record commits
-  > only when **both** the image and its `<stem>.xml` copy successfully.
-- `image_label`: Class label of the object
-- `object_count`: Number of objects in the image (always 1 for individual objects)
+There is **no labels file**. One record is one image, and its classes come from
+the `<object><name>` elements of `annotations/<stem>.xml`.
+
+The image and its annotation are paired by **stem** — the image name with no
+extension — so `images/image1.jpg` pairs with `annotations/image1.xml`.
+
+> If a run reports 0 committed rows with "Source file not found:
+> `annotations/…`", it is a missing or mis-stemmed annotation. Object detection
+> is atomic: a record commits only when **both** the image and its `<stem>.xml`
+> copy successfully.
 
 ## XML Annotation Format
 
@@ -126,8 +123,7 @@ Use the Python+Dockerfile pattern when the declarative schema can't express your
 
 1. Place your images in the `data/images/` directory
 2. Create corresponding XML annotation files in the `data/annotations/` directory
-3. Update the `labels_file_sample.csv` with your data
-4. Configure the ingestion parameters in `object_detection.py`
+3. Configure the ingestion parameters in `object_detection.py`
 5. Run the ingestion script:
 
 ```bash
