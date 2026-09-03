@@ -134,3 +134,16 @@ class ModalitySpec:
     # trait-style (never on the category string), so a future tag-sequence
     # category is a one-line registry entry. ``False`` for every other category.
     label_is_tag_sequence: bool = False
+    # No manifest CSV — records are enumerated from the required sidecar instead
+    # (backend#1006 / backend#3076). object_detection is the one file-bearing
+    # category built this way: its records are one-per-image, enumerated from the
+    # Pascal-VOC ``annotations/*.xml`` sidecar, and each image's label is DERIVED
+    # from ``<object><name>`` — so there is no labels CSV, no ``filename`` column
+    # to require, and no user-declared label column to point at. Drives the
+    # layout contract's manifest block to ``kind="none"`` with both column flags
+    # false (``modalities.layout``), so a consumer (the CLI's
+    # discovery/preflight/spec-build mirror) skips every labels-CSV read. ``False``
+    # for every other category — including the OTHER sidecar-bearing ones:
+    # semantic_segmentation still ships a labels CSV that carries the ``mask_id``
+    # link column, so its manifest stays ``labels_csv``.
+    records_from_sidecar: bool = False

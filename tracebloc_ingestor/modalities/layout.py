@@ -40,7 +40,17 @@ from typing import Any, Dict, Optional, Tuple
 #      group). Surfaces the time-ordering constraint that used to live only in
 #      the validators, so a consumer can read from the contract which tasks are
 #      subject to it (backend#1870).
-LAYOUT_CONTRACT_VERSION = "3"
+# "4": object_detection gained a MANIFEST-LESS shape — since backend#1006 its
+#      records are enumerated from the required ``annotations/*.xml`` sidecar
+#      (not a labels CSV) and each label is derived from ``<object><name>``, so
+#      its manifest is ``kind="none"`` with no filename/label column. That is a
+#      NEW ``kind`` value a consumer must handle (skip the labels-CSV reads), so
+#      it is a shape reinterpretation, not just a task's value changing — bumped
+#      so every downstream version guard fires (the CLI's pinned re-vendor,
+#      e2e-test-agent's harness) instead of silently emitting the old
+#      ``labels_csv`` shape, which is exactly the drift that made OD ingest
+#      impossible from the CLI (backend#3076).
+LAYOUT_CONTRACT_VERSION = "4"
 
 
 @dataclass(frozen=True)
@@ -159,21 +169,42 @@ def _ordering(spec: Any, fixed_time_column: Optional[str]) -> Optional[Dict[str,
     }
 
 
+def _manifest(spec: Any) -> Dict[str, Any]:
+    """The task's manifest descriptor: where its record list + labels come from.
+
+    ``object_detection`` is the one file-bearing category with NO manifest CSV
+    (``spec.records_from_sidecar``): since backend#1006 its records are
+    enumerated from the required ``annotations/*.xml`` sidecar (one per image)
+    and each label is DERIVED from ``<object><name>``, so there is no labels CSV,
+    no ``filename`` column to require, and no user-declared label column. It
+    emits ``kind="none"`` with both column flags false, and a consumer keys off
+    that to SKIP every labels-CSV read (the CLI's discovery/preflight/spec-build
+    mirror) rather than staging a manifest the ingestor never reads (backend#3076).
+    """
+    if spec.records_from_sidecar:
+        return {
+            "kind": "none",
+            "requires_filename_column": False,
+            "has_label_column": False,
+        }
+    return {
+        # File-bearing tasks list per-row files in a labels CSV (required
+        # `filename` column); tabular/time-series have no sidecar files —
+        # the data CSV itself is the manifest, with no `filename` column.
+        "kind": "labels_csv" if spec.is_file_bearing else "data_csv",
+        "requires_filename_column": spec.is_file_bearing,
+        # A user-supplied label/target column. Self-supervised text tasks
+        # (MLM/CLM/seq2seq/embeddings) have none; everything else does.
+        "has_label_column": not spec.is_self_supervised,
+    }
+
+
 def _task_layout(spec: Any, fixed_time_column: Optional[str]) -> Dict[str, Any]:
     """Compose one task's layout: the two declared pieces (sidecars,
     record_format) plus the facts DERIVED from the spec's existing flags."""
     return {
         "family": spec.data_format,  # image | text | tabular
-        "manifest": {
-            # File-bearing tasks list per-row files in a labels CSV (required
-            # `filename` column); tabular/time-series have no sidecar files —
-            # the data CSV itself is the manifest, with no `filename` column.
-            "kind": "labels_csv" if spec.is_file_bearing else "data_csv",
-            "requires_filename_column": spec.is_file_bearing,
-            # A user-supplied label/target column. Self-supervised text tasks
-            # (MLM/CLM/seq2seq/embeddings) have none; everything else does.
-            "has_label_column": not spec.is_self_supervised,
-        },
+        "manifest": _manifest(spec),
         "primary_subdir": spec.file_subdir,  # images | texts | sequences | null
         "sidecars": [_sidecar_dict(s) for s in spec.sidecars],
         "record_format": (
