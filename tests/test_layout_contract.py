@@ -152,6 +152,26 @@ def test_object_detection_has_no_manifest_csv():
     assert REGISTRY["object_detection"].is_file_bearing is True
 
 
+def test_records_from_sidecar_is_unique_to_object_detection():
+    # Single-category traits are pinned to their one owner (same guard grouping
+    # and the tag-sequence trait carry) so a copy-paste can't silently hand
+    # another task OD's manifest-less shape. records_from_sidecar derives
+    # kind="none" with no CSV/label column; a mistaken second use would produce
+    # an unrunnable CSV-less contract that only this assertion would catch.
+    owners = {c for c, s in REGISTRY.items() if s.records_from_sidecar}
+    assert owners == {TaskCategory.OBJECT_DETECTION}
+
+
+def test_records_from_sidecar_requires_a_sidecar_to_enumerate_from():
+    # kind="none" means the records come FROM a sidecar, so a category that sets
+    # the trait MUST declare a required one — otherwise the contract is
+    # manifest-less with nothing to enumerate records from. Ties the trait to
+    # its precondition rather than trusting the flag in isolation.
+    for cat, spec in REGISTRY.items():
+        if spec.records_from_sidecar:
+            assert any(s.required for s in spec.sidecars), cat
+
+
 def test_semantic_segmentation_masks_linked_by_mask_id():
     sc = _contract()["semantic_segmentation"]["sidecars"]
     assert sc == [
