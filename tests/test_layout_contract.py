@@ -47,6 +47,56 @@ def test_committed_json_is_valid_and_versioned():
         doc = json.load(fh)
     assert doc["version"], "layout contract must carry a version"
     assert doc["tasks"], "layout contract has no tasks"
+    _assert_shape_matches_declared_version(doc)
+
+
+# The FIELD SET each task entry exposes, per contract version — the thing a
+# consumer in another repo writes code against. Three repos read this schema
+# (data-ingestors emits it, the CLI vendors a copy, the backend pins one as a
+# fixture), so a field appearing or disappearing without a version bump leaves
+# them unable to tell which shape they hold.
+#
+# Deliberately keyed on field NAMES, not values: a category gaining a stricter
+# `data_shape` is not a shape change and must not force a bump, whereas
+# `manifest` becoming nullable in v4 (backend#3110) is exactly one.
+#
+# This replaces three copies of `assert doc["version"] == "3"` that had
+# accumulated across unrelated test files. Scattered literals are a poor
+# tripwire twice over: bumping the version means hunting all of them, and
+# nothing made any single copy authoritative, so deleting the awkward one was
+# always the path of least resistance.
+SHAPE_BY_VERSION = {
+    "4": {
+        "family",
+        "grouping",
+        "manifest",
+        "ordering",
+        "primary_subdir",
+        "record_format",
+        "sidecars",
+    },
+}
+
+
+def _assert_shape_matches_declared_version(doc: dict) -> None:
+    version = doc["version"]
+    assert version in SHAPE_BY_VERSION, (
+        f"layout contract declares version {version!r}, which SHAPE_BY_VERSION "
+        f"does not describe. If you changed the per-task field set, add an "
+        f"entry for {version!r}; if you bumped the version without changing "
+        f"the shape, the bump was unnecessary."
+    )
+    expected = SHAPE_BY_VERSION[version]
+    for category, entry in sorted(doc["tasks"].items()):
+        actual = set(entry)
+        assert actual == expected, (
+            f"{category}: task entry exposes {sorted(actual)} but version "
+            f"{version} is declared to expose {sorted(expected)} "
+            f"(added: {sorted(actual - expected)}, "
+            f"removed: {sorted(expected - actual)}). A changed field set is a "
+            f"new contract shape: bump LAYOUT_CONTRACT_VERSION and add the new "
+            f"field set to SHAPE_BY_VERSION."
+        )
 
 
 # 2. CONGRUENCE ---------------------------------------------------------------
@@ -65,6 +115,21 @@ def test_derived_fields_agree_with_spec_flags():
         layout = contract[cat]
         assert layout["family"] == spec.data_format, cat
         assert layout["primary_subdir"] == spec.file_subdir, cat
+        # `manifest` is null exactly for a category the user stages no manifest
+        # for. Asserted BOTH ways: a manifest-less category must not describe
+        # one, and a manifest-bearing category must not be null. Before
+        # backend#1006 these could not come apart, because manifest-ness was
+        # read off `is_file_bearing`; object_detection is the first category
+        # that is file-bearing AND manifest-less (records enumerated from
+        # `annotations/*.xml`), which is what left the generated schema
+        # declaring a labels.csv for OD after #552 removed it (backend#3110).
+        assert (layout["manifest"] is None) == (not spec.has_manifest), (
+            f"{cat}: manifest is "
+            f"{'null' if layout['manifest'] is None else 'declared'} but "
+            f"has_manifest={spec.has_manifest}"
+        )
+        if not spec.has_manifest:
+            continue
         # file-bearing ⇒ a labels CSV listing per-row files; else the data CSV.
         assert (
             layout["manifest"]["requires_filename_column"] == spec.is_file_bearing

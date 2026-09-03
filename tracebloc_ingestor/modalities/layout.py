@@ -40,7 +40,7 @@ from typing import Any, Dict, Optional, Tuple
 #      group). Surfaces the time-ordering constraint that used to live only in
 #      the validators, so a consumer can read from the contract which tasks are
 #      subject to it (backend#1870).
-LAYOUT_CONTRACT_VERSION = "3"
+LAYOUT_CONTRACT_VERSION = "4"
 
 
 @dataclass(frozen=True)
@@ -164,16 +164,28 @@ def _task_layout(spec: Any, fixed_time_column: Optional[str]) -> Dict[str, Any]:
     record_format) plus the facts DERIVED from the spec's existing flags."""
     return {
         "family": spec.data_format,  # image | text | tabular
-        "manifest": {
-            # File-bearing tasks list per-row files in a labels CSV (required
-            # `filename` column); tabular/time-series have no sidecar files —
-            # the data CSV itself is the manifest, with no `filename` column.
-            "kind": "labels_csv" if spec.is_file_bearing else "data_csv",
-            "requires_filename_column": spec.is_file_bearing,
-            # A user-supplied label/target column. Self-supervised text tasks
-            # (MLM/CLM/seq2seq/embeddings) have none; everything else does.
-            "has_label_column": not spec.is_self_supervised,
-        },
+        # `null` for a category the user stages NO manifest for. Derived from
+        # `has_manifest` rather than from `is_file_bearing`, because those came
+        # apart at backend#1006: object_detection is file-bearing (images) and
+        # yet manifest-less (records enumerated from the XML sidecars). Reading
+        # it off `is_file_bearing` is what left this schema declaring a
+        # labels.csv for OD after #552 removed one (backend#3110).
+        "manifest": (
+            {
+                # File-bearing tasks list per-row files in a labels CSV
+                # (required `filename` column); tabular/time-series have no
+                # sidecar files — the data CSV itself is the manifest, with no
+                # `filename` column.
+                "kind": "labels_csv" if spec.is_file_bearing else "data_csv",
+                "requires_filename_column": spec.is_file_bearing,
+                # A user-supplied label/target column. Self-supervised text
+                # tasks (MLM/CLM/seq2seq/embeddings) have none; everything
+                # else does.
+                "has_label_column": not spec.is_self_supervised,
+            }
+            if spec.has_manifest
+            else None
+        ),
         "primary_subdir": spec.file_subdir,  # images | texts | sequences | null
         "sidecars": [_sidecar_dict(s) for s in spec.sidecars],
         "record_format": (

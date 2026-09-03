@@ -85,11 +85,7 @@
     "object_detection": {
       "family": "image",
       "grouping": null,
-      "manifest": {
-        "has_label_column": true,
-        "kind": "labels_csv",
-        "requires_filename_column": true
-      },
+      "manifest": null,
       "ordering": null,
       "primary_subdir": "images",
       "record_format": null,
@@ -266,5 +262,5 @@
       "sidecars": []
     }
   },
-  "version": "3"
+  "version": "4"
 }

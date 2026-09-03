@@ -87,6 +87,19 @@ class ModalitySpec:
     # referenced files exist; with ``None`` only the header-only / empty-CSV row
     # check runs.
     file_subdir: Optional[str] = None
+    # Does the user stage a manifest CSV at all? backend#1006 made
+    # `object_detection` the first category that is FILE-BEARING but has NO
+    # manifest: its records are enumerated from `annotations/*.xml` by
+    # VOCIngestor, one row per image, with the label derived into a class
+    # histogram. Before this flag the layout contract derived
+    # `kind: "labels_csv"` from `is_file_bearing` alone, so the generated
+    # schema kept declaring a `labels.csv` with a label column and a required
+    # filename column for OD long after #552 removed it -- while
+    # `ingest.v1.json` (hand-written) had been updated to reject `csv`/`json`
+    # for that category. Two schemas in this package contradicting each other
+    # about the same category, and nothing spanning both to notice
+    # (backend#3110).
+    has_manifest: bool = True
     # Classification-family category whose dataset needs >= 2 distinct label
     # values (image / object / semantic / keypoint / tabular / text
     # classification). Gates the centralized LabelDiversityValidator. False for

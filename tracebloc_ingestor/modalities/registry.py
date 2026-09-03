@@ -52,6 +52,11 @@ _SPECS = (
         # backend#1006: one record per IMAGE, so the label cell is that image's
         # encoded class histogram — see utils/od_label_semantics.
         label_is_class_histogram=True,
+        # backend#1006 removed the labels.csv entirely: records come from
+        # `annotations/*.xml` via VOCIngestor. The FIRST category that is
+        # file-bearing and manifest-less, which is why `has_manifest` exists
+        # (backend#3110).
+        has_manifest=False,
     ),
     ModalitySpec(
         TaskCategory.KEYPOINT_DETECTION,
