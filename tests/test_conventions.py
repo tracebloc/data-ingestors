@@ -494,18 +494,34 @@ def test_positive_definition_bridged():
 
 
 # ---------------------------------------------------------------------------
-# data_id — object_detection category default (bugbot High on #383)
+# data_id — object_detection category default
+# (was uuid per bugbot High on #383; content_hash since backend#1006)
 # ---------------------------------------------------------------------------
 
 
-def test_objdet_defaults_to_uuid():
-    # Objdet manifests list one row per object, so duplicate (filename, label)
-    # rows are real objects — the bundled VisDrone sample has three `car` rows
-    # for one image. A content digest is identical across those duplicates and
-    # the UNIQUE upsert would collapse them, so absent an explicit choice the
-    # objdet default stays uuid.
+def test_objdet_defaults_to_content_hash():
+    # #383 forced objdet to uuid because its MANIFEST listed one row per
+    # object: duplicate (filename, label) rows were real distinct boxes that a
+    # content digest would collapse under the data_id UNIQUE upsert, silently
+    # under-counting objects.
+    #
+    # backend#1006 removed the manifest — records are enumerated one per IMAGE
+    # from the Pascal-VOC XML, so no two records share a filename and there is
+    # nothing left for a digest to collapse. The category therefore takes the
+    # package default back, which is what makes a retried Kubernetes Job
+    # re-claim its rows instead of inserting a second copy of every image.
     r = resolve(_load("object_detection.yaml"))
     assert r.unique_id_column is None
+    assert r.data_id_strategy == "content_hash"
+
+
+def test_objdet_explicit_uuid_is_still_honored():
+    # The category no longer overrides the default, but an explicit choice must
+    # still win — this is the direction that used to be the default, so a
+    # config that spells it out keeps working across the #1006 change.
+    config = _load("object_detection.yaml")
+    config["data_id"] = {"strategy": "uuid"}
+    r = resolve(config)
     assert r.data_id_strategy == "uuid"
 
 
