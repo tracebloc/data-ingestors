@@ -65,17 +65,23 @@ def test_derived_fields_agree_with_spec_flags():
         layout = contract[cat]
         assert layout["family"] == spec.data_format, cat
         assert layout["primary_subdir"] == spec.file_subdir, cat
-        # file-bearing ⇒ a labels CSV listing per-row files; else the data CSV.
-        assert (
-            layout["manifest"]["requires_filename_column"] == spec.is_file_bearing
-        ), cat
-        assert layout["manifest"]["kind"] == (
-            "labels_csv" if spec.is_file_bearing else "data_csv"
-        ), cat
-        # a user label/target column exists iff the task isn't self-supervised.
-        assert layout["manifest"]["has_label_column"] == (
-            not spec.is_self_supervised
-        ), cat
+        manifest = layout["manifest"]
+        if spec.records_from_sidecar:
+            # backend#1006: object_detection has NO manifest CSV — its records
+            # are enumerated from the annotations sidecar and each label is
+            # derived, so there is no labels CSV, no filename column, and no
+            # user-declared label column.
+            assert manifest["kind"] == "none", cat
+            assert manifest["requires_filename_column"] is False, cat
+            assert manifest["has_label_column"] is False, cat
+        else:
+            # file-bearing ⇒ a labels CSV listing per-row files; else the data CSV.
+            assert manifest["requires_filename_column"] == spec.is_file_bearing, cat
+            assert manifest["kind"] == (
+                "labels_csv" if spec.is_file_bearing else "data_csv"
+            ), cat
+            # a user label/target column exists iff the task isn't self-supervised.
+            assert manifest["has_label_column"] == (not spec.is_self_supervised), cat
 
 
 def test_sidecars_only_on_file_bearing_tasks():
@@ -125,6 +131,45 @@ def test_object_detection_requires_pascal_voc_xml_sidecar():
             "link_column": None,
         }
     ]
+
+
+def test_object_detection_has_no_manifest_csv():
+    # backend#1006 / backend#3076: OD is file-bearing but has NO labels CSV — its
+    # records are enumerated from the required annotations/*.xml sidecar and each
+    # label is derived from <object><name>. The manifest therefore declares no
+    # CSV, no filename column, and no user label column, so a consumer (the CLI)
+    # skips the labels-CSV reads it runs for every other file-bearing category.
+    # (This is the shape whose absence made OD ingest impossible from the CLI:
+    # the CLI required + emitted a labels.csv the ingestor's schema rejects.)
+    manifest = _contract()["object_detection"]["manifest"]
+    assert manifest == {
+        "kind": "none",
+        "requires_filename_column": False,
+        "has_label_column": False,
+    }
+    # It is still file-bearing (images + the xml sidecar are staged) — the
+    # no-CSV shape is specifically the manifest, not the whole category.
+    assert REGISTRY["object_detection"].is_file_bearing is True
+
+
+def test_records_from_sidecar_is_unique_to_object_detection():
+    # Single-category traits are pinned to their one owner (same guard grouping
+    # and the tag-sequence trait carry) so a copy-paste can't silently hand
+    # another task OD's manifest-less shape. records_from_sidecar derives
+    # kind="none" with no CSV/label column; a mistaken second use would produce
+    # an unrunnable CSV-less contract that only this assertion would catch.
+    owners = {c for c, s in REGISTRY.items() if s.records_from_sidecar}
+    assert owners == {TaskCategory.OBJECT_DETECTION}
+
+
+def test_records_from_sidecar_requires_a_sidecar_to_enumerate_from():
+    # kind="none" means the records come FROM a sidecar, so a category that sets
+    # the trait MUST declare a required one — otherwise the contract is
+    # manifest-less with nothing to enumerate records from. Ties the trait to
+    # its precondition rather than trusting the flag in isolation.
+    for cat, spec in REGISTRY.items():
+        if spec.records_from_sidecar:
+            assert any(s.required for s in spec.sidecars), cat
 
 
 def test_semantic_segmentation_masks_linked_by_mask_id():

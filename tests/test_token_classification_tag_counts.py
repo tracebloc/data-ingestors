@@ -67,7 +67,7 @@ def test_trait_does_not_leak_into_layout_contract():
     # of the CLI's on-disk staging contract, so it never surfaces as a per-task
     # key in the layout JSON.
     doc = build_layout_contract()
-    assert doc["version"] == "3"
+    assert doc["version"] == "4"
     assert "label_is_tag_sequence" not in doc["tasks"][TOKEN]
 
 

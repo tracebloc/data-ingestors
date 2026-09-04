@@ -86,9 +86,9 @@
       "family": "image",
       "grouping": null,
       "manifest": {
-        "has_label_column": true,
-        "kind": "labels_csv",
-        "requires_filename_column": true
+        "has_label_column": false,
+        "kind": "none",
+        "requires_filename_column": false
       },
       "ordering": null,
       "primary_subdir": "images",
@@ -266,5 +266,5 @@
       "sidecars": []
     }
   },
-  "version": "3"
+  "version": "4"
 }

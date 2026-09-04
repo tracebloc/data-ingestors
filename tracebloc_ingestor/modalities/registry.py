@@ -52,6 +52,12 @@ _SPECS = (
         # backend#1006: one record per IMAGE, so the label cell is that image's
         # encoded class histogram — see utils/od_label_semantics.
         label_is_class_histogram=True,
+        # backend#1006 / backend#3076: OD has NO manifest CSV — its records are
+        # enumerated from the annotations/*.xml sidecar above and each label is
+        # derived from <object><name>. So the layout contract's manifest is
+        # kind="none" with no filename/label column, and a consumer skips the
+        # labels-CSV reads that every other file-bearing category performs.
+        records_from_sidecar=True,
     ),
     ModalitySpec(
         TaskCategory.KEYPOINT_DETECTION,
