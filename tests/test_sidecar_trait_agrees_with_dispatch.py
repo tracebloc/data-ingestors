@@ -45,6 +45,7 @@ import pytest
 import yaml
 from jsonschema import Draft7Validator
 
+from tests._manifest_less import declares_a_manifest, manifest_kind
 from tracebloc_ingestor.cli.conventions import resolve
 from tracebloc_ingestor.modalities.layout import build_layout_contract
 from tracebloc_ingestor.modalities.registry import REGISTRY
@@ -53,8 +54,6 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 INGEST_SCHEMA = REPO_ROOT / "tracebloc_ingestor" / "schema" / "ingest.v1.json"
 EXAMPLES_DIR = REPO_ROOT / "examples" / "yaml"
 
-#: The sentinel kind meaning "this category stages no manifest".
-MANIFEST_LESS_KIND = "none"
 
 
 @pytest.fixture(scope="module")
@@ -68,8 +67,23 @@ def examples() -> dict:
     out = {}
     for path in sorted(EXAMPLES_DIR.glob("*.yaml")):
         config = yaml.safe_load(path.read_text(encoding="utf-8"))
-        if config.get("category"):
-            out.setdefault(config["category"], config)
+        category = config.get("category")
+        if category is None:
+            continue
+        # BY FILENAME, not by first-wins over a sorted glob. `setdefault` gave
+        # `tabular_classification` the file `custom_processor.yaml`, which
+        # sorts first and declares that category -- and which the repo heads
+        # with "!! WARNING -- NOT YET EXECUTED (planned for v1.1) !!" and a
+        # `spec.processors` block the runtime skips. So the guard probed that
+        # category through the one example deliberately NOT representative,
+        # chosen by alphabetical accident rather than by anything the test
+        # states (LukasWodka, data-ingestors#557).
+        #
+        # `<category>.yaml` is the canonical example for a category; anything
+        # else declaring the same category is a variant and must not silently
+        # win. A category with no eponymous file is reported, not skipped.
+        if path.stem == category:
+            out[category] = config
     return out
 
 
@@ -120,12 +134,12 @@ def test_the_trait_agrees_with_the_published_contract(examples):
         probe["csv"] = "data.csv"
         forbids_csv = not validator.is_valid(probe)
 
-        manifest = entry.get("manifest") or {}
-        declares_none = manifest.get("kind") == MANIFEST_LESS_KIND
+        # THE SHARED PREDICATE, so this cannot drift from its sibling again.
+        declares_none = not declares_a_manifest(entry)
         if declares_none != forbids_csv:
             disagreements.append(
                 f"{category}: layout says kind="
-                f"{manifest.get('kind')!r} but ingest.v1.json "
+                f"{manifest_kind(entry)!r} but ingest.v1.json "
                 f"{'forbids' if forbids_csv else 'permits'} a csv source"
             )
     assert not disagreements, (

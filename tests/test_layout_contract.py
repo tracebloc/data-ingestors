@@ -57,10 +57,10 @@ def test_committed_json_is_valid_and_versioned():
 # them unable to tell which shape they hold.
 #
 # Deliberately keyed on field NAMES, not values: a category gaining a stricter
-# `data_shape` is not a shape change and must not force a bump, whereas
+# `ordering.column` is not a shape change and must not force a bump, whereas
 # `manifest` becoming nullable in v4 (backend#3110) is exactly one.
 #
-# This replaces three copies of `assert doc["version"] == "3"` that had
+# This REPLACES the scattered `assert doc["version"] == "N"` literals that had
 # accumulated across unrelated test files. Scattered literals are a poor
 # tripwire twice over: bumping the version means hunting all of them, and
 # nothing made any single copy authoritative, so deleting the awkward one was
@@ -75,7 +75,7 @@ def test_committed_json_is_valid_and_versioned():
 #:
 #: So the fingerprint is the field set AND the set of manifest kinds in use. A
 #: new field demands a bump, a new kind demands a bump, and a value-level change
-#: to something like `data_shape` correctly does not.
+#: to something like `ordering.column` correctly does not.
 SHAPE_BY_VERSION = {
     "4": {
         "fields": {

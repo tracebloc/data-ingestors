@@ -28,6 +28,7 @@ import pytest
 import yaml
 from jsonschema import Draft7Validator
 
+from tests._manifest_less import declares_a_manifest
 from tracebloc_ingestor.modalities.layout import build_layout_contract
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -53,31 +54,25 @@ def examples() -> dict:
     for path in sorted(EXAMPLES_DIR.glob("*.yaml")):
         config = yaml.safe_load(path.read_text(encoding="utf-8"))
         category = config.get("category")
-        if category is not None:
-            by_category.setdefault(category, config)
+        if category is None:
+            continue
+        # BY FILENAME, not by first-wins over a sorted glob. `setdefault` gave
+        # `tabular_classification` the file `custom_processor.yaml`, which
+        # sorts first and declares that category -- and which the repo heads
+        # with "!! WARNING -- NOT YET EXECUTED (planned for v1.1) !!" and a
+        # `spec.processors` block the runtime skips. So the guard probed that
+        # category through the one example deliberately NOT representative,
+        # chosen by alphabetical accident rather than by anything the test
+        # states (LukasWodka, data-ingestors#557).
+        #
+        # `<category>.yaml` is the canonical example for a category; anything
+        # else declaring the same category is a variant and must not silently
+        # win. A category with no eponymous file is reported, not skipped.
+        if path.stem == category:
+            by_category[category] = config
     return by_category
 
 
-#: The two spellings of "this category stages no manifest". `{"kind": "none"}`
-#: is the one this repo publishes (backend#3076): a new `kind` VALUE, so a
-#: consumer has to grow a branch rather than silently read a different string,
-#: which is what made it a version bump. `null` was the alternative considered
-#: on backend#3110 and rejected -- measured, `null` and ABSENT are
-#: indistinguishable in Go under both a value struct and a pointer, where a
-#: sentinel keeps them apart.
-#:
-#: Both are recognised here anyway. `e2e-test-agent#428` accepts either, so a
-#: consumer reading this contract can already be handed either shape, and a
-#: test that knew only one would be asserting on our preference rather than on
-#: what the schema can legally say.
-MANIFEST_LESS_KIND = "none"
-
-
-def _declares_a_manifest(entry: dict) -> bool:
-    manifest = entry.get("manifest")
-    if manifest is None:
-        return False
-    return manifest.get("kind") != MANIFEST_LESS_KIND
 
 
 def _forbids_csv_source(validator: Draft7Validator, config: dict) -> bool:
@@ -110,7 +105,7 @@ def test_manifest_less_categories_agree_across_schemas(validator, examples):
 
     disagreements = []
     for category, entry in sorted(layout.items()):
-        layout_has_manifest = _declares_a_manifest(entry)
+        layout_has_manifest = declares_a_manifest(entry)
         ingest_has_manifest = not _forbids_csv_source(validator, examples[category])
         if layout_has_manifest != ingest_has_manifest:
             disagreements.append(

@@ -124,7 +124,7 @@ Use the Python+Dockerfile pattern when the declarative schema can't express your
 1. Place your images in the `data/images/` directory
 2. Create corresponding XML annotation files in the `data/annotations/` directory
 3. Configure the ingestion parameters in `object_detection.py`
-5. Run the ingestion script:
+4. Run the ingestion script:
 
 ```bash
 python object_detection.py
