@@ -47,6 +47,7 @@ def test_committed_json_is_valid_and_versioned():
         doc = json.load(fh)
     assert doc["version"], "layout contract must carry a version"
     assert doc["tasks"], "layout contract has no tasks"
+    _assert_shape_matches_declared_version(doc)
 
 
 # The FIELD SET each task entry exposes, per contract version — the thing a
