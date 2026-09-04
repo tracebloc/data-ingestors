@@ -55,7 +55,6 @@ INGEST_SCHEMA = REPO_ROOT / "tracebloc_ingestor" / "schema" / "ingest.v1.json"
 EXAMPLES_DIR = REPO_ROOT / "examples" / "yaml"
 
 
-
 @pytest.fixture(scope="module")
 def examples() -> dict:
     """The committed per-category example configs, keyed by category.
@@ -142,9 +141,9 @@ def test_the_trait_agrees_with_the_published_contract(examples):
                 f"{manifest_kind(entry)!r} but ingest.v1.json "
                 f"{'forbids' if forbids_csv else 'permits'} a csv source"
             )
-    assert not disagreements, (
-        "the two schemas contradict each other:\n  " + "\n  ".join(disagreements)
-    )
+    assert (
+        not disagreements
+    ), "the two schemas contradict each other:\n  " + "\n  ".join(disagreements)
 
 
 def test_both_probes_discriminate(examples):
@@ -158,4 +157,7 @@ def test_both_probes_discriminate(examples):
     assert len(kinds) > 1, f"resolve() returns only {kinds}"
 
     traits = {spec.records_from_sidecar for spec in REGISTRY.values()}
-    assert traits == {True, False}, f"the trait is constant across the registry: {traits}"
+    assert traits == {
+        True,
+        False,
+    }, f"the trait is constant across the registry: {traits}"

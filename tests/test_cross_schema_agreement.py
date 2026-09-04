@@ -73,8 +73,6 @@ def examples() -> dict:
     return by_category
 
 
-
-
 def _forbids_csv_source(validator: Draft7Validator, config: dict) -> bool:
     """Does `ingest.v1.json` REJECT this category naming a CSV data source?
 
