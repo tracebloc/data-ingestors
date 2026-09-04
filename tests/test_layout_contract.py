@@ -61,16 +61,77 @@ def test_committed_json_is_valid_and_versioned():
 #: So the fingerprint is the field set AND the set of manifest kinds in use. A
 #: new field demands a bump, a new kind demands a bump, and a value-level change
 #: to something like `ordering.column` correctly does not.
+def _shape_of(doc: dict) -> dict:
+    """The contract's shape: every task's NESTED key paths, plus the kinds.
+
+    NESTED, not `set(entry)`. The first version fingerprinted top-level keys
+    only, so `manifest.encoding` or `sidecars[].mime` could be added and the
+    tripwire passed while declaring the same version (LukasWodka,
+    data-ingestors#558). Those are not hypothetical: each maps one-to-one onto
+    a struct the CLI would have to grow a field on (`ManifestLayout`,
+    `SidecarSpec` in `internal/push/layout_contract.go`), which is the same
+    "the consumer must grow a branch" argument the bump rests on.
+
+    A list contributes the union of its elements' paths, so a field added to
+    ONE sidecar entry is still visible.
+    """
+
+    def paths(node, prefix=""):
+        out = set()
+        if isinstance(node, dict):
+            for k, v in node.items():
+                here = f"{prefix}.{k}" if prefix else k
+                out.add(here)
+                out |= paths(v, here)
+        elif isinstance(node, list):
+            for item in node:
+                out |= paths(item, f"{prefix}[]")
+        return out
+
+    field_paths = set()
+    for entry in doc["tasks"].values():
+        field_paths |= paths(entry)
+    kinds = {
+        (entry.get("manifest") or {}).get("kind") for entry in doc["tasks"].values()
+    } - {None}
+    return {"field_paths": field_paths, "manifest_kinds": kinds}
+
+
+#: The shape each contract version declares. Both members are pinned by
+#: EQUALITY, not subset.
+#:
+#: `manifest_kinds` was `<=` and that made the check one-directional: a NEW
+#: kind reddened, a REMOVED one did not. Since v3's kind set
+#: (`{labels_csv, data_csv}`) is a strict subset of v4's, a contract silently
+#: reverted to the v3 shape passed while still declaring `version: "4"` --
+#: which is the single distinction this tripwire was written to make
+#: (LukasWodka, data-ingestors#558).
 SHAPE_BY_VERSION = {
     "4": {
-        "fields": {
+        "field_paths": {
             "family",
             "grouping",
+            "grouping.count_unit",
+            "grouping.group_column",
+            "grouping.time_column",
             "manifest",
+            "manifest.has_label_column",
+            "manifest.kind",
+            "manifest.requires_filename_column",
             "ordering",
+            "ordering.column",
+            "ordering.scope",
             "primary_subdir",
             "record_format",
+            "record_format.enforced",
+            "record_format.fields",
+            "record_format.min_fields",
+            "record_format.separator",
             "sidecars",
+            "sidecars[].glob",
+            "sidecars[].link_column",
+            "sidecars[].required",
+            "sidecars[].subdir",
         },
         "manifest_kinds": {"labels_csv", "data_csv", "none"},
     },
@@ -79,44 +140,52 @@ SHAPE_BY_VERSION = {
 
 def _assert_shape_matches_declared_version(doc: dict) -> None:
     version = doc["version"]
+
     assert version in SHAPE_BY_VERSION, (
-        f"layout contract declares version {version!r}, which SHAPE_BY_VERSION "
-        f"does not describe. If you changed the per-task field set OR added a "
-        f"manifest kind, add an entry for {version!r}; if you bumped the "
-        f"version without doing either, the bump was unnecessary."
+        f"layout contract declares version {version!r}, which "
+        f"SHAPE_BY_VERSION does not describe. Add an entry for {version!r} "
+        f"recording the shape it publishes -- and note the next assertion "
+        f"requires it to DIFFER from the previous version's, so copying the "
+        f"previous body verbatim will not satisfy it."
     )
+
+    actual = _shape_of(doc)
     expected = SHAPE_BY_VERSION[version]
 
-    for category, entry in sorted(doc["tasks"].items()):
-        actual = set(entry)
-        assert actual == expected["fields"], (
-            f"{category}: task entry exposes {sorted(actual)} but version "
-            f"{version} is declared to expose {sorted(expected['fields'])} "
-            f"(added: {sorted(actual - expected['fields'])}, "
-            f"removed: {sorted(expected['fields'] - actual)}). A changed field "
-            f"set is a new contract shape: bump LAYOUT_CONTRACT_VERSION and add "
-            f"the new field set to SHAPE_BY_VERSION."
+    for member, label in (
+        ("field_paths", "field paths"),
+        ("manifest_kinds", "manifest kinds"),
+    ):
+        assert actual[member] == expected[member], (
+            f"{label} in the contract are {sorted(actual[member])} but version "
+            f"{version} is declared to publish {sorted(expected[member])} "
+            f"(added: {sorted(actual[member] - expected[member])}, "
+            f"removed: {sorted(expected[member] - actual[member])}). Both "
+            f"directions are a shape change: adding one means consumers grow a "
+            f"branch, and REMOVING one means a consumer's existing branch is "
+            f"now dead while the version still claims otherwise. Bump "
+            f"LAYOUT_CONTRACT_VERSION and record the new shape."
         )
 
-    # THE HALF A FIELD-SET FINGERPRINT CANNOT SEE. `manifest` stays an object
-    # across this bump, so only the kind vocabulary moved -- and a consumer
-    # switching on `kind` has to grow a branch for a new one, which is the
-    # argument for the bump in the first place.
-    kinds = {
-        (entry.get("manifest") or {}).get("kind") for entry in doc["tasks"].values()
-    } - {None}
-    assert kinds <= expected["manifest_kinds"], (
-        f"manifest kinds in use are {sorted(kinds)}, but version {version} is "
-        f"declared to use {sorted(expected['manifest_kinds'])} "
-        f"(new: {sorted(kinds - expected['manifest_kinds'])}). A new kind is a "
-        f"new contract shape even though no field moved: every consumer that "
-        f"switches on `kind` needs a branch for it. Bump "
-        f"LAYOUT_CONTRACT_VERSION and record the kind here."
-    )
-    assert kinds, (
-        "no task declares a manifest kind at all; this check would pass "
-        "vacuously on such a contract"
-    )
+    # THE PROMISE THE OLD MESSAGE MADE AND THE CHECK DID NOT KEEP. It said "if
+    # you bumped the version without doing either, the bump was unnecessary" --
+    # but nothing compared a new entry against its predecessor, so the remedy
+    # it offered first ("add an entry for '5'") was satisfied identically by a
+    # necessary bump and by copying the previous body verbatim (LukasWodka,
+    # data-ingestors#558).
+    previous = [v for v in SHAPE_BY_VERSION if v < version]
+    if previous:
+        prior = SHAPE_BY_VERSION[max(previous)]
+        assert (expected["field_paths"], expected["manifest_kinds"]) != (
+            prior["field_paths"],
+            prior["manifest_kinds"],
+        ), (
+            f"version {version} declares exactly the same shape as "
+            f"{max(previous)}, so the bump changed nothing a consumer can "
+            f"observe and was unnecessary. Either revert it, or record what "
+            f"actually changed -- copying the previous entry is how a version "
+            f"number stops meaning anything."
+        )
 
 
 # 2. CONGRUENCE ---------------------------------------------------------------
