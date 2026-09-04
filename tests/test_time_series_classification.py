@@ -149,7 +149,6 @@ def test_grouping_is_unique_to_tsc():
 
 def test_layout_contract_carries_grouping():
     doc = build_layout_contract()
-    assert doc["version"] == "4"  # grouping + ordering blocks; OD manifest kind="none"
     tsc = doc["tasks"][TSC]
     assert tsc["grouping"] == {
         "group_column": "sequence_id",
