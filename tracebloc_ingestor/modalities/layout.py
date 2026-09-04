@@ -46,10 +46,26 @@ from typing import Any, Dict, Optional, Tuple
 #      its manifest is ``kind="none"`` with no filename/label column. That is a
 #      NEW ``kind`` value a consumer must handle (skip the labels-CSV reads), so
 #      it is a shape reinterpretation, not just a task's value changing — bumped
-#      so every downstream version guard fires (the CLI's pinned re-vendor,
-#      e2e-test-agent's harness) instead of silently emitting the old
-#      ``labels_csv`` shape, which is exactly the drift that made OD ingest
-#      impossible from the CLI (backend#3076).
+#      so the ONE downstream version guard that exists fires:
+#      ``e2e-test-agent``'s ``harness/layout.py``, whose ``SUPPORTED_VERSIONS``
+#      refuses an unknown version by design.
+#
+#      ``tracebloc/cli`` DOES NOT HAVE ONE, and an earlier draft of this comment
+#      claimed it did. Measured against ``cli@origin/develop`` (LukasWodka,
+#      data-ingestors#557):
+#
+#        * ``internal/push/layout_contract.go`` unmarshals ``Version string``
+#          and nothing compares it to a supported set
+#        * ``Manifest.Kind`` is never read in non-test code -- its only live
+#          consumer is ``preflight.go``'s ``RequiresFilenameColumn``
+#        * ``scripts/sync-schema.sh --check`` is a byte-drift check in the
+#          CLI's own CI, not a version gate
+#
+#      So a CLI that has not re-vendored keeps its embedded v3 bytes, keeps
+#      ``requires_filename_column: true`` for object_detection, and keeps
+#      producing the 400 this bump exists to end -- silently. The bump is still
+#      right, but it is NOT self-enforcing downstream, and pretending otherwise
+#      is how the re-vendor gets forgotten. Tracked as backend#3146.
 LAYOUT_CONTRACT_VERSION = "4"
 
 

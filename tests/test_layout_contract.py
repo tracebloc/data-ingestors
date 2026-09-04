@@ -47,6 +47,76 @@ def test_committed_json_is_valid_and_versioned():
         doc = json.load(fh)
     assert doc["version"], "layout contract must carry a version"
     assert doc["tasks"], "layout contract has no tasks"
+    _assert_shape_matches_declared_version(doc)
+
+
+#: ADAPTED FOR THIS REPO'S SHAPE, and the adaptation is the point.
+#:
+#: A field-set-only fingerprint does NOT detect v4 here: `manifest` is still an
+#: object, so every per-task field is unchanged and the tripwire would report
+#: the bump as unnecessary. What v4 actually adds is a new `kind` VALUE
+#: (`"none"`), which is exactly why backend#3076 argues the bump is warranted --
+#: a consumer has to grow a BRANCH, not read a different string.
+#:
+#: So the fingerprint is the field set AND the set of manifest kinds in use. A
+#: new field demands a bump, a new kind demands a bump, and a value-level change
+#: to something like `ordering.column` correctly does not.
+SHAPE_BY_VERSION = {
+    "4": {
+        "fields": {
+            "family",
+            "grouping",
+            "manifest",
+            "ordering",
+            "primary_subdir",
+            "record_format",
+            "sidecars",
+        },
+        "manifest_kinds": {"labels_csv", "data_csv", "none"},
+    },
+}
+
+
+def _assert_shape_matches_declared_version(doc: dict) -> None:
+    version = doc["version"]
+    assert version in SHAPE_BY_VERSION, (
+        f"layout contract declares version {version!r}, which SHAPE_BY_VERSION "
+        f"does not describe. If you changed the per-task field set OR added a "
+        f"manifest kind, add an entry for {version!r}; if you bumped the "
+        f"version without doing either, the bump was unnecessary."
+    )
+    expected = SHAPE_BY_VERSION[version]
+
+    for category, entry in sorted(doc["tasks"].items()):
+        actual = set(entry)
+        assert actual == expected["fields"], (
+            f"{category}: task entry exposes {sorted(actual)} but version "
+            f"{version} is declared to expose {sorted(expected['fields'])} "
+            f"(added: {sorted(actual - expected['fields'])}, "
+            f"removed: {sorted(expected['fields'] - actual)}). A changed field "
+            f"set is a new contract shape: bump LAYOUT_CONTRACT_VERSION and add "
+            f"the new field set to SHAPE_BY_VERSION."
+        )
+
+    # THE HALF A FIELD-SET FINGERPRINT CANNOT SEE. `manifest` stays an object
+    # across this bump, so only the kind vocabulary moved -- and a consumer
+    # switching on `kind` has to grow a branch for a new one, which is the
+    # argument for the bump in the first place.
+    kinds = {
+        (entry.get("manifest") or {}).get("kind") for entry in doc["tasks"].values()
+    } - {None}
+    assert kinds <= expected["manifest_kinds"], (
+        f"manifest kinds in use are {sorted(kinds)}, but version {version} is "
+        f"declared to use {sorted(expected['manifest_kinds'])} "
+        f"(new: {sorted(kinds - expected['manifest_kinds'])}). A new kind is a "
+        f"new contract shape even though no field moved: every consumer that "
+        f"switches on `kind` needs a branch for it. Bump "
+        f"LAYOUT_CONTRACT_VERSION and record the kind here."
+    )
+    assert kinds, (
+        "no task declares a manifest kind at all; this check would pass "
+        "vacuously on such a contract"
+    )
 
 
 # 2. CONGRUENCE ---------------------------------------------------------------
