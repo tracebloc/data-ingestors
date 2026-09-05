@@ -45,5 +45,5 @@ jobs:
     uses: tracebloc/.github/.github/workflows/version-bump-gate.yml@main
     with:
       version-file: "tracebloc_ingestor/__init__.py"
-      publish-paths: "tracebloc_ingestor/*"
+      publish-paths: "tracebloc_ingestor/* setup.py requirements.txt Readme.md Dockerfile docker-entrypoint.sh"
       soft-fail: false
