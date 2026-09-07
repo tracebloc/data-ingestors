@@ -121,22 +121,26 @@ CASES = [
             category=TaskCategory.OBJECT_DETECTION,
             table="object_detection_train",
             intent="train",
-            csv="/data/labels.csv",
+            # NO csv and NO label since backend#1006: records are enumerated
+            # from annotations/*.xml, one per IMAGE, and the schema rejects
+            # both keys for this category.
             images="/data/images/",
             annotations="/data/annotations/",
-            label="image_label",
         ),
         {
             "category": TaskCategory.OBJECT_DETECTION,
             "data_format": DataFormat.IMAGE,
             "intent": Intent.TRAIN,
+            # Derived by conventions, not declared by the user — the VOC
+            # enumerator writes the per-image class histogram into this column.
             "label_column": "image_label",
             "label_policy": PASSTHROUGH,
             "unique_id_column": None,
-            # Objdet manifests are one-row-per-object; the category defaults
-            # to per-row UUIDs so duplicate (filename, label) rows don't
-            # collapse under a content digest (bugbot on #383).
-            "data_id_strategy": "uuid",
+            # One record per image ⇒ filenames are unique ⇒ nothing for a
+            # content digest to collapse, so objdet takes the package default
+            # back and a retried Job re-claims its rows (backend#1006; the old
+            # uuid override existed for one-row-per-object manifests, #383).
+            "data_id_strategy": "content_hash",
             "annotation_column": None,
             "file_options": {
                 "target_size": [1920, 1080],
@@ -612,12 +616,14 @@ def test_yaml_config_reaches_ingestor_via_entrypoint(
     ) as mock_csv_cls, patch(
         "tracebloc_ingestor.cli.run.JSONIngestor"
     ) as mock_json_cls, patch(
+        "tracebloc_ingestor.cli.run.VOCIngestor"
+    ) as mock_voc_cls, patch(
         "tracebloc_ingestor.cli.run.setup_logging"
     ):
         mock_config = MagicMock()
         mock_config.BATCH_SIZE = 4000
         mock_config_cls.return_value = mock_config
-        for cls_mock in (mock_csv_cls, mock_json_cls):
+        for cls_mock in (mock_csv_cls, mock_json_cls, mock_voc_cls):
             inst = MagicMock()
             inst.__enter__ = MagicMock(return_value=inst)
             inst.__exit__ = MagicMock(return_value=False)
@@ -629,12 +635,27 @@ def test_yaml_config_reaches_ingestor_via_entrypoint(
         rc = main()
 
     assert rc == 0
-    # All current cases use csv source; assert CSV path was taken.
-    assert (
-        mock_csv_cls.call_count == 1
-    ), f"expected CSVIngestor for {yaml_config['category']}, got {mock_csv_cls.call_count} call(s)"
+    # Dispatch is per-category: object_detection is enumerated from the
+    # Pascal-VOC XML and has no manifest (backend#1006), so it must reach
+    # VOCIngestor; every other case still goes through the CSV manifest path.
+    # Asserting the OTHER mocks were not called is the half that catches a
+    # mis-dispatch — a case silently taking the wrong ingestor would otherwise
+    # still find its kwargs and pass.
+    if yaml_config["category"] == TaskCategory.OBJECT_DETECTION:
+        expected_cls, other_mocks = mock_voc_cls, (mock_csv_cls, mock_json_cls)
+    else:
+        expected_cls, other_mocks = mock_csv_cls, (mock_voc_cls, mock_json_cls)
 
-    _, kwargs = mock_csv_cls.call_args
+    assert expected_cls.call_count == 1, (
+        f"expected {expected_cls} for {yaml_config['category']}, "
+        f"got {expected_cls.call_count} call(s)"
+    )
+    for other in other_mocks:
+        assert (
+            other.call_count == 0
+        ), f"{yaml_config['category']} also constructed {other}"
+
+    _, kwargs = expected_cls.call_args
     for key, want in expected.items():
         got = kwargs.get(key)
         assert got == want, (

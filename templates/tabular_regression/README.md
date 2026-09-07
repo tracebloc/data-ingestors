@@ -38,7 +38,7 @@ helm install my-regression-dataset tracebloc/ingestor \
   --set-file ingestConfig=./ingest.yaml
 ```
 
-Regression-class tasks require an explicit `label.policy` (typically `bucket`) so the central backend never sees raw target values — the schema enforces this. Canonical example: [`examples/yaml/tabular_regression.yaml`](../../examples/yaml/tabular_regression.yaml). Full chart docs: [`tracebloc/client/ingestor/README.md`](https://github.com/tracebloc/client/blob/develop/ingestor/README.md).
+Regression-class tasks require an explicit `label.policy` (typically `bucket`) so the central backend never sees raw target values — the schema enforces this. Bucketing applies to the metadata payload only: the row stored in your cluster's MySQL keeps the raw target, which is what training reads (#486). Canonical example: [`examples/yaml/tabular_regression.yaml`](../../examples/yaml/tabular_regression.yaml). Full chart docs: [`tracebloc/client/ingestor/README.md`](https://github.com/tracebloc/client/blob/develop/ingestor/README.md).
 
 ## Directory Structure
 

@@ -40,9 +40,7 @@ def _validate(filenames, staged):
 def test_valid_pair_and_triplet_pass(staged):
     texts, make_csv = staged
     (texts / "pair.txt").write_text("anchor text\tpositive text\n", encoding="utf-8")
-    (texts / "triplet.txt").write_text(
-        "anchor\tpositive\tnegative\n", encoding="utf-8"
-    )
+    (texts / "triplet.txt").write_text("anchor\tpositive\tnegative\n", encoding="utf-8")
     result = _validate(["pair", "triplet"], staged)
     assert result.is_valid, result.errors
     assert result.metadata["rows_checked"] == 2
@@ -186,3 +184,25 @@ def test_error_cap_summarizes(staged):
     assert not result.is_valid
     assert any("further errors suppressed" in e for e in result.errors)
     assert len(result.errors) <= 51
+
+
+def test_csv_padded_filename_header_still_resolves(staged, tmp_path):
+    """A padded ``filename`` header (``id, filename``) must resolve, not report
+    the column missing.
+
+    Regression (backend#1828): TabSeparatedRecordValidator — this validator's
+    base — carried a private ``_resolve_column`` that lower-cased but did NOT
+    strip, so pandas' parsed header ``" filename"`` never matched. ``embeddings``
+    then rejected a manifest for a column visibly present, while sibling
+    validators in the same preflight run resolved it. ``filename`` is padded
+    whenever it is not the first CSV field. Written as a raw file: pandas keeps
+    the space because ``_load_data`` does not pass ``skipinitialspace``.
+    """
+    texts, _ = staged
+    (texts / "pair.txt").write_text("anchor text\tpositive text\n", encoding="utf-8")
+    path = tmp_path / "padded.csv"
+    path.write_text("id, filename\n1,pair\n", encoding="utf-8")
+
+    result = ContrastivePairsValidator(texts_path="texts").validate(str(path))
+
+    assert result.is_valid, result.errors

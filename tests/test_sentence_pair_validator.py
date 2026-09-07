@@ -188,3 +188,23 @@ def test_error_cap_summarizes(staged):
     assert not result.is_valid
     assert any("further errors suppressed" in e for e in result.errors)
     assert len(result.errors) <= 51
+
+
+def test_csv_padded_filename_header_still_resolves(staged, tmp_path):
+    """A padded ``filename`` header (``label, filename``) must resolve, not
+    report the column missing.
+
+    Regression (backend#1828): the shared TabSeparatedRecordValidator base
+    carried a private ``_resolve_column`` that lower-cased without stripping,
+    so ``sentence_pair_classification`` rejected a manifest whose ``filename``
+    column was visibly present but not the first CSV field. Mirrors
+    tests/test_contrastive_pairs_validator.py.
+    """
+    texts, _ = staged
+    (texts / "pair.txt").write_text("text a\ttext b\n", encoding="utf-8")
+    path = tmp_path / "padded.csv"
+    path.write_text("label, filename\npos,pair\n", encoding="utf-8")
+
+    result = SentencePairValidator(texts_path="texts").validate(str(path))
+
+    assert result.is_valid, result.errors

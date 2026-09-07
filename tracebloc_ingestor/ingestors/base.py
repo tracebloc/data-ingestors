@@ -25,6 +25,7 @@ from ..utils import redaction
 from ..utils.columns import resolve_column
 from ..utils.correlation import resolve_correlation_id
 from ..utils.validators_mapping import map_validators
+from .. import telemetry
 from ..file_transfer import map_file_transfer, reclaim_dest_tree, reclaim_source
 from ..text_profile import compute_text_profile
 from ..schema_inference import canonical_dtype
@@ -191,6 +192,20 @@ class IngestionSummary(NamedTuple):
     failed_records: int
     skipped_records: int
     file_transfer_failures: int = 0
+    # THE PHYSICAL TABLE THIS RUN WROTE (tracebloc/backend#2895).
+    #
+    # Under PER_INGESTION_TABLES the row store is ``ds_<uuid4().hex>`` while
+    # ``table_name`` stays the user-facing LABEL -- so the label names no table
+    # that exists. The summary banner is the only channel the CLI parses, and it
+    # carried the label, so a successful ingest reported a destination that could
+    # not be deleted or listed. Reported here so the CLI can say what was
+    # actually created instead of echoing the operator's --name.
+    #
+    # Populated from ``self.physical_table_name``, which is ALREADY correct in
+    # both modes (the label when the flag is off, the handle when it is on), so
+    # this restates no naming rule -- it forwards the one the ingestor derived.
+    # Defaulted and trailing: every existing constructor stays valid.
+    destination_table: str = ""
 
     @property
     def has_failures(self) -> bool:
@@ -232,6 +247,14 @@ class BaseIngestor(ABC):
         category: Data category
     """
 
+    # Whether this ingestor enumerates ONE RECORD PER SOURCE FILE rather than
+    # one per manifest row. ``VOCIngestor`` sets it (backend#1006): one record
+    # per image means filenames are unique by construction, which is what makes
+    # the content_hash data_id safe for object_detection. Read in ``__init__``
+    # below, so it must be a CLASS attribute — a subclass instance attribute
+    # would not be set yet.
+    enumerates_one_record_per_file: bool = False
+
     def __init__(
         self,
         database: Database,
@@ -265,8 +288,9 @@ class BaseIngestor(ABC):
             label_policy: ``"passthrough"`` (default; classification — the
                 label value crosses the cluster boundary unchanged) or
                 ``"bucket"`` (regression-class — each label is replaced
-                with a stable hash-bucket ID before the API payload is
-                built, so raw target values never leak). Schema-validated
+                with a stable hash-bucket ID in the API payload, so raw
+                target values never leak; the stored row keeps the raw
+                target, which is what training reads — #486). Schema-validated
                 upstream by the YAML entrypoint; templates pass the
                 appropriate constant from :mod:`tracebloc_ingestor.utils.label_policy`.
         Raises:
@@ -288,14 +312,20 @@ class BaseIngestor(ABC):
             category == TaskCategory.OBJECT_DETECTION
             and data_id_strategy == "content_hash"
             and not unique_id_column
+            and not self.enumerates_one_record_per_file
         ):
-            # Objdet manifests list one row PER OBJECT: duplicate
+            # Objdet MANIFESTS list one row PER OBJECT: duplicate
             # (filename, label) rows are distinct objects, but they produce
             # identical content digests, so the data_id UNIQUE upsert keeps
-            # only one of them (bugbot High on #383). The YAML resolver
-            # defaults objdet to uuid; this guards the direct-constructor
-            # path, which can't distinguish an explicit choice from the
-            # signature default — hence a warning, not an override.
+            # only one of them (bugbot High on #383). This guards the
+            # direct-constructor path, which can't distinguish an explicit
+            # choice from the signature default — hence a warning, not an
+            # override.
+            #
+            # It does NOT apply to the XML enumerator, which emits one record
+            # per IMAGE with a unique filename and for which content_hash is
+            # the recommended strategy (backend#1006) — warning there would
+            # tell the user to undo the correct setting.
             logger.warning(
                 "object_detection with data_id_strategy='content_hash': "
                 "duplicate (filename, label) manifest rows collapse into one "
@@ -461,7 +491,6 @@ class BaseIngestor(ABC):
             label_column=self.label_column,
             annotation_column=self.annotation_column,
             unique_id_column=self.unique_id_column,
-            label_policy=self.label_policy,
             ingestor_id=self.ingestor_id,
             data_id_strategy=self.data_id_strategy,
             table_salt=self._table_salt,
@@ -524,6 +553,31 @@ class BaseIngestor(ABC):
         group-integrity pass."""
         spec = _MODALITY_REGISTRY.get(self.category)
         return spec.grouping if spec is not None else None
+
+    @property
+    def _label_is_tag_sequence(self) -> bool:
+        """Whether the category's ``label`` column holds a whitespace-joined
+        per-token tag SEQUENCE (token_classification BIO/IOB2), so its
+        output_classes are the DISTINCT TAGS — the sequence exploded — rather
+        than the distinct sequence strings a plain ``GROUP BY label`` would
+        count (backend#1747). Read trait-style from the registry, never via a
+        category string, so a future tag-sequence category is a registry entry,
+        not a base.py edit. Selects ``get_tag_counts`` over ``get_label_counts``
+        in the ingest-summary count path."""
+        spec = _MODALITY_REGISTRY.get(self.category)
+        return bool(spec is not None and spec.label_is_tag_sequence)
+
+    @property
+    def _label_is_class_histogram(self) -> bool:
+        """Whether the category's ``label`` column holds an encoded PER-IMAGE
+        CLASS HISTOGRAM ("car:3 sign:1") rather than one class per row, because
+        the record model is one row per image (object_detection, backend#1006).
+        Read trait-style from the registry, never via a category string, for the
+        same reason as ``_label_is_tag_sequence``. Selects
+        ``get_class_histogram_counts`` over ``get_label_counts`` in the
+        ingest-summary count path."""
+        spec = _MODALITY_REGISTRY.get(self.category)
+        return bool(spec is not None and spec.label_is_class_histogram)
 
     @property
     def _table_lock(self) -> TableLock:
@@ -608,12 +662,28 @@ class BaseIngestor(ABC):
                 # default UUID / content_hash strategies; non-grouped
                 # factories ignore the key.
                 "unique_id_column": self.unique_id_column,
+                # The run's data_id strategy, so DuplicateValidator's
+                # within-CSV duplicate-filename warning describes the real
+                # outcome: 'content_hash' collapses byte-identical rows via
+                # the data_id UNIQUE upsert, 'uuid' keeps them all (#377).
+                "data_id_strategy": self.data_id_strategy,
             },
             # Inject the run's resolved Config so path-reading validators
             # (SRC_PATH / DEST_PATH / TABLE_NAME) use it instead of a
             # module-global Config() that reads os.environ (P4b).
             self.database.config,
         )
+        return self._run_validators(validators, source)
+
+    def _run_validators(self, validators: List[Any], source: Any) -> bool:
+        """Run an assembled validator list against *source*, collecting every
+        failure before raising.
+
+        Split out of :meth:`validate_data` so a subclass that assembles a
+        DIFFERENT validator set — ``VOCIngestor``, whose object_detection run
+        has no CSV manifest for the CSV-reading validators to read (backend#1006)
+        — reuses this reporting behaviour instead of copying the loop.
+        """
         logger.info(f"Running {len(validators)} validator(s) on data source")
         all_valid = True
         validation_errors = []
@@ -1194,6 +1264,7 @@ class BaseIngestor(ABC):
                 # future grouped category counting rows falls through to the
                 # standard row counts like every non-grouped category.
                 if grouping is not None and grouping.count_unit == "sequences":
+                    counts_helper = "get_label_sequence_counts"
                     label_counts = self.database.get_label_sequence_counts(
                         self.physical_table_name,
                         self.ingestor_id,
@@ -1206,7 +1277,56 @@ class BaseIngestor(ABC):
                     self.file_options["number_of_sequences"] = sum(
                         label_counts.values()
                     )
+                elif self._label_is_class_histogram:
+                    # object_detection: one row per IMAGE, whose ``label`` cell
+                    # is that image's encoded class multiset. Decode and weight
+                    # by row count (get_class_histogram_counts) rather than
+                    # GROUP BY the raw cell, which would report whole
+                    # compositions as classes. NOTE the deliberate two units in
+                    # the resulting summary — ``labels`` counts BOXES while
+                    # ``record_count`` (inserted_records, below) counts IMAGES.
+                    # See utils/od_label_semantics for why that split is chosen.
+                    counts_helper = "get_class_histogram_counts"
+                    label_counts = self.database.get_class_histogram_counts(
+                        self.physical_table_name, self.ingestor_id
+                    )
+                elif self._label_is_tag_sequence:
+                    # token_classification: the ``label`` column holds the whole
+                    # per-token BIO tag SEQUENCE, so output_classes are the
+                    # DISTINCT TAGS. Explode the sequence (get_tag_counts) rather
+                    # than GROUP BY the raw sequence string, which would count
+                    # distinct sequences as classes — no model head links then,
+                    # and the task is unrunnable e2e (backend#1747).
+                    counts_helper = "get_tag_counts"
+                    label_counts = self.database.get_tag_counts(
+                        self.physical_table_name, self.ingestor_id
+                    )
                 else:
+                    counts_helper = "get_label_counts"
+                    # CEILING (review on #487, tracked in #488): this GROUP BYs
+                    # the RAW label, so a regression-class dataset with a
+                    # continuous target yields up to one entry per distinct
+                    # value — ~N rows — which the send boundary then collapses to
+                    # <= 64 buckets. Before #486 the column held the buckets
+                    # themselves, so the same query grouped over <= 64 keys.
+                    # Fine at the sizes we ingest today: a 100k-row float target
+                    # is a ~100k-entry dict, single-digit MB.
+                    #
+                    # It cannot be fixed by iterating: our DBAPI is
+                    # mysql+mysqlconnector, whose SQLAlchemy dialect reports
+                    # supports_server_side_cursors = False, so stream_results /
+                    # yield_per are no-ops and the driver buffers the whole
+                    # GROUP BY result on execute. Chunking the delivery
+                    # (Result.partitions) would bound the dict we build while
+                    # leaving the driver's buffer just as large — a memory bound
+                    # in the docstring only. Cursor Bugbot caught exactly that on
+                    # an earlier attempt in this PR.
+                    #
+                    # The two shapes that would actually bound it — bucketing in
+                    # SQL (SHA2 + CAST(CONV(...) AS UNSIGNED) % 64, which has to
+                    # agree with _bucket for every value) or moving to a DBAPI
+                    # with server-side cursors — are both bigger than this fix.
+                    # #488 carries them.
                     label_counts = self.database.get_label_counts(
                         self.physical_table_name, self.ingestor_id
                     )
@@ -1217,11 +1337,6 @@ class BaseIngestor(ABC):
                         "skipping ingest summary."
                     )
                 elif not label_counts:
-                    counts_helper = (
-                        "get_label_sequence_counts"
-                        if grouping is not None and grouping.count_unit == "sequences"
-                        else "get_label_counts"
-                    )
                     raise RuntimeError(
                         f"Inserted {stats['inserted_records']} row(s) but "
                         f"{counts_helper} returned nothing for "
@@ -1275,6 +1390,24 @@ class BaseIngestor(ABC):
                         self.physical_table_name, self.ingestor_id
                     )
 
+                    # backend#2770: carry the item count EXPLICITLY so the
+                    # backend stops inferring it from sum(labels.values()) — a
+                    # sum that equals the item count only when labels partition
+                    # the rows. It is the category's SAMPLE UNIT: a sequence-
+                    # grouped category counts sequences (already tallied into
+                    # number_of_sequences, backend#1054), every other category
+                    # counts rows. Passing rows for a grouped category would
+                    # re-inflate total by ~mean(sequence length) — the exact
+                    # shape of the token_classification bug #527 surfaced, one
+                    # category over. Mirrors the count-path branch selection
+                    # above; a future grouped-by-rows category (count_unit !=
+                    # "sequences") falls to inserted_records like every row unit.
+                    record_count = (
+                        self.file_options["number_of_sequences"]
+                        if grouping is not None and grouping.count_unit == "sequences"
+                        else stats["inserted_records"]
+                    )
+
                     self.api_client.send_ingest_summary(
                         table_name=self.table_name,
                         physical_table=(
@@ -1291,10 +1424,19 @@ class BaseIngestor(ABC):
                         schema=self._schema_payload(schema_dict),
                         samples=samples,
                         meta_data=self._meta_data_payload(),
+                        # label_counts / samples come straight from the cluster
+                        # DB, i.e. RAW targets. The policy is applied inside
+                        # send_ingest_summary — the boundary — and nowhere
+                        # earlier, so the stored rows keep the values training
+                        # needs (#486).
+                        label_policy=self.label_policy,
+                        record_count=record_count,
                     )
                     dataset_registered = True
                     stats["api_sent_records"] = stats["inserted_records"]
 
+                # Forwarded, not recomputed — see IngestionSummary.destination_table.
+                stats["destination_table"] = self.physical_table_name
                 summary = IngestionSummary(**stats)
                 self._log_summary(summary)
 
@@ -1411,6 +1553,20 @@ class BaseIngestor(ABC):
         # guarded + best-effort: it never deletes a dir that contains the table
         # dir and never fails an already-successful load.
         if dataset_registered and not failed_records:
+            # The load is durable and clean, which is the earliest point this
+            # run can PROVE it succeeded -- and saying so here rather than
+            # letting the entrypoint's funnel say it later is what stops a
+            # SIGTERM during the reclaim below from reporting a committed,
+            # registered dataset as ``cancelled`` (backend#2435). The reclaim is
+            # an rmtree over a whole staged dataset, so this is the long part of
+            # that window, not a theoretical one.
+            #
+            # Derived from the same guard the reclaim is derived from, so the
+            # two cannot disagree about what "succeeded" means. This EMITS
+            # nothing: the entrypoint stays the only place a terminal event
+            # comes from, and the terminal slot stays open so anything that
+            # goes wrong from here still reports its own failure.
+            telemetry.mark_durable()
             reclaim_source(self.database.config)
 
         return failed_records

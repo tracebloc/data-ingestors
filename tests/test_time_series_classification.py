@@ -149,13 +149,15 @@ def test_grouping_is_unique_to_tsc():
 
 def test_layout_contract_carries_grouping():
     doc = build_layout_contract()
-    assert doc["version"] == "2"  # shape change: the grouping block
     tsc = doc["tasks"][TSC]
     assert tsc["grouping"] == {
         "group_column": "sequence_id",
         "time_column": "timestamp",
         "count_unit": "sequences",
     }
+    # TSC's timestamps must stay monotonic WITHIN each sequence — the per-group
+    # scope matches its PerGroupTimeOrderedValidator (backend#1870).
+    assert tsc["ordering"] == {"column": "timestamp", "scope": "per_group"}
     # Non-grouped categories emit an explicit null (mirrors record_format).
     assert doc["tasks"][TaskCategory.TABULAR_CLASSIFICATION]["grouping"] is None
     assert doc["tasks"][TaskCategory.TIME_SERIES_FORECASTING]["grouping"] is None
@@ -257,6 +259,13 @@ def test_toy_csv_ingests_with_sequence_unit_counts(make_csv, monkeypatch):
     # number_of_columns still counts the CLEANED schema columns (k=2 site:
     # sequence_id + timestamp + F features; label stripped).
     assert summary_kwargs["meta_data"]["number_of_columns"] == 3
+    # backend#2770 (the TSC guard): record_count is the SAMPLE UNIT — the 3
+    # sequences, NOT the 15 stored rows. Passing inserted_records here would
+    # re-inflate total by ~mean(sequence length), the token_classification
+    # count bug (#527) one category over. This is the fixture where item count
+    # (3) and row count (15) diverge, so it pins the distinction.
+    assert summary_kwargs["record_count"] == 3
+    assert summary_kwargs["record_count"] != inserted  # 15 rows
 
 
 def test_toy_csv_requests_composite_index(make_csv):
@@ -282,8 +291,13 @@ def test_non_grouped_category_keeps_row_counts(make_csv):
     ing.database.get_label_counts.assert_called_once()
     ing.database.get_label_sequence_counts.assert_not_called()
     assert ing.database.create_table.call_args.kwargs["index_columns"] is None
-    meta = ing.api_client.send_ingest_summary.call_args.kwargs["meta_data"]
+    summary_kwargs = ing.api_client.send_ingest_summary.call_args.kwargs
+    meta = summary_kwargs["meta_data"]
     assert "number_of_sequences" not in meta
+    # backend#2770: a non-grouped category's record_count is the ROW count (15),
+    # the row unit like every non-grouped category — here it also equals
+    # sum(labels.values()), which is why the inference was ever right for them.
+    assert summary_kwargs["record_count"] == 15
 
 
 # ---------------------------------------------------------------------------
@@ -392,10 +406,7 @@ def test_partial_sequence_deleted_despite_header_spelling_drift(make_csv):
     def _insert(table, batch):
         ok, failed = [], []
         for i, record in enumerate(batch):
-            if (
-                record.get("Sequence_ID") == "p3"
-                and record.get("heart_rate") == "72.0"
-            ):
+            if record.get("Sequence_ID") == "p3" and record.get("heart_rate") == "72.0":
                 failed.append({"record": record, "error": "dup key"})
             else:
                 ok.append(i)

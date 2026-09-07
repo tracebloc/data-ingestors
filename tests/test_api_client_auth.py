@@ -11,9 +11,10 @@ Covers all three boot paths required by the #43 acceptance criteria:
 A fourth path — ``CLIENT_ENV=local`` — is also exercised because it bypasses
 both validation and the network entirely.
 
-Database credentials are intentionally **not** in the validation surface:
-they're connection conventions for the bundled MySQL container, not
-customer-facing secrets. See `Config.validate()` for the rationale.
+Database credentials (``DB_USER`` / ``DB_PASSWORD``) are required for a real
+run as of backend#1528 (the ``edgeuser`` fallback was removed — jobs-manager
+injects ``tb_ingest`` per-Job), but they are NOT part of this auth-scoped
+``validate()``; they fail fast at ``Database()`` init instead.
 """
 
 from __future__ import annotations
@@ -32,8 +33,8 @@ def _make_config(**overrides) -> Config:
 
     Default: a valid prod-like config with BACKEND_TOKEN set so ``validate()``
     passes; tests override only the auth fields they care about. DB creds are
-    not part of the validation surface (they're bundled-MySQL conventions),
-    so they're left to their env/property defaults here.
+    not part of ``validate()`` (it's auth-scoped) — they fail fast at
+    ``Database()`` init instead — so they're left unset here.
     """
     defaults = dict(
         BACKEND_TOKEN="test-token-abc",
@@ -181,8 +182,9 @@ class TestLocalModeBypassesValidation:
             CLIENT_PASSWORD=None,
         )
 
-        with patch.object(APIClient, "authenticate") as mock_auth, \
-             patch("requests.Session.post") as mock_post:
+        with patch.object(APIClient, "authenticate") as mock_auth, patch(
+            "requests.Session.post"
+        ) as mock_post:
             client = APIClient(config)
 
         mock_auth.assert_not_called()

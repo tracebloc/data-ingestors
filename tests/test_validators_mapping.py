@@ -722,3 +722,29 @@ def test_common_validator_frame_composed_for_every_category():
             assert types[-3] is LabelDiversityValidator, cat
         else:
             assert LabelDiversityValidator not in types, cat
+
+
+def test_duplicate_validator_receives_the_runs_data_id_source():
+    """#377: the tail DuplicateValidator gets the run's data_id strategy and id
+    column, so its duplicate-filename warning describes what actually happens
+    (content_hash collapses byte-identical rows; uuid / an id column don't)."""
+    opts = {
+        "extension": ".jpg",
+        "target_size": [64, 64],
+        "number_of_keypoints": 5,
+        "data_id_strategy": "content_hash",
+        "unique_id_column": "row_id",
+    }
+    for cat in ALL_CATEGORIES:
+        dup = map_validators(cat, opts)[-1]
+        assert isinstance(dup, DuplicateValidator), cat
+        assert dup._data_id_strategy == "content_hash", cat
+        assert dup._unique_id_column == "row_id", cat
+
+
+def test_duplicate_validator_data_id_source_defaults_to_unknown():
+    """Callers that omit the keys (tests, direct callers) leave the validator on
+    its strategy-agnostic wording rather than asserting a wrong outcome."""
+    dup = map_validators(TaskCategory.TABULAR_CLASSIFICATION, {})[-1]
+    assert dup._data_id_strategy is None
+    assert dup._unique_id_column is None

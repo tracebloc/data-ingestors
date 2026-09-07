@@ -22,7 +22,9 @@ SECRET = "patient-4711-Müller"
 
 def test_row_refs_formats_and_caps():
     assert redaction.row_refs([2, 17, 108], total=3) == "rows [2, 17, 108]"
-    assert redaction.row_refs([0, 1, 2, 3, 4], total=9) == "rows [0, 1, 2, 3, 4] (+4 more)"
+    assert (
+        redaction.row_refs([0, 1, 2, 3, 4], total=9) == "rows [0, 1, 2, 3, 4] (+4 more)"
+    )
 
 
 def test_mask_shape_keeps_structure_never_content():
@@ -90,7 +92,6 @@ def test_int64_overflow_error_redacts():
 
 def _rp(unique_id_column=None):
     from tracebloc_ingestor.ingestors.record_processor import RecordProcessor
-    from tracebloc_ingestor.utils import label_policy as label_policy_module
 
     return RecordProcessor(
         schema={"x": "FLOAT"},
@@ -98,7 +99,6 @@ def _rp(unique_id_column=None):
         label_column="y",
         annotation_column=None,
         unique_id_column=unique_id_column,
-        label_policy=label_policy_module.PASSTHROUGH,
         ingestor_id="run-1",
         # #350: content_hash is now the default strategy and needs a salt.
         table_salt="0" * 64,
@@ -119,6 +119,35 @@ def test_hot_loop_does_not_log_record_content(caplog):
     with caplog.at_level(logging.DEBUG):
         rp.process({"x": 1.0, "y": SECRET})
     assert SECRET not in caplog.text
+
+
+def test_process_catch_all_never_logs_the_exception_message(caplog, monkeypatch):
+    """The catch-all in ``RecordProcessor.process`` is a content leak by default.
+
+    Everything raised inside that ``try`` has the record's own cells in scope: a
+    driver rejecting a value quotes it, and a plain ``ValueError`` from casting a
+    cell embeds it. So the handler must surface the exception CLASS, never its
+    message (backend#1879).
+
+    Pinned because the fix is a one-line substitution that reads like noise —
+    ``str(e)`` back in place would restore the leak silently, and the engine's
+    identical hole survived for exactly that reason: the concept existed, the
+    coverage did not.
+    """
+    rp = _rp()
+    monkeypatch.setattr(
+        rp,
+        "_map_unique_id",
+        lambda *a, **k: (_ for _ in ()).throw(
+            ValueError(f"bad value {SECRET!r} in column x")
+        ),
+    )
+    with caplog.at_level(logging.ERROR):
+        out = rp.process({"x": 1.0, "y": "a"})
+    assert out is None
+    assert SECRET not in caplog.text  # the whole point
+    assert "ValueError" in caplog.text  # the class is the actionable part
+    assert "Error processing record" in caplog.text
 
 
 def test_safe_db_error_names_classes_never_messages():
@@ -164,9 +193,11 @@ def test_json_dtype_error_masks_the_value():
 def test_json_non_dict_record_reports_position_not_content():
     from tracebloc_ingestor.ingestors.json_ingestor import JSONIngestor
 
-    gen = JSONIngestor._iter_validated_records.__wrapped__ if hasattr(
-        JSONIngestor._iter_validated_records, "__wrapped__"
-    ) else JSONIngestor._iter_validated_records
+    gen = (
+        JSONIngestor._iter_validated_records.__wrapped__
+        if hasattr(JSONIngestor._iter_validated_records, "__wrapped__")
+        else JSONIngestor._iter_validated_records
+    )
     ing = object.__new__(JSONIngestor)
     ing.schema = {}
     with pytest.raises(ValueError) as exc:
@@ -219,3 +250,56 @@ def test_column_preview_caps_wide_panels():
     assert "gene_10" not in preview  # capped at 10
     # a single error line stays bounded no matter how wide the panel is
     assert len(preview) < 300
+
+
+# ---------------------------------------------------------------------------
+# Contract telemetry (RFC-BACKEND-1872 D2) — the emitter side of the same rule
+# ---------------------------------------------------------------------------
+
+
+def test_telemetry_failure_record_never_carries_the_exception_message(caplog):
+    """A contract event leaves the process; its exception message must not.
+
+    Pinned in THIS file rather than only next to the telemetry tests because it
+    is the same gate as everything above: a cell value must not reach anything
+    that egresses. The failure record is a new egress path, and the field that
+    would carry a value is the exception message — which is why the emitter is
+    handed the frames alone.
+
+    The mutation is a one-word substitution (``format_tb`` → ``format_exc``)
+    that reads like a tidy-up, which is precisely how the engine's identical
+    hole survived.
+    """
+    import tracebloc_telemetry
+
+    from tracebloc_ingestor import telemetry
+
+    def _caught(message):
+        # A VARIABLE, so the raising frame's source line cannot contain the
+        # value; a literal here would make this test prove the wrong thing.
+        try:
+            raise ValueError(message)
+        except ValueError as exc:
+            return exc
+
+    exc = _caught(f"Incorrect value {SECRET!r} for column x")
+
+    tracebloc_telemetry.reset()
+    telemetry.reset()
+    telemetry.configure_job()
+    caplog.set_level(logging.DEBUG, logger="tracebloc.telemetry")
+    telemetry.begin_run("run-1")
+    telemetry.job_failed(telemetry.ERROR_INGESTION_FAILED, exc)
+    records = [r.telemetry for r in caplog.records if hasattr(r, "telemetry")]
+    tracebloc_telemetry.reset()
+    telemetry.reset()
+
+    assert records, "no telemetry record was emitted — the test proves nothing"
+    # The attribute VALUES, not a json.dumps of them: json escapes non-ASCII,
+    # so a dump of this very record spells the marker "M\\u00fcller" and a
+    # `SECRET not in dump` assertion passes with the value still in the record.
+    emitted = "\n".join(f"{k}={v!r}" for k, v in records[-1].items())
+    assert SECRET not in emitted
+    # the class and the frames ARE the actionable part, and they are sent
+    assert records[-1]["exception.type"] == "ValueError"
+    assert records[-1]["exception.stacktrace"]

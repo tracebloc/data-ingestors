@@ -93,6 +93,14 @@ class ModalitySpec:
     # regression / self-supervised / token-classification (per-token BIO) and
     # the time families.
     is_classification: bool = False
+    # The ``label`` column holds an ENCODED PER-IMAGE CLASS HISTOGRAM
+    # ("car:3 sign:1") rather than one class per row, because the record model
+    # is one row per IMAGE and an image has no scalar class (backend#1006).
+    # Selects ``get_class_histogram_counts`` in the ingest-summary count path,
+    # which decodes each cell instead of GROUP BY-ing the raw string (that would
+    # report whole compositions as classes, exactly the token_classification
+    # failure of backend#1747, one category over).
+    label_is_class_histogram: bool = False
     # The two per-task LAYOUT facts not already implied by the flags above
     # (data-ingestors#347). Everything else about the on-disk layout is derived
     # from the existing flags by ``modalities.layout.build_layout_contract``.
@@ -115,3 +123,27 @@ class ModalitySpec:
     # None``, never on the category string. ``None`` for every per-row
     # category.
     grouping: Optional["Grouping"] = None
+    # Token-tagging label (backend#1747): the ``label`` column holds a
+    # whitespace-joined per-token tag SEQUENCE (token_classification's BIO/IOB2
+    # tags, one tag per word — e.g. ``"O B-PER I-PER O"``), not a single class
+    # value. The dataset's output_classes are therefore the DISTINCT TAGS, which
+    # ``ingestors/base.py`` counts by EXPLODING each sequence
+    # (``Database.get_tag_counts``) — a plain ``GROUP BY label``
+    # (``get_label_counts``) would instead count distinct sequence STRINGS as
+    # classes, so no model head links and the task is unrunnable e2e. Consumed
+    # trait-style (never on the category string), so a future tag-sequence
+    # category is a one-line registry entry. ``False`` for every other category.
+    label_is_tag_sequence: bool = False
+    # No manifest CSV — records are enumerated from the required sidecar instead
+    # (backend#1006 / backend#3076). object_detection is the one file-bearing
+    # category built this way: its records are one-per-image, enumerated from the
+    # Pascal-VOC ``annotations/*.xml`` sidecar, and each image's label is DERIVED
+    # from ``<object><name>`` — so there is no labels CSV, no ``filename`` column
+    # to require, and no user-declared label column to point at. Drives the
+    # layout contract's manifest block to ``kind="none"`` with both column flags
+    # false (``modalities.layout``), so a consumer (the CLI's
+    # discovery/preflight/spec-build mirror) skips every labels-CSV read. ``False``
+    # for every other category — including the OTHER sidecar-bearing ones:
+    # semantic_segmentation still ships a labels CSV that carries the ``mask_id``
+    # link column, so its manifest stays ``labels_csv``.
+    records_from_sidecar: bool = False

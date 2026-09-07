@@ -18,6 +18,25 @@ logger = logging.getLogger(__name__)
 logger.setLevel(config.LOG_LEVEL)
 
 
+# SQL types accepted for the ``timestamp`` column. All three denote calendar
+# values and all three are already mapped to a temporal SQLAlchemy type by
+# ``Database._get_sqlalchemy_type`` (``DATE`` -> ``Date``, ``DATETIME`` /
+# ``TIMESTAMP`` -> ``DateTime``), so accepting them here does not push a failure
+# further down the pipeline.
+#
+# Why not ``TIMESTAMP`` alone (#489): ``schema_inference._infer_datetime`` — the
+# source of every INFERRED schema, and therefore of every ingest that does not
+# pass an explicit one — returns ``DATETIME`` when a value carries a time of day
+# and ``DATE`` otherwise. It can never emit ``TIMESTAMP``. Requiring exactly
+# ``TIMESTAMP`` therefore rejected 100% of inferred time-series-forecasting
+# schemas no matter what the data looked like: a date-only column failed with
+# "found 'DATE'", and adding a time of day only changed the message to "found
+# 'DATETIME'". The bundled Python template hard-codes ``"timestamp":
+# "TIMESTAMP"``, which is why the template path worked and the gap went
+# unnoticed. Genuinely wrong types (VARCHAR, INT, …) are still rejected.
+TEMPORAL_TIMESTAMP_TYPES = frozenset({"TIMESTAMP", "DATETIME", "DATE"})
+
+
 def parse_month_first_with_ambiguity_mask(values):
     """Month-first ``format='mixed'`` parse + the locale-ambiguity mask.
 
@@ -50,7 +69,9 @@ class TimeFormatValidator(BaseValidator):
 
     Ensures:
     1. Column "timestamp" exists in the dataset
-    2. Timestamp column in schema is of type TIMESTAMP (not DATE or DATETIME)
+    2. Timestamp column in schema is a calendar type — ``TIMESTAMP``,
+       ``DATETIME`` or ``DATE`` (see ``TEMPORAL_TIMESTAMP_TYPES``); text and
+       numeric types are rejected
     3. All timestamp values are in valid format
     """
 
@@ -66,7 +87,7 @@ class TimeFormatValidator(BaseValidator):
         """Validate timestamp format."""
         try:
             errors = []
-            
+
             # Check schema: timestamp column must exist and be of type TIMESTAMP
             if self.schema:
                 if "timestamp" not in self.schema:
@@ -75,27 +96,32 @@ class TimeFormatValidator(BaseValidator):
                         "For time series forecasting, a 'timestamp' column is required."
                     )
                     return self._create_result(is_valid=False, errors=errors)
-                
+
                 # Extract base type (before parentheses) to handle precision specifiers like TIMESTAMP(6)
                 timestamp_type = self.schema["timestamp"].upper().strip()
                 base_type = timestamp_type.split("(")[0].split()[0]
-                
-                if base_type not in ["TIMESTAMP"]:
+
+                if base_type not in TEMPORAL_TIMESTAMP_TYPES:
                     errors.append(
-                        f"Timestamp column in schema must be of type 'TIMESTAMP', "
-                        f"but found '{self.schema['timestamp']}'. "
-                        f"For time series forecasting, timestamp column must be TIMESTAMP type."
+                        f"Timestamp column in schema must be a date/time type "
+                        f"({', '.join(sorted(TEMPORAL_TIMESTAMP_TYPES))}), but found "
+                        f"'{self.schema['timestamp']}'. For time series forecasting the "
+                        f"timestamp column must hold calendar values, not text or numbers."
                     )
                     return self._create_result(is_valid=False, errors=errors)
-            
+
             df = self._load_data(data)
             if df is None or df.empty:
-                return self._create_result(is_valid=False, errors=["No data found to validate"])
+                return self._create_result(
+                    is_valid=False, errors=["No data found to validate"]
+                )
 
             if "timestamp" not in df.columns:
                 return self._create_result(
                     is_valid=False,
-                    errors=[f"Required column 'timestamp' not found. Available: {list(df.columns)}"],
+                    errors=[
+                        f"Required column 'timestamp' not found. Available: {list(df.columns)}"
+                    ],
                 )
 
             # Parse timestamps + locale-ambiguity mask (shared helper — the
@@ -126,8 +152,10 @@ class TimeFormatValidator(BaseValidator):
             invalid_mask = timestamps.isna()
             if invalid_mask.any():
                 invalid_count = invalid_mask.sum()
-                invalid_rows = [i+1 for i in df.index[invalid_mask][:10]]
-                errors.append(f"Found {invalid_count} invalid timestamp(s) at rows: {invalid_rows}")
+                invalid_rows = [i + 1 for i in df.index[invalid_mask][:10]]
+                errors.append(
+                    f"Found {invalid_count} invalid timestamp(s) at rows: {invalid_rows}"
+                )
                 metadata["invalid_timestamps"] = invalid_count
 
             return self._create_result(
@@ -138,7 +166,10 @@ class TimeFormatValidator(BaseValidator):
 
         except Exception as e:
             logger.error(f"Time format validation error: {e}")
-            return self._create_result(is_valid=False, errors=[f"Validation error: {str(e)}"])
+            return self._create_result(
+                is_valid=False, errors=[f"Validation error: {str(e)}"]
+            )
+
     def _load_data(self, data: Any) -> Optional[pd.DataFrame]:
         try:
             if isinstance(data, (str, Path)):
@@ -146,9 +177,8 @@ class TimeFormatValidator(BaseValidator):
                 if file_path.exists() and file_path.suffix.lower() == ".csv":
                     # Always load complete file for timestamp validation
                     return pd.read_csv(file_path, encoding="utf-8", on_bad_lines="warn")
-            
+
             return None
         except Exception as e:
             logger.error(f"Error loading data: {e}")
             return None
-

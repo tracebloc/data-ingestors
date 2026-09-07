@@ -168,15 +168,26 @@ class BaseValidator(ABC):
         because ``CSVIngestor`` strips header whitespace on read
         (``chunk.columns.str.strip()``) — so a header like ``" label "`` is
         ingested as ``label`` and must resolve here too, or a manifest that
-        ingests fine fails preflight as if the column were missing (matches
-        ``LabelDiversityValidator._resolve_column``). The ORIGINAL column name
-        is returned so callers can still index the (un-stripped) raw frame.
+        ingests fine fails preflight as if the column were missing. The
+        ORIGINAL column name is returned so callers can still index the
+        (un-stripped) raw frame.
 
         The rule is single-sourced in
         :func:`tracebloc_ingestor.utils.columns.resolve_column` so the ingest
         read path resolves the label column identically — the two used to
         diverge (validators case-insensitive, ``RecordProcessor`` exact),
         silently nulling every label (#340).
+
+        **This method is the ONLY resolver a validator may use.** Three
+        validators once carried private ``_resolve_column`` copies instead;
+        two of them dropped the ``.strip()``, so ``token_classification`` /
+        ``sentence_pair_classification`` / ``embeddings`` false-rejected a
+        header Excel writes by default (``filename, label``) as a missing
+        column, while sibling validators in the SAME preflight run resolved it
+        (backend#1828, reintroducing #340 / bugbot #252). The copies are gone
+        and ``tests/test_no_shadowed_column_resolver.py`` fails if one comes
+        back — a shadow is invisible to a reader, so the guard is structural,
+        not a review convention.
         """
         from ..utils.columns import resolve_column
 

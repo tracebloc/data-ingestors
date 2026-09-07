@@ -20,6 +20,12 @@ from tenacity import (
 )
 
 from tracebloc_ingestor import Config
+from tracebloc_ingestor.storage_contract import (
+    EXTENSION_COLUMN,
+    IMAGE_NAME_COLUMN,
+)
+from tracebloc_ingestor.utils.fs import DEST_DIR_MODE as _DEST_DIR_MODE
+from tracebloc_ingestor.utils.fs import ensure_reclaimable_dir
 from tracebloc_ingestor.utils.constants import (
     GREEN,
     RED,
@@ -37,6 +43,26 @@ from tracebloc_ingestor.utils.constants import (
 config = Config()
 logger = logging.getLogger(__name__)
 logger.setLevel(config.LOG_LEVEL)
+
+# `data delete` reclaims a dataset with an ephemeral stage-identity pod
+# (uid/gid 65532, client-runtime#172). On a hostPath dataset the kubelet ignores
+# that pod's fsGroup, so the ingest side must leave the destination tree
+# group-owned by, and group-writable for, that group — otherwise the teardown
+# can't remove the files and they leak (remainder of client#259). The rule now
+# lives in utils/fs.py so the duplicate validator -- which creates the SAME
+# destination directory, and gets there first -- applies it too. Re-exported here
+# because callers and tests already reference these names.
+DEST_DIR_MODE = _DEST_DIR_MODE
+
+
+def _ensure_dest_dir(path: str) -> None:
+    """Create ``path`` reclaimable by the `data delete` teardown (#172).
+
+    Thin delegation to :func:`ensure_reclaimable_dir`; see utils/fs.py for why
+    the mode is world-writable rather than group-writable.
+    """
+    ensure_reclaimable_dir(path)
+
 
 # Define retry decorator for file operations
 retry_decorator = retry(
@@ -212,7 +238,7 @@ def image_transfer(
     """
     cfg = cfg or config
     # Create destination directory if it doesn't exist
-    os.makedirs(cfg.DEST_PATH, exist_ok=True)
+    _ensure_dest_dir(cfg.DEST_PATH)
 
     try:
         # Get the filename from the record
@@ -237,8 +263,12 @@ def image_transfer(
         # Copy file with retry logic
         _copy_file_with_retry(src_path, image_dest_path)
 
-        record["filename"] = os.path.splitext(filename_with_ext)[0]
-        record["extension"] = extension
+        # THE contract (backend#1706): the stem the file was just written under
+        # is what lands in the ``filename`` column, and that column — never
+        # ``data_id`` — is how the trainer resolves this row back to the file.
+        # See tracebloc_ingestor.storage_contract.
+        record[IMAGE_NAME_COLUMN] = os.path.splitext(filename_with_ext)[0]
+        record[EXTENSION_COLUMN] = extension
 
         logger.info(f"{GREEN}Successfully copied image: {filename}{RESET}")
         return record
@@ -272,7 +302,7 @@ def annotation_transfer(
     """
     cfg = cfg or config
     # Create destination directory if it doesn't exist
-    os.makedirs(cfg.DEST_PATH, exist_ok=True)
+    _ensure_dest_dir(cfg.DEST_PATH)
 
     try:
         # Get the filename from the record
@@ -327,7 +357,7 @@ def text_transfer(
     """
     cfg = cfg or config
     # Create destination directory if it doesn't exist
-    os.makedirs(cfg.DEST_PATH, exist_ok=True)
+    _ensure_dest_dir(cfg.DEST_PATH)
 
     try:
         # Get the filename from the record
@@ -396,7 +426,7 @@ def mask_transfer(
     call per record.
     """
     cfg = cfg or config
-    os.makedirs(cfg.DEST_PATH, exist_ok=True)
+    _ensure_dest_dir(cfg.DEST_PATH)
 
     try:
         # Write target guarded against escaping DEST via a crafted mask_id (#239)

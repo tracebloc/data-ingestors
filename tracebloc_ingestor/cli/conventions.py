@@ -273,8 +273,21 @@ def resolve(config: Dict[str, Any]) -> ResolvedConfig:
         table_name=config["table"],
         intent=config["intent"],
         data_format=_data_format_for(category),
-        source_type="csv" if "csv" in config else "json",
-        source_path=config.get("csv") or config["json"],
+        # object_detection carries NEITHER csv nor json since backend#1006: its
+        # records are enumerated from the Pascal-VOC XML, so the source is the
+        # annotations DIRECTORY. The schema's category-conditional data-source
+        # rule is what guarantees the other two branches still see exactly one
+        # of csv/json, so this cannot silently swallow a missing manifest.
+        source_type=(
+            "annotations"
+            if category == TaskCategory.OBJECT_DETECTION
+            else ("csv" if "csv" in config else "json")
+        ),
+        source_path=(
+            config.get("annotations")
+            if category == TaskCategory.OBJECT_DETECTION
+            else (config.get("csv") or config["json"])
+        ),
     )
 
     # 2. Sidecar directories — set whatever the customer specified; the
@@ -290,7 +303,14 @@ def resolve(config: Dict[str, Any]) -> ResolvedConfig:
     if "time_column" in config:
         resolved.time_column = config["time_column"]
 
-    # 4. Label — string shorthand or object form
+    # 4. Label — string shorthand or object form.
+    #    object_detection has no user-declared label: the per-image label cell
+    #    is DERIVED from <object><name> by the VOC enumerator (backend#1006),
+    #    and the schema rejects a `label:` key for the category. Name the
+    #    framework column anyway so the enumerator and the summary path agree
+    #    on which column carries it.
+    if category == TaskCategory.OBJECT_DETECTION:
+        resolved.label_column = "image_label"
     label = config.get("label")
     if isinstance(label, str):
         resolved.label_column = label
@@ -317,19 +337,19 @@ def resolve(config: Dict[str, Any]) -> ResolvedConfig:
         resolved.unique_id_column = data_id["column"]
     elif strategy == "uuid":
         resolved.data_id_strategy = "uuid"
-    elif strategy is None and category == TaskCategory.OBJECT_DETECTION:
-        # Object-detection manifests list one row PER OBJECT, so duplicate
-        # (filename, label) rows are the norm — the bundled VisDrone sample
-        # has three identical `car` rows for one image. Those rows hash to
-        # the SAME content digest and the data_id UNIQUE upsert would keep a
-        # single stored row, silently under-counting objects (bugbot High on
-        # #383). Absent an explicit choice, objdet therefore keeps
-        # fresh-per-row UUIDs; an explicit `strategy: content_hash` is
-        # honored (and #227 cleans up retry duplicates either way). Restoring
-        # retry idempotency for objdet needs a row-ordinal-salted hash — a
-        # follow-up, not a default.
-        resolved.data_id_strategy = "uuid"
-    # else (content_hash, or absent): leave default ⇒ content_hash
+    # else (content_hash, or absent): leave default ⇒ content_hash.
+    #
+    # object_detection USED to be forced to "uuid" here: its manifests listed
+    # one row PER OBJECT, so duplicate (filename, label) rows were the norm —
+    # the bundled VisDrone sample has three identical `car` rows for one image
+    # — and they hash to the same digest, so the data_id UNIQUE upsert kept one
+    # row and silently under-counted objects (bugbot High on #383). Since
+    # backend#1006 records are enumerated one per IMAGE from the Pascal-VOC XML,
+    # no two records share a filename and there is nothing left to collapse.
+    # Dropping the override takes objdet back to content_hash, which restores
+    # the retry idempotency the old comment called a follow-up: a re-run of a
+    # failed Kubernetes Job re-claims its rows instead of inserting a second
+    # copy of every image.
 
     # 6. csv_options — merge customer overrides over defaults.
     csv_overrides = (config.get("spec") or {}).get("csv_options") or {}

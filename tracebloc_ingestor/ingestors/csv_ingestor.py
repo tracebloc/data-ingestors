@@ -106,6 +106,8 @@ def _raise_on_overflow(
             f"this guard surfaces it at cast time instead of letting it "
             f"reach MySQL."
         )
+
+
 logger = logging.getLogger(__name__)
 logger.setLevel(config.LOG_LEVEL)
 
@@ -151,9 +153,7 @@ def _cast_datetime_strict(series: pd.Series, column: str, dtype: str) -> pd.Seri
         )
         offender_rows = series.index[bad_mask][:5].tolist()
         # Shape, not content: the FORMAT is the diagnosis for date errors.
-        shapes = sorted(
-            {redaction.mask_shape(v) for v in series[bad_mask].head(5)}
-        )
+        shapes = sorted({redaction.mask_shape(v) for v in series[bad_mask].head(5)})
         raise ValueError(
             f"Column '{column}' (dtype {dtype}) has un-parseable date "
             f"value(s) at {redaction.row_refs(offender_rows, int(bad_mask.sum()))} "
@@ -413,7 +413,10 @@ class CSVIngestor(BaseIngestor):
                     _raise_on_overflow(column, df[column], converted, dtype)
                     df[column] = converted.astype("Int64")
                     self._accumulate_feature_stats(column, df[column])
-                elif any(t in dtype.upper() for t in ("FLOAT", "DOUBLE", "DECIMAL", "NUMERIC")):
+                elif any(
+                    t in dtype.upper()
+                    for t in ("FLOAT", "DOUBLE", "DECIMAL", "NUMERIC")
+                ):
                     # float64 — NOT downcast='float' (float32), which corrupted
                     # precision: 3.14 -> '3.140000104904175'. Also covers DOUBLE/
                     # DECIMAL/NUMERIC, which previously matched NO branch and let
@@ -457,8 +460,9 @@ class CSVIngestor(BaseIngestor):
                     _falsy = coercion.BOOL_FALSE_STRINGS
                     _norm = df[column].astype("string").str.strip().str.lower()
                     df[column] = _norm.map(
-                        lambda x: True if x in _truthy
-                        else (False if x in _falsy else pd.NA),
+                        lambda x: (
+                            True if x in _truthy else (False if x in _falsy else pd.NA)
+                        ),
                         na_action="ignore",
                     ).astype("boolean")
                 elif "DATETIME" in dtype.upper() or "TIMESTAMP" in dtype.upper():
@@ -471,13 +475,33 @@ class CSVIngestor(BaseIngestor):
                 elif "DATE" in dtype.upper():
                     # DATE only — emit a plain date so the value doesn't gain a
                     # spurious time ('2026-01-02' was becoming '2026-01-02 00:00:00').
-                    df[column] = _cast_datetime_strict(df[column], column, dtype).dt.date
+                    parsed = _cast_datetime_strict(df[column], column, dtype)
+                    if column == _TIMESTAMP_COLUMN:
+                        # Fold the cadence BEFORE dropping the time component.
+                        # ``_accumulate_temporal`` needs a datetime64 series (it
+                        # reads ``.dt.tz`` and its sample feeds
+                        # ``pd.DatetimeIndex``); the ``.dt.date`` result below is
+                        # object dtype and has no ``.dt`` accessor.
+                        #
+                        # Only the DATETIME/TIMESTAMP branch accumulated this
+                        # before. That was unreachable for a date-only column
+                        # while the validator required TIMESTAMP, but #489 makes
+                        # DATE legal — and an inferred schema types a date-only
+                        # column DATE — so daily series (the commonest
+                        # forecasting shape) would ingest cleanly while silently
+                        # omitting ``sampling_frequency`` from run metadata.
+                        self._accumulate_temporal(parsed)
+                    df[column] = parsed.dt.date
                 elif "TIME" in dtype.upper():
                     # TIME only — emit a plain time so the value doesn't gain a
                     # spurious (today's) date ('14:30:00' was becoming
                     # '2026-06-08 14:30:00', which MySQL TIME then truncates).
-                    df[column] = _cast_datetime_strict(df[column], column, dtype).dt.time
-                elif any(t in dtype.upper() for t in ("STRING", "TEXT", "VARCHAR", "CHAR")):
+                    df[column] = _cast_datetime_strict(
+                        df[column], column, dtype
+                    ).dt.time
+                elif any(
+                    t in dtype.upper() for t in ("STRING", "TEXT", "VARCHAR", "CHAR")
+                ):
                     # Coerce to pandas StringDtype so missing cells become pd.NA
                     # (not float NaN), then map pd.NA -> Python None so the DB
                     # binder writes SQL NULL. Without this, VARCHAR/CHAR columns
@@ -488,9 +512,10 @@ class CSVIngestor(BaseIngestor):
                     # longer fails validation; this completes the fix on the
                     # write side.
                     df[column] = (
-                        df[column].astype("string").astype(object).where(
-                            df[column].notna(), None
-                        )
+                        df[column]
+                        .astype("string")
+                        .astype(object)
+                        .where(df[column].notna(), None)
                     )
                     self._accumulate_categorical(column, df[column])
             except Exception as e:
@@ -634,9 +659,8 @@ class CSVIngestor(BaseIngestor):
         """
         if not self._emit_alignment_stats:
             return
-        if (
-            column in self._categorical_over_cap
-            or column in (self._categorical_excluded_resolved or ())
+        if column in self._categorical_over_cap or column in (
+            self._categorical_excluded_resolved or ()
         ):
             return
         vals = series.dropna()

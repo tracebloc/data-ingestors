@@ -23,6 +23,21 @@ The suite **auto-skips when no MySQL is reachable**, so the default `pytest`
 (unit) run is unaffected. CI runs it with a MySQL service in
 `.github/workflows/e2e.yml`.
 
+## Cross-repo contract suites
+
+Two files here assert not just "the ingest succeeded" but "what it stored is
+what the **training client** resolves", checked against the client's own
+derivation rule (transcribed in each file, since neither repo may import the
+other):
+
+- `test_semseg_client_contract_e2e.py` — the semseg `mask_id` contract
+  (backend#816).
+- `test_image_lookup_contract_e2e.py` — the image-lookup contract for every
+  file-bearing CV category: the file is named after `filename`, and `data_id`
+  names nothing on disk (tracebloc-engine#615, backend#1706). Its unit-level
+  sibling is `tests/test_ingest_storage_contract.py`, which also produces the
+  capture tracebloc-engine replays through its dataset readers.
+
 ## Known gaps (currently `xfail`)
 
 None — all 11 supported modalities ingest cleanly and are covered. The earlier

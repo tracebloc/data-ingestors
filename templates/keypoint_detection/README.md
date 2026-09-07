@@ -21,6 +21,8 @@ intent: train
 csv: /data/shared/pose/labels.csv
 images: /data/shared/pose/images/
 label: image_label
+target_size: [448, 448]   # width, height — must match your pose model's input
+number_of_keypoints: 9    # 17 for COCO pose; 9 for the shipped upper-body sample
 ```
 
 **3. Install:**

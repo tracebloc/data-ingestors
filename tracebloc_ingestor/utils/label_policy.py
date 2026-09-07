@@ -6,8 +6,17 @@ prediction — the raw value must NOT leak to the central backend. The
 on-prem-data principle is that only metadata crosses the cluster boundary;
 shipping the literal target value defeats it.
 
-This module is the single point where raw labels become bucket IDs before
-``APIClient.send_batch`` builds its payload.
+This module is the single point where raw labels become bucket IDs, and it runs
+at the CLUSTER BOUNDARY — inside ``APIClient.send_ingest_summary``, on the
+payload only. The row written to the on-prem MySQL table keeps the RAW target.
+
+That distinction is the whole bug of #486: the policy used to run in
+``RecordProcessor.clean_record``, i.e. on the record handed to the batch writer
+for INSERT. The stored target became a bucket id, the raw value was persisted
+nowhere, and the training client read hash buckets as labels — a hard failure
+for ``time_to_event_prediction`` (the engine requires the event column ∈ {0,1})
+and a silent one for ``tabular_regression`` / ``time_series_forecasting``. The
+local data is what training consumes; only metadata is in scope for bucketing.
 
 v1 strategy: stable hash-bucket. ``sha256(str(value))`` truncated to 8 bytes,
 modulo ``NUM_BUCKETS``. Properties:
@@ -29,8 +38,7 @@ from __future__ import annotations
 
 import hashlib
 import math
-from typing import Any
-
+from typing import Any, Dict, Iterable, List, Mapping
 
 # Number of buckets. 64 is enough granularity for the central backend to
 # reason about distribution without offering reconstruction power. Trade-off
@@ -71,8 +79,7 @@ def apply(value: Any, policy: str) -> Any:
     if policy == BUCKET:
         return _bucket(value)
     raise ValueError(
-        f"Unknown label policy: {policy!r}. "
-        f"Valid: {PASSTHROUGH!r}, {BUCKET!r}."
+        f"Unknown label policy: {policy!r}. " f"Valid: {PASSTHROUGH!r}, {BUCKET!r}."
     )
 
 
@@ -96,8 +103,83 @@ def _bucket(value: Any) -> int:
     return int.from_bytes(digest[:8], "big") % NUM_BUCKETS
 
 
+def apply_to_label_counts(counts: Mapping[Any, int], policy: str) -> Dict[Any, int]:
+    """Bucket the keys of a ``{label: row_count}`` map for the outbound payload.
+
+    Args:
+        counts: ``{label: row_count}`` as read back from the cluster DB
+            (``Database.get_label_counts``), keyed by the RAW label.
+        policy: ``"passthrough"`` (returned unchanged) or ``"bucket"``.
+
+    Returns:
+        Under ``bucket``, ``{"<bucket_id>": row_count}``. Counts of raw values
+        that share a bucket are SUMMED — with 64 buckets, collisions are
+        expected (a 300-label dataset averages ~5 raw values per bucket), and
+        dropping one of the colliding entries would under-report the dataset's
+        size to the backend.
+
+        Keys are STRINGS, matching what the backend has always received: the
+        bucket id used to be written to the VARCHAR ``label`` column and read
+        back as a string, and JSON object keys are strings regardless. Same
+        reason ``apply_to_samples`` stringifies.
+
+    Raises:
+        ValueError: if ``policy`` is unknown (via :func:`apply`).
+    """
+    if policy == PASSTHROUGH:
+        return dict(counts)
+    bucketed: Dict[Any, int] = {}
+    for label, count in counts.items():
+        key = str(apply(label, policy))
+        bucketed[key] = bucketed.get(key, 0) + count
+    return bucketed
+
+
+def apply_to_samples(
+    samples: Iterable[Mapping[str, Any]], policy: str
+) -> List[Dict[str, Any]]:
+    """Bucket the ``label`` of each outbound ``{data_id, label}`` sample.
+
+    Args:
+        samples: The preview records from ``Database.get_samples``, carrying
+            the RAW label.
+        policy: ``"passthrough"`` (labels returned unchanged) or ``"bucket"``.
+
+    Returns:
+        New sample dicts — the input mappings are never mutated. A sample
+        without a ``label`` key is passed through untouched rather than gaining
+        a bucketed ``None``: the absence is the backend's signal, and inventing
+        ``MISSING_LABEL_BUCKET`` for a shape that never had a label would
+        misreport it as a label the ingest saw.
+
+        The bucketed label is a STRING, not the raw ``int``. Pre-#486 the
+        bucket was stored in the VARCHAR ``label`` column and read back out by
+        ``Database.get_samples``, so ``data_samples[].label`` has always been a
+        JSON string — as it is for classification class names. The backend's
+        summary serializer takes ``samples`` as an untyped ``ListField`` and
+        would accept a number, but every consumer downstream of
+        ``UserDataSet.data_samples`` has only ever seen strings, so this keeps
+        the wire shape identical rather than betting on their tolerance
+        (review on #487).
+
+    Raises:
+        ValueError: if ``policy`` is unknown (via :func:`apply`).
+    """
+    if policy == PASSTHROUGH:
+        return [dict(sample) for sample in samples]
+    out: List[Dict[str, Any]] = []
+    for sample in samples:
+        record = dict(sample)
+        if "label" in record:
+            record["label"] = str(apply(record["label"], policy))
+        out.append(record)
+    return out
+
+
 __all__ = [
     "apply",
+    "apply_to_label_counts",
+    "apply_to_samples",
     "PASSTHROUGH",
     "BUCKET",
     "NUM_BUCKETS",

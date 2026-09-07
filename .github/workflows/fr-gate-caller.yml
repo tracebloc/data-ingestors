@@ -7,7 +7,12 @@ name: FR gate
 on:
   pull_request:
     branches: [staging, main]
-    types: [opened, reopened, synchronize, ready_for_review, labeled, unlabeled]
+    # `edited` is load-bearing, not decoration: it is the ONLY event GitHub fires
+    # when a PR's BASE branch changes. Without it a retargeted PR keeps the verdict
+    # from its old base forever -- `synchronize` needs a push, and a retarget has
+    # nothing to push, so no event can ever re-run the gate. Measured on
+    # .github#237, where a required check sat stale for four hours (backend#1945).
+    types: [opened, reopened, synchronize, ready_for_review, labeled, unlabeled, edited]
 
 jobs:
   gate:

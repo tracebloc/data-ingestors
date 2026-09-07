@@ -1,0 +1,33 @@
+name: Close stale backlog issues
+
+# THIN CALLER (backend#1979). The sweep used to be a 16-way copy of
+# `actions/stale`, which could not be given board awareness: eligibility has to
+# read the card's `Status`, and a script cannot be maintained as sixteen
+# byte-identical copies (backend#1597 item 1).
+#
+# The reusable it calls replaces `actions/stale` with `stale-backlog.py`, whose
+# eligibility is exactly `Backlog` — so a `North Stars` epic, or anything already
+# in the pipeline, can no longer be auto-closed by a sweep that could not see
+# which column it was in.
+#
+# NO INPUTS PASSED ON PURPOSE. Every input the callee declares is defaulted
+# (`project-number: 2`, `dry-run: false`, `strict: false`, `script-ref: main`),
+# and a caller may only pass inputs the `@main` callee declares — passing one it
+# does not have kills the run at startup_failure, which is why the callee had to
+# land on `main` before these callers could be armed at all.
+on:
+  schedule:
+    - cron: '0 0 * * 1'  # Mondays 00:00 UTC
+  workflow_dispatch: {}
+
+# `contents: read` only. The sweep's writes go through the App token minted
+# inside the reusable, not through GITHUB_TOKEN — and asking for more here than
+# the callee needs would exceed a minimal grant and fail the run at startup with
+# no jobs (the same constraint code-quality.yml documents).
+permissions:
+  contents: read
+
+jobs:
+  stale:
+    uses: tracebloc/.github/.github/workflows/stale-backlog.yml@main
+    secrets: inherit

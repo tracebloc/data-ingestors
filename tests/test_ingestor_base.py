@@ -219,13 +219,15 @@ def test_process_record_missing_unique_id_returns_none():
     assert ing.process_record({"a": "1", "uid": "   "}) is None
 
 
-def test_process_record_applies_bucket_label_policy():
+def test_process_record_stores_raw_label_under_bucket_policy():
+    """#486, inverting what this test used to assert. The stored row is what
+    the training client reads, so the bucket policy must NOT touch it — the
+    bucketing happens at the send boundary (APIClient.send_ingest_summary)."""
     from tracebloc_ingestor.utils.label_policy import BUCKET
 
     ing = make_ingestor(label_column="a", label_policy=BUCKET, category=None)
     rec = ing.process_record({"a": "12345", "filename": "f"})
-    # bucket policy hashes the raw value -> not equal to the raw value
-    assert rec["label"] != "12345"
+    assert rec["label"] == "12345"
 
 
 def test_process_record_reads_label_by_configured_key():

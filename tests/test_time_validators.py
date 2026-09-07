@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pandas as pd
+import pytest
 
 from tracebloc_ingestor.validators.time_format_validator import TimeFormatValidator
 from tracebloc_ingestor.validators.time_ordered_validator import TimeOrderedValidator
@@ -11,10 +12,10 @@ from tracebloc_ingestor.validators.time_before_today_validator import (
 )
 from tracebloc_ingestor.validators.time_to_event_validator import TimeToEventValidator
 
-
 # ---------------------------------------------------------------------------
 # TimeFormatValidator
 # ---------------------------------------------------------------------------
+
 
 def test_format_valid_timestamps_pass(make_csv):
     path = make_csv({"timestamp": ["2024-01-01", "2024-01-02"], "v": [1, 2]})
@@ -51,11 +52,85 @@ def test_format_schema_missing_timestamp_fails():
     assert "must contain a 'timestamp' column" in result.errors[0]
 
 
-def test_format_schema_wrong_type_fails():
-    v = TimeFormatValidator(schema={"timestamp": "DATE"})
+@pytest.mark.parametrize(
+    "wrong_type", ["VARCHAR(32)", "TEXT", "INT", "FLOAT", "BOOLEAN"]
+)
+def test_format_schema_wrong_type_fails(wrong_type):
+    """A non-calendar type is still rejected.
+
+    Previously this asserted on ``DATE``, which #489 makes legal — inferred
+    schemas can only ever produce ``DATE`` / ``DATETIME``. The check the test
+    exists for is "a timestamp column that isn't a date/time type is refused",
+    so it now covers the types that genuinely aren't.
+    """
+    v = TimeFormatValidator(schema={"timestamp": wrong_type})
     result = v.validate("ignored")
     assert not result.is_valid
-    assert "must be of type 'TIMESTAMP'" in result.errors[0]
+    assert "must be a date/time type" in result.errors[0]
+    assert wrong_type in result.errors[0]
+
+
+@pytest.mark.parametrize(
+    "declared",
+    [
+        "TIMESTAMP",
+        "DATETIME",
+        "DATE",
+        # Case and precision specifiers must not change the verdict.
+        "timestamp",
+        "datetime",
+        "date",
+        "DATETIME(6)",
+    ],
+)
+def test_format_schema_accepts_every_calendar_type(make_csv, declared):
+    """#489: every type an INFERRED schema can carry must be accepted.
+
+    ``schema_inference._infer_datetime`` emits ``DATETIME`` when a value has a
+    time of day and ``DATE`` otherwise — never ``TIMESTAMP``. Requiring exactly
+    ``TIMESTAMP`` rejected every inferred time-series-forecasting schema, so a
+    CLI ingest failed regardless of the data.
+    """
+    path = make_csv({"timestamp": ["2024-01-01", "2024-01-02"], "v": [1, 2]})
+    result = TimeFormatValidator(schema={"timestamp": declared}).validate(str(path))
+    assert result.is_valid, result.errors
+
+
+def test_format_schema_date_accepts_date_only_values(make_csv):
+    """The exact shape that failed in the field: date-only values, inferred DATE."""
+    path = make_csv(
+        {
+            "timestamp": ["2023-10-01", "2023-10-02", "2023-10-03"],
+            "value": [1.0, 2.0, 3.0],
+        }
+    )
+    result = TimeFormatValidator(
+        schema={"timestamp": "DATE", "value": "FLOAT"}
+    ).validate(str(path))
+    assert result.is_valid, result.errors
+
+
+def test_format_accepted_types_match_what_inference_can_emit():
+    """Pin the cross-module contract that #489 broke.
+
+    ``_infer_datetime`` is the only producer of a timestamp type for an inferred
+    schema. Every value it can return must be accepted here, or the CLI path
+    breaks again the next time either side changes.
+    """
+    from tracebloc_ingestor.schema_inference import _infer_datetime
+    from tracebloc_ingestor.validators.time_format_validator import (
+        TEMPORAL_TIMESTAMP_TYPES,
+    )
+
+    emitted = {
+        _infer_datetime(["2024-01-01", "2024-01-02"]),  # date only
+        _infer_datetime(["2024-01-01 09:30:00", "2024-01-02 10:00:00"]),  # with time
+    }
+    assert None not in emitted
+    assert emitted <= TEMPORAL_TIMESTAMP_TYPES, (
+        f"schema inference can emit {emitted - TEMPORAL_TIMESTAMP_TYPES}, which "
+        f"TimeFormatValidator would reject"
+    )
 
 
 def test_format_schema_timestamp_with_precision_passes(make_csv):
@@ -66,6 +141,7 @@ def test_format_schema_timestamp_with_precision_passes(make_csv):
 
 
 # --- locale-ambiguous dates (silent-corruption guard) ----------------------
+
 
 def test_format_ambiguous_eu_dates_rejected(make_csv):
     # "03.04.2026" is Apr 3 (day-first/EU) or Mar 4 (month-first/US); pandas'
@@ -93,6 +169,7 @@ def test_format_unambiguous_dates_not_flagged(make_csv):
 # ---------------------------------------------------------------------------
 # TimeOrderedValidator
 # ---------------------------------------------------------------------------
+
 
 def test_ordered_monotonic_passes(make_csv):
     path = make_csv({"timestamp": ["2024-01-01", "2024-01-02", "2024-01-03"]})
@@ -125,6 +202,7 @@ def test_ordered_no_data_for_non_csv():
 # TimeBeforeTodayValidator
 # ---------------------------------------------------------------------------
 
+
 def test_before_today_past_passes(make_csv):
     path = make_csv({"timestamp": ["2000-01-01", "2001-01-01"]})
     result = TimeBeforeTodayValidator().validate(str(path))
@@ -150,6 +228,7 @@ def test_before_today_missing_column_fails(make_csv):
 # ---------------------------------------------------------------------------
 # TimeToEventValidator (accepts DataFrames directly)
 # ---------------------------------------------------------------------------
+
 
 def test_to_event_valid_passes():
     df = pd.DataFrame({"time": [0, 1.5, 10], "event": [1, 0, 1]})

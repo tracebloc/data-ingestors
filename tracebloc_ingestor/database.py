@@ -19,9 +19,8 @@ from sqlalchemy import (
     Index,
     bindparam,
     inspect,
-
 )
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import URL, Engine
 from sqlalchemy import LargeBinary
 from sqlalchemy.dialects.mysql import insert, LONGBLOB, BLOB
 from sqlalchemy.exc import OperationalError, InterfaceError, DBAPIError
@@ -29,7 +28,6 @@ import logging
 import secrets
 
 from .utils import redaction
-from urllib.parse import quote
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 from tenacity import (
@@ -40,7 +38,7 @@ from tenacity import (
     before_sleep_log,
 )
 from .config import Config
-from .identifiers import MAX_COLUMN_IDENTIFIER_LENGTH
+from .identifiers import MAX_COLUMN_IDENTIFIER_LENGTH, quote_database_identifier
 from .utils.typo_suggest import suggest_type as _suggest_type
 
 # Configure unified logging with config
@@ -99,9 +97,7 @@ def _execute_with_retry(connection, stmt):
             # Swallow it so the original transient error propagates to
             # tenacity for the retry (or, on the last attempt, to the
             # caller's existing error path).
-            logger.debug(
-                f"connection.rollback() failed between retries: {rb_exc}"
-            )
+            logger.debug(f"connection.rollback() failed between retries: {rb_exc}")
         raise
 
 
@@ -116,33 +112,48 @@ class Database:
         )
 
     def _create_engine(self) -> Engine:
-        # First create database if it doesn't exist
-        base_connection_string = (
-            f"mysql+mysqlconnector://{self.config.DB_USER}:{quote(self.config.DB_PASSWORD)}"
-            f"@{self.config.DB_HOST}:{self.config.DB_PORT}"
+        # Built from components, never by string concatenation: URL.create lets
+        # SQLAlchemy escape each part for its own grammar. Concatenating
+        # DB_NAME onto the URL path made a '?' in the name a query separator —
+        # so DB_NAME="db?ssl_disabled=true" silently connected to `db` AND
+        # handed ssl_disabled=true to the driver as a real connect arg, an
+        # env-driven TLS downgrade. Percent-encoding the segment is NOT the fix:
+        # make_url decodes userinfo but leaves the path escaped, so the driver
+        # would then receive the literal 'db%3Fssl_disabled%3Dtrue' — a
+        # different database from the one the DDL below creates (backend#952).
+        base_url = URL.create(
+            "mysql+mysqlconnector",
+            username=self.config.DB_USER,
+            password=self.config.DB_PASSWORD,
+            host=self.config.DB_HOST,
+            port=self.config.DB_PORT,
         )
         # hide_parameters: SQLAlchemy otherwise appends every statement
         # parameter — i.e. whole rows of customer data — to error strings
         # that get logged (#226).
-        engine = create_engine(
-            base_connection_string, pool_pre_ping=True, hide_parameters=True
-        )
+        engine = create_engine(base_url, pool_pre_ping=True, hide_parameters=True)
 
         with engine.connect() as connection:
+            # DB_NAME is operator/env-supplied and interpolated into DDL that
+            # can't be parameterized, so it must be quoted (backend#952).
             connection.execute(
-                text(f"CREATE DATABASE IF NOT EXISTS {self.config.DB_NAME}")
+                text(
+                    "CREATE DATABASE IF NOT EXISTS "
+                    f"{quote_database_identifier(self.config.DB_NAME)}"
+                )
             )
             connection.commit()
 
         # Now connect to the specific database
-        connection_string = f"{base_connection_string}/{self.config.DB_NAME}"
         return create_engine(
-            connection_string, pool_pre_ping=True, hide_parameters=True
+            base_url.set(database=self.config.DB_NAME),
+            pool_pre_ping=True,
+            hide_parameters=True,
         )
 
     def _get_sqlalchemy_type(self, mysql_type: str):
         """Convert MySQL type to SQLAlchemy type.
-        
+
         Extracts the base type (before parentheses) and matches exactly to avoid
         substring issues (e.g., "DATE" matching "DATETIME").
         """
@@ -169,10 +180,10 @@ class Database:
             "BLOB": BLOB,
             "LONGBLOB": LONGBLOB,
         }
-        
+
         mysql_type_upper = mysql_type.upper().strip()
         base_type = mysql_type_upper.split("(")[0].split()[0]
-        
+
         if base_type in type_mapping:
             alchemy_type = type_mapping[base_type]
             # Extract parenthesised arguments. Two shapes:
@@ -261,8 +272,16 @@ class Database:
         # is intentionally excluded — it's the user-facing label column the
         # framework maps onto the standard `label` column.
         _RESERVED = {
-            "id", "created_at", "updated_at", "status", "data_intent",
-            "data_id", "filename", "extension", "annotation", "ingestor_id",
+            "id",
+            "created_at",
+            "updated_at",
+            "status",
+            "data_intent",
+            "data_id",
+            "filename",
+            "extension",
+            "annotation",
+            "ingestor_id",
         }
         _collisions = sorted(_RESERVED & set(schema))
         if _collisions:
@@ -352,9 +371,17 @@ class Database:
             # to work around an unrelated error is exactly this case). Surface an
             # actionable error naming the drift instead.
             _STANDARD_COLUMNS = {
-                "id", "created_at", "updated_at", "status", "label",
-                "data_intent", "data_id", "filename", "extension",
-                "annotation", "ingestor_id",
+                "id",
+                "created_at",
+                "updated_at",
+                "status",
+                "label",
+                "data_intent",
+                "data_id",
+                "filename",
+                "extension",
+                "annotation",
+                "ingestor_id",
             }
             existing_features = {c.name for c in table.columns} - _STANDARD_COLUMNS
             expected_features = set(schema) - _STANDARD_COLUMNS
@@ -518,9 +545,7 @@ class Database:
                 # in #191 but dropped by the squash-merge — re-applying).
                 insert_stmt = insert(table)
                 update_dict = {
-                    column.name: text(
-                        f"VALUES(`{column.name.replace('`', '``')}`)"
-                    )
+                    column.name: text(f"VALUES(`{column.name.replace('`', '``')}`)")
                     for column in table.columns
                     if column.name not in ["id", "created_at", "data_id"]
                 }
@@ -578,9 +603,7 @@ class Database:
                             result["failures"].append(
                                 {
                                     "record": record,
-                                    "error": redaction.safe_db_error(
-                                        individual_error
-                                    ),
+                                    "error": redaction.safe_db_error(individual_error),
                                 }
                             )
                             connection.rollback()
@@ -964,7 +987,9 @@ class Database:
                             f"WHERE ingestor_id IS NOT NULL AND ingestor_id <> ''"
                         ),
                     ).fetchall()
-            except Exception as exc:  # noqa: BLE001 — skip the table, continue the sweep
+            except (
+                Exception
+            ) as exc:  # noqa: BLE001 — skip the table, continue the sweep
                 logger.warning(
                     "list_dataset_ingestor_ids: skipping table %s — could not read "
                     "ingestor_ids (%s)",
@@ -1005,6 +1030,105 @@ class Database:
         for label, cnt in rows:
             key = label if label is not None else ""
             counts[key] = counts.get(key, 0) + cnt
+        return counts
+
+    def get_tag_counts(self, table_name: str, ingestor_id: str) -> Dict[str, int]:
+        """
+        Return ``{tag: token_count}`` for a token-classification run, exploding
+        each row's whitespace-joined BIO tag SEQUENCE into individual tags.
+
+        token_classification stores the whole per-row tag sequence (one tag per
+        word — e.g. ``"O B-PER I-PER O"``) in the ``label`` column, so the
+        row-unit :meth:`get_label_counts` counts distinct SEQUENCE STRINGS as
+        classes (dozens of them) instead of the handful of distinct TAGS the
+        model head is built on. output_classes must be the distinct tags, so
+        this explodes the sequence and tallies token occurrences per tag
+        (backend#1747).
+
+        The ``GROUP BY label`` still runs in SQL, so the row set materialised
+        here is bounded to the DISTINCT sequence strings; each is split once and
+        weighted by its row count, making the Python work O(distinct sequences),
+        not O(rows). A NULL/empty label carries no tags and contributes nothing
+        (unlike :meth:`get_label_counts`, which reports NULL under the ``""``
+        key — an empty class is meaningless for a per-token tag set).
+
+        Args:
+            table_name: Name of the table to query
+            ingestor_id: UUID of the current ingest run
+
+        Returns:
+            Dict mapping each distinct BIO tag to its total token-occurrence
+            count across the run's rows
+        """
+        with self.engine.connect() as conn:
+            rows = conn.execute(
+                text(
+                    f"SELECT label, COUNT(*) AS cnt "
+                    f"FROM `{table_name.replace('`', '``')}` "
+                    f"WHERE ingestor_id = :ingestor_id "
+                    f"GROUP BY label"
+                ),
+                {"ingestor_id": ingestor_id},
+            ).fetchall()
+        counts: Dict[str, int] = {}
+        for label, row_count in rows:
+            if label is None:
+                continue
+            for tag in str(label).split():
+                counts[tag] = counts.get(tag, 0) + row_count
+        return counts
+
+    def get_class_histogram_counts(
+        self, table_name: str, ingestor_id: str
+    ) -> Dict[str, int]:
+        """
+        Return ``{class: box_count}`` for an object-detection run, decoding each
+        row's encoded per-image class histogram (backend#1006).
+
+        Under the per-image record model one row is one IMAGE, and its ``label``
+        cell is that image's class multiset encoded as ``"car:3 sign:1"``
+        (:mod:`tracebloc_ingestor.utils.od_label_semantics`). The row-unit
+        :meth:`get_label_counts` would therefore count distinct COMPOSITIONS as
+        classes — ``"car:3 sign:1"`` reported as one class — which is the
+        token_classification failure of backend#1747 one category over. This
+        decodes each cell and weights it by the number of rows carrying it.
+
+        The two units this produces are deliberate and documented at the point
+        of emission: ``labels`` counts BOXES (so class balance stays comparable
+        with every OD dataset ingested before #1006), while ``record_count``
+        counts IMAGES. See ``od_label_semantics`` for why.
+
+        The ``GROUP BY label`` still runs in SQL, so the row set materialised
+        here is bounded to DISTINCT compositions; each is decoded once and
+        weighted by its row count, making the Python work O(distinct
+        compositions), not O(rows). A NULL/empty label carries no classes and
+        contributes nothing.
+
+        Args:
+            table_name: Name of the table to query
+            ingestor_id: UUID of the current ingest run
+
+        Returns:
+            Dict mapping each distinct class name to its total box count
+        """
+        from .utils.od_label_semantics import decode_image_label
+
+        with self.engine.connect() as conn:
+            rows = conn.execute(
+                text(
+                    f"SELECT label, COUNT(*) AS cnt "
+                    f"FROM `{table_name.replace('`', '``')}` "
+                    f"WHERE ingestor_id = :ingestor_id "
+                    f"GROUP BY label"
+                ),
+                {"ingestor_id": ingestor_id},
+            ).fetchall()
+        counts: Dict[str, int] = {}
+        for label, row_count in rows:
+            if label is None:
+                continue
+            for cls, per_image in decode_image_label(str(label)).items():
+                counts[cls] = counts.get(cls, 0) + per_image * row_count
         return counts
 
     def get_label_sequence_counts(
@@ -1174,7 +1298,10 @@ class Database:
                 ),
                 {"ingestor_id": ingestor_id, "limit": limit},
             ).fetchall()
-        return [{"data_id": row[0], "label": row[1] if row[1] is not None else ""} for row in rows]
+        return [
+            {"data_id": row[0], "label": row[1] if row[1] is not None else ""}
+            for row in rows
+        ]
 
     def get_table_schema(self, table_name: str) -> Dict[str, str]:
         """
@@ -1214,10 +1341,7 @@ class Database:
 
             # MySQL has no native BOOLEAN type: BOOL columns are created — and
             # therefore reflected — as TINYINT(1).
-            if (
-                type_name == "TINYINT"
-                and getattr(col_type, "display_width", None) == 1
-            ):
+            if type_name == "TINYINT" and getattr(col_type, "display_width", None) == 1:
                 schema[column["name"]] = "BOOLEAN"
                 continue
 

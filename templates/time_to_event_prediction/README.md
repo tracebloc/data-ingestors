@@ -39,7 +39,7 @@ helm install my-survival-dataset tracebloc/ingestor \
   --set-file ingestConfig=./ingest.yaml
 ```
 
-`time_column:` names the column that holds the time-to-event value. `label.policy: bucket` is required so the central backend never sees raw target values. Canonical example: [`examples/yaml/time_to_event_prediction.yaml`](../../examples/yaml/time_to_event_prediction.yaml). Full chart docs: [`tracebloc/client/ingestor/README.md`](https://github.com/tracebloc/client/blob/develop/ingestor/README.md).
+`time_column:` names the column that holds the time-to-event value. `label.policy: bucket` is required so the central backend never sees raw target values. Bucketing applies to the metadata payload only: the row stored in your cluster's MySQL keeps the raw target, which is what training reads (#486). Canonical example: [`examples/yaml/time_to_event_prediction.yaml`](../../examples/yaml/time_to_event_prediction.yaml). Full chart docs: [`tracebloc/client/ingestor/README.md`](https://github.com/tracebloc/client/blob/develop/ingestor/README.md).
 
 ## Directory Structure
 

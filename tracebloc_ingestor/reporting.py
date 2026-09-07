@@ -59,6 +59,17 @@ class ConsoleRenderer:
         print(
             f"{BOLD}Ingestor ID:{RESET}                {BLUE}{summary.ingestor_id}{RESET}"
         )
+        # THE NAME THE OPERATOR CAN ACTUALLY USE (tracebloc/backend#2895).
+        # Under PER_INGESTION_TABLES this is the ds_<hex> handle, not the label
+        # the run was started with; the CLI parses this banner and had no other
+        # way to learn it, so `data delete <--name>` failed on a dataset that
+        # had just been created. Printed unconditionally: with the flag off it
+        # is the label, so the line is true in both modes and the CLI needs no
+        # knowledge of the flag.
+        if summary.destination_table:
+            print(
+                f"{BOLD}Destination table:{RESET}          {BLUE}{summary.destination_table}{RESET}"
+            )
         # Main statistics with icons and colors
         print(
             f"{BOLD}📈 Total Records Found:{RESET}     {BLUE}{summary.total_records:,}{RESET}"

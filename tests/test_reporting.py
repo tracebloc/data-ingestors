@@ -72,3 +72,40 @@ def test_zero_total_records_does_not_divide_by_zero():
     # An empty source must render without raising (no success-rate bar).
     out = _render(IngestionSummary("empty", 0, 0, 0, 0, 0, 0, 0))
     assert "📊 INGESTION SUMMARY" in out
+
+
+# ---------------------------------------------------------------------------
+#  backend#2895 — the banner must name the table that was actually written.
+#
+#  Under PER_INGESTION_TABLES the row store is `ds_<uuid4().hex>` while the
+#  run's `table_name` stays the user-facing LABEL. This banner is the ONLY
+#  channel the CLI parses, and it carried the label — so `tracebloc data
+#  ingest --name X` reported `"table": "X"` for a table that does not exist,
+#  and `data delete X` then failed on a dataset that had just been created.
+#  Both signals agreed and both were wrong, which is what made it silent.
+# ---------------------------------------------------------------------------
+
+
+def test_destination_table_is_rendered_when_it_differs_from_the_label():
+    handle = "ds_" + "b" * 32
+    out = _render(IngestionSummary("ing-5", 10, 10, 10, 10, 0, 0, 0, handle))
+    assert "Destination table:" in out
+    # The HANDLE, not the label — this is the whole finding.
+    assert handle in out
+
+
+def test_destination_table_line_is_absent_when_unset():
+    # Flag-off / legacy callers construct the tuple without the field. The
+    # banner must stay byte-identical for them, so the line is omitted rather
+    # than printed empty — an empty "Destination table:" would parse as a real
+    # (blank) answer on the CLI side, which is worse than no line at all.
+    out = _render(IngestionSummary("ing-6", 10, 10, 10, 10, 0, 0, 0))
+    assert "Destination table:" not in out
+    assert "ing-6" in out
+
+
+def test_legacy_positional_construction_still_works():
+    # The field is trailing + defaulted precisely so every existing call site
+    # stays valid. If this breaks, the change is not additive.
+    s = IngestionSummary("ing-7", 5, 5, 5, 5, 0, 0, 0)
+    assert s.destination_table == ""

@@ -7,13 +7,10 @@ duplicating them. The per-table salt keeps ids unlinkable across tables and
 never leaves the cluster.
 """
 
-
 import pytest
 
 from tracebloc_ingestor.cli.conventions import resolve
 from tracebloc_ingestor.ingestors.record_processor import RecordProcessor
-from tracebloc_ingestor.utils import label_policy as label_policy_module
-
 
 SALT_A = "a" * 64
 SALT_B = "b" * 64
@@ -26,7 +23,6 @@ def make_processor(salt=SALT_A, strategy="content_hash", unique_id_column=None):
         label_column="target",
         annotation_column=None,
         unique_id_column=unique_id_column,
-        label_policy=label_policy_module.PASSTHROUGH,
         ingestor_id="run-1",
         data_id_strategy=strategy,
         table_salt=salt,
@@ -52,7 +48,6 @@ def test_same_record_same_salt_same_id_across_instances():
         label_column="target",
         annotation_column=None,
         unique_id_column=None,
-        label_policy=label_policy_module.PASSTHROUGH,
         ingestor_id="run-2-after-retry",  # different run
         data_id_strategy="content_hash",
         table_salt=SALT_A,
@@ -199,7 +194,9 @@ def _build(config):
 
     db = MagicMock()
     db.get_or_create_table_salt.return_value = SALT_A
-    return _build_ingestor(database=db, api_client=MagicMock(), resolved=resolve(config))
+    return _build_ingestor(
+        database=db, api_client=MagicMock(), resolved=resolve(config)
+    )
 
 
 @pytest.mark.parametrize("source_key", ["csv", "json"])
