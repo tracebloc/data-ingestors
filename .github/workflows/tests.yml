@@ -27,6 +27,20 @@ jobs:
     name: pytest
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # JOB-LEVEL, not on the one step that needs it (backend#3338). The marked
+    # comparison is SELECTED by a single step, but the variable has to be
+    # visible to EVERY step that runs pytest here: `test_ci_supplies_the_real_
+    # consumers` fails when `GITHUB_ACTIONS` is set and this is not, so a future
+    # step that runs the suite without supplying consumers is a red instead of a
+    # marker nobody notices is missing. Scoping it to one step would make that
+    # guard fire on the `make coverage` step and be useless.
+    #
+    # The paths here are asserted against the checkout steps below by
+    # `TestTheRequiredJobSuppliesTheRealConsumers`, so an entry added in one
+    # place and not the other is a red in the suite rather than a walk that
+    # quietly visits one fewer repo.
+    env:
+      CONTRACT_CONSUMER_CHECKOUTS: tracebloc/cli=.consumers/cli
     strategy:
       fail-fast: false
       matrix:
@@ -106,18 +120,11 @@ jobs:
         # tables (Bugbot, #461), which is why the Makefile is the narrow one.
         run: make coverage
 
-      # The marker `make coverage` deselects, selected here with the checkouts
-      # named. Separate step so the log says which comparison failed, and so an
-      # absent checkout fails HERE -- loudly, in the required context -- instead
-      # of being absorbed by a skip.
-      #
-      # The paths are asserted against these very lines by
-      # `TestTheRequiredJobSuppliesTheRealConsumers`, so a checkout added above
-      # without a matching entry (or the reverse) is a red in the suite rather
-      # than a walk that quietly visits one fewer repo.
+      # The marker `make coverage` deselects, selected here. Separate step so the
+      # log says which comparison failed, and so an absent checkout fails HERE
+      # -- loudly, in the required context -- instead of being absorbed by a
+      # skip. The checkouts come from the job-level `env:` above.
       - name: Compare against the real consumer checkouts
-        env:
-          CONTRACT_CONSUMER_CHECKOUTS: tracebloc/cli=.consumers/cli
         run: make real-consumers
 
       - name: Coverage summary

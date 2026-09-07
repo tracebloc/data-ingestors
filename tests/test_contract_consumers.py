@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 from typing import Dict, List
@@ -487,12 +488,17 @@ class TestTheRealReposAgreeToday:
         assert disagreements(root, contracts) == []
 
 
-def _tests_workflow_steps() -> List[dict]:
-    """The steps of the required `pytest` job, from tests.yml."""
+def _tests_workflow_job() -> dict:
+    """The required `pytest` job, from tests.yml."""
     import yaml
 
     parsed = yaml.safe_load((_repo_root() / ".github/workflows/tests.yml").read_text())
-    return list(parsed["jobs"]["pytest"]["steps"])
+    return parsed["jobs"]["pytest"]
+
+
+def _tests_workflow_steps() -> List[dict]:
+    """The steps of the required `pytest` job, from tests.yml."""
+    return list(_tests_workflow_job()["steps"])
 
 
 def _real_consumer_checkouts_in_tests_workflow() -> Dict[str, str]:
@@ -599,22 +605,27 @@ class TestTheRequiredJobSuppliesTheRealConsumers:
             f"of naming the ref that reads us: {offenders}"
         )
 
-    def _real_consumers_step(self) -> dict:
+    def test_the_required_job_selects_the_marker(self):
         for step in _tests_workflow_steps():
             if REAL_CONSUMERS_TARGET in (step.get("run") or ""):
-                return step
+                return
         raise AssertionError(
             f"no step in tests.yml runs `make {REAL_CONSUMERS_TARGET}`, so the "
             f"marked comparison is never SELECTED -- which is the "
             f"permanently-skipped test of backend#3338 wearing a marker"
         )
 
-    def test_the_required_job_selects_the_marker_and_names_the_checkouts(self):
-        step = self._real_consumers_step()
-        env = step.get("env") or {}
+    def test_the_required_job_names_the_checkouts_at_JOB_level(self):
+        # JOB level, not step level, and the distinction is load-bearing: the
+        # guard below fails when GITHUB_ACTIONS is set and this variable is not,
+        # so it has to be visible to EVERY step that runs pytest in this job.
+        # Scoped to the one step that selects the marker, that guard would fire
+        # on the `make coverage` step instead and have to be weakened.
+        env = _tests_workflow_job().get("env") or {}
         assert CHECKOUTS_ENV in env, (
-            f"the `make {REAL_CONSUMERS_TARGET}` step does not set "
-            f"{CHECKOUTS_ENV}, so the comparison would fail for want of inputs"
+            f"the pytest job does not set {CHECKOUTS_ENV} at job level, so a "
+            f"step that runs the suite without supplying consumers would "
+            f"deselect the comparison instead of failing"
         )
         supplied = _parse_checkouts(
             str(env[CHECKOUTS_ENV]), f"{CHECKOUTS_ENV} in tests.yml"
@@ -639,6 +650,76 @@ class TestTheRequiredJobSuppliesTheRealConsumers:
         assert f"{REAL_CONSUMERS_MARKER}:" in ini, (
             "the marker is not registered in pytest.ini; with --strict-markers "
             "that is an error, and without it a typo silently selects nothing"
+        )
+
+    def test_ci_without_the_checkouts_variable_is_a_FAILURE_not_a_deselect(self):
+        """The belt to the workflow assertions' braces, and NOT marked.
+
+        Everything else in this class reads the workflow FILE, so it catches a
+        human editing it. It does not catch the runtime shape: a job that runs
+        this suite while `CONTRACT_CONSUMER_CHECKOUTS` is absent or empty. There
+        the marked test is simply DESELECTED, nothing fails, and the required
+        context goes green having compared nothing -- backend#3338 again, one
+        level out.
+
+        So this test is unmarked, runs in every CI invocation of the suite
+        including `make coverage`, and turns "CI, no consumers supplied" into a
+        red. Locally `GITHUB_ACTIONS` is unset and it says nothing, which is the
+        only environment where not having a checkout is legitimate.
+        """
+        if not os.environ.get("GITHUB_ACTIONS"):
+            return
+        raw = os.environ.get(CHECKOUTS_ENV)
+        assert raw and raw.strip(), (
+            f"running under GITHUB_ACTIONS with {CHECKOUTS_ENV}="
+            f"{raw!r}. In CI the real-consumer comparison is not optional: an "
+            f"absent or empty variable deselects it silently and the required "
+            f"context goes green having compared nothing. Set it at JOB level "
+            f"in the workflow, as tests.yml does."
+        )
+        # Non-empty is not the same as usable -- parse it, so a malformed entry
+        # is a red here rather than inside the marked test that CI might not
+        # have selected.
+        assert set(_parse_checkouts(raw, CHECKOUTS_ENV)) == set(
+            REAL_CONSUMERS_IN_THE_REQUIRED_JOB
+        ), (
+            f"CI supplied {raw!r}, which is not the "
+            f"{list(REAL_CONSUMERS_IN_THE_REQUIRED_JOB)} this job claims to "
+            f"compare"
+        )
+
+    def test_the_deselection_is_VISIBLE_in_the_run_count(self):
+        """A marker that deselects silently is a skip wearing a different hat.
+
+        The whole argument for a marker over `pytest.skip` is that the run says
+        so. That is a property of pytest's output, not of our code, so it is
+        measured rather than assumed: collect this file with the default options
+        and the summary must report exactly one deselected test.
+        """
+        proc = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "pytest",
+                "--collect-only",
+                "-q",
+                str(Path(__file__)),
+            ],
+            cwd=str(_repo_root()),
+            capture_output=True,
+            text=True,
+        )
+        # `--collect-only` returns 0 when it collected something; a non-zero
+        # exit is "I could not tell", which is a failure and not a pass.
+        assert proc.returncode == 0, (
+            f"collecting this file failed ({proc.returncode}):\n"
+            f"{proc.stdout}\n{proc.stderr}"
+        )
+        assert "1 deselected" in proc.stdout, (
+            f"the default run does not report the deselection, so a developer "
+            f"cannot tell the real-consumer comparison did not run -- which is "
+            f"exactly what made the old `skip` invisible. Summary was:\n"
+            f"{proc.stdout.strip().splitlines()[-1] if proc.stdout.strip() else '(empty)'}"
         )
 
     def test_the_makefile_target_selects_the_marker(self):
