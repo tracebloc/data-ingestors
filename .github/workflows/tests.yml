@@ -35,6 +35,49 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # A REAL CONSUMER, IN THE REQUIRED CONTEXT (backend#3338).
+      #
+      # `tests/test_contract_consumers.py` covers the comparison LOGIC against
+      # fixtures, and one test in it claimed to point that logic at a real repo.
+      # It looked for a checkout BESIDE this one and skipped when there was
+      # none -- and there never was one: this job has a single checkout, so the
+      # directory GitHub creates above `$GITHUB_WORKSPACE` holds exactly it, and
+      # the job that DOES check a consumer out (contract-consumers.yml) puts it
+      # INSIDE the workspace and never runs pytest. That test skipped on every
+      # run of its life while its docstring said "CI provides one".
+      #
+      # WHY THIS ONE AND NOT `e2e-test-agent`. `cli` is PUBLIC, so
+      # `actions/checkout` reaches it with the default read-only `github.token`
+      # -- which fork PRs DO receive. `e2e-test-agent` is private and needs an
+      # App token, which GitHub withholds from forks; requiring it here would
+      # turn this context red on every external contribution, and avoiding that
+      # is exactly why #536 put the private consumer in a separate, unrequired
+      # job. It stays there. This adds the half that CAN be required.
+      #
+      # CONSEQUENCE, STATED RATHER THAN DISCOVERED: this makes CLI drift a red
+      # on EVERY PR here, not only on schema PRs (contract-consumers.yml is
+      # path-filtered). That is the intended direction -- a consumer that cannot
+      # read what `develop` publishes is a broken state of `develop`, and every
+      # PR merging into it inherits the break -- but it does mean an unrelated
+      # PR can be blocked by a change in another repo. The failure message names
+      # the fix and its order, and `SupportedLayoutVersions` in the CLI is one
+      # map entry.
+      - name: Check out the public contract consumer
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: tracebloc/cli
+          # NAMED, not inherited (the rule contract-consumers.yml already
+          # states): `develop` is the ref whose CI reads this repo, so it is the
+          # head that actually meets ours. The sibling lookup this replaces
+          # pinned nothing on either side, and a developer checkout 63 commits
+          # stale produced a red for a disagreement the real consumer does not
+          # have.
+          ref: develop
+          path: .consumers/cli
+          # Nothing here pushes or re-fetches, and the PR's own test code runs
+          # against this directory immediately afterwards.
+          persist-credentials: false
+
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ matrix.python }}
@@ -62,6 +105,20 @@ jobs:
         # machine with MySQL up runs real ingestion that creates and drops
         # tables (Bugbot, #461), which is why the Makefile is the narrow one.
         run: make coverage
+
+      # The marker `make coverage` deselects, selected here with the checkouts
+      # named. Separate step so the log says which comparison failed, and so an
+      # absent checkout fails HERE -- loudly, in the required context -- instead
+      # of being absorbed by a skip.
+      #
+      # The paths are asserted against these very lines by
+      # `TestTheRequiredJobSuppliesTheRealConsumers`, so a checkout added above
+      # without a matching entry (or the reverse) is a red in the suite rather
+      # than a walk that quietly visits one fewer repo.
+      - name: Compare against the real consumer checkouts
+        env:
+          CONTRACT_CONSUMER_CHECKOUTS: tracebloc/cli=.consumers/cli
+        run: make real-consumers
 
       - name: Coverage summary
         if: always()
