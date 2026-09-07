@@ -506,8 +506,53 @@ def _real_consumer_checkouts_in_tests_workflow() -> Dict[str, str]:
     for step in _tests_workflow_steps():
         with_ = step.get("with") or {}
         if "checkout" in step.get("uses", "") and with_.get("repository"):
-            out[with_["repository"]] = with_.get("path")
+            # A cross-repo checkout with no `path:` lands ON TOP of this repo.
+            # Refused here rather than returned as `None`, which the caller
+            # would turn into `Path(None)` -- a TypeError whose message names
+            # neither the repo nor the mistake.
+            if not with_.get("path"):
+                raise AssertionError(
+                    f"tests.yml checks out {with_['repository']} with no "
+                    f"`path:`, so it would land on top of this repo instead of "
+                    f"its own directory"
+                )
+            out[with_["repository"]] = with_["path"]
     return out
+
+
+class TestTheCheckoutListIsParsedOrRefused:
+    """`_parse_checkouts` reads both the env var and the workflow's `env:` block.
+
+    Its refusal paths are the ones that decide whether "I could not read this"
+    reaches the caller or is quietly folded into "nobody supplied anything" --
+    two states with different fixes. So they are exercised rather than assumed.
+    """
+
+    def test_a_comma_or_newline_separated_list_is_read(self):
+        parsed = _parse_checkouts(" a/one=p1 ,\n b/two=p2 \n\n", "test")
+        assert parsed == {"a/one": "p1", "b/two": "p2"}
+        assert len(parsed) == 2
+
+    def test_an_unset_variable_is_empty_rather_than_an_error(self):
+        # The one benign empty: nothing was supplied. The CALLER decides what
+        # that means, and in the real-consumer test it means failure.
+        assert _parse_checkouts("", "test") == {}
+
+    def test_an_entry_without_a_path_is_refused(self):
+        with pytest.raises(AssertionError, match="is not REPO=PATH"):
+            _parse_checkouts("tracebloc/cli", "test")
+
+    def test_an_entry_with_an_empty_half_is_refused(self):
+        with pytest.raises(AssertionError, match="is not REPO=PATH"):
+            _parse_checkouts("tracebloc/cli=", "test")
+        with pytest.raises(AssertionError, match="is not REPO=PATH"):
+            _parse_checkouts("=.consumers/cli", "test")
+
+    def test_the_same_repo_named_twice_is_refused(self):
+        # Silently keeping the last would compare one checkout while the run
+        # believes it compared the other.
+        with pytest.raises(AssertionError, match="twice"):
+            _parse_checkouts("a/one=p1,a/one=p2", "test")
 
 
 class TestTheRequiredJobSuppliesTheRealConsumers:
@@ -536,11 +581,6 @@ class TestTheRequiredJobSuppliesTheRealConsumers:
         assert set(checkouts) == set(REAL_CONSUMERS_IN_THE_REQUIRED_JOB), (
             f"tests.yml checks out {sorted(checkouts)} but the required job "
             f"claims to compare {sorted(REAL_CONSUMERS_IN_THE_REQUIRED_JOB)}"
-        )
-        missing_path = [repo for repo, path in checkouts.items() if not path]
-        assert not missing_path, (
-            f"these checkouts land on top of this repo instead of their own "
-            f"directory: {missing_path}"
         )
 
     def test_every_consumer_checkout_here_is_pinned_to_a_named_ref(self):
