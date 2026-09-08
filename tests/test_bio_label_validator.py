@@ -221,3 +221,165 @@ def test_csv_padded_filename_header_still_resolves(texts_dir, tmp_path):
     result = BIOLabelValidator().validate(str(path))
 
     assert result.is_valid, result.errors
+
+
+# ---------------------------------------------------------------------------
+# tracebloc/backend#3352 — a row with NO tags at all
+#
+# THE DEFECT THIS SECTION EXISTS FOR. The count check is a MISMATCH check:
+# `word_count != len(tags)`. On a row whose label is whitespace-only and whose
+# `.txt` is empty, both sides are zero, `0 == 0` passes, and the row is ingested
+# as a training sample carrying no annotation — every token resolves to `-100`.
+# The guard existed to enforce "one tag per word" and was satisfied vacuously on
+# exactly the input it should reject.
+#
+# NOT ASSERTED AS AN ERROR COUNT, and that is the whole point. Measured on the
+# three-row manifest below, BEFORE the fix and AFTER it:
+#
+#   before:  2 errors — BOTH from row 0 (a phantom "nan" tag plus the count
+#            mismatch that phantom tag invents); row 1 passes silently
+#   after:   2 errors — one per bad row
+#
+# So `len(errors) == 2` holds in both worlds and proves nothing. What separates
+# them is WHICH ROWS are named, so that is what these assert.
+
+
+def _rejected_rows(result):
+    """The set of row indices named by the errors, e.g. ``{0, 1}``."""
+    import re
+
+    return {
+        int(m.group(1)) for err in result.errors if (m := re.match(r"Row (\d+)", err))
+    }
+
+
+@pytest.fixture
+def three_row_manifest(texts_dir):
+    """One blank label, one whitespace-only label, one well-formed row.
+
+    The blank and whitespace-only cells are DIFFERENT shapes and only one of
+    them was ever caught: read through pandas a blank cell becomes ``NaN``
+    (rejected, but as a bogus ``"nan"`` tag), while ``" "`` survives as a
+    string and passed. Both are built here so a fix that handles one and not
+    the other cannot look complete.
+    """
+    _write(texts_dir, "blank", "")
+    _write(texts_dir, "white", "   ")
+    _write(texts_dir, "good", "Hello Ada")
+    return pd.DataFrame(
+        {
+            "filename": ["blank", "white", "good"],
+            "label": [float("nan"), " ", "O B-PER"],
+        }
+    )
+
+
+def test_a_row_with_no_tags_is_rejected_whether_blank_or_whitespace(
+    validator, three_row_manifest
+):
+    result = validator.validate(three_row_manifest)
+    rejected = _rejected_rows(result)
+    # Asserted FIRST because it is the specific claim and it carries the
+    # diagnosis. `not result.is_valid` and the error count are both true of
+    # other, less interesting failures, and reddening on one of those instead
+    # would hide which rows the validator actually let through.
+    assert rejected == {0, 1}, (
+        f"rows {sorted(rejected)} were rejected, expected {{0, 1}} — a row whose "
+        "label holds no BIO tags was accepted as a training sample, because "
+        "0 words against 0 tags satisfies the count check (backend#3352)"
+    )
+    assert not result.is_valid
+    # A COUNT as well as the set, so a future edit that reports one row twice
+    # instead of two rows once cannot pass: one error per rejected row. This is
+    # not redundant with the set — measured: with only half the fix in place the
+    # set is right and the count is 3, because the blank cell is reported both
+    # as a phantom "nan" tag and as having no tags.
+    assert len(result.errors) == len(rejected) == 2
+    for err in result.errors:
+        assert "holds no BIO tags" in err
+
+
+def test_the_well_formed_row_is_not_swept_up(validator, three_row_manifest):
+    """The other half of the invariant: refusing everything must not pass.
+
+    Without this, a check that rejected every row would satisfy the test above.
+    """
+    result = validator.validate(three_row_manifest)
+    assert 2 not in _rejected_rows(result)
+    assert result.metadata["rows_checked"] == 3
+
+
+def test_a_blank_label_says_the_label_is_empty_not_that_nan_is_a_bad_tag(
+    validator, texts_dir
+):
+    """The blank cell WAS rejected — for the wrong reason, and twice.
+
+    `str(NaN)` is the literal `"nan"`, which is tag-shaped, so the format check
+    reported it as an invalid BIO tag and the count check then compared 1
+    phantom tag against 0 words. Two errors, neither of them "your label is
+    empty". A user reading them would go looking for a tag they never wrote.
+    """
+    _write(texts_dir, "s1", "")
+    df = pd.DataFrame({"filename": ["s1"], "label": [float("nan")]})
+    result = validator.validate(df)
+    assert not result.is_valid
+    assert len(result.errors) == 1, result.errors
+    assert "holds no BIO tags" in result.errors[0]
+    assert "invalid BIO tag" not in result.errors[0]
+    assert "count mismatch" not in result.errors[0]
+    assert "nan" not in result.errors[0]
+
+
+def test_words_but_no_tags_is_rejected_and_names_the_word_count(validator, texts_dir):
+    """The reachable-today shape: real text, label cell left empty.
+
+    Distinguished from the empty/empty case by the word count in the message,
+    because the two want different fixes — this one is a missing annotation,
+    the other is a row that should not be in the manifest.
+    """
+    _write(texts_dir, "s1", "John lives here")
+    df = pd.DataFrame({"filename": ["s1"], "label": ["   "]})
+    result = validator.validate(df)
+    assert not result.is_valid
+    assert "holds no BIO tags" in result.errors[0]
+    assert "3 word(s)" in result.errors[0]
+
+
+def test_a_missing_text_file_still_wins_over_the_no_tags_error(validator, texts_dir):
+    """Precedence, named and proved: file-missing outranks no-tags.
+
+    Both conditions hold for this row. The file error wins because the word
+    count the no-tags message quotes cannot be read without the file — so the
+    ordering is forced, not a preference. The case where the first check is
+    present but NOT decisive is covered by the tests above, where the file
+    exists and the no-tags error is the one that fires.
+    """
+    df = pd.DataFrame({"filename": ["absent"], "label": [" "]})
+    result = validator.validate(df)
+    assert not result.is_valid
+    assert len(result.errors) == 1, result.errors
+    assert "not found" in result.errors[0]
+    assert "holds no BIO tags" not in result.errors[0]
+
+
+def test_a_list_valued_label_is_malformed_not_missing(validator, texts_dir):
+    """`pd.isna` returns an ARRAY for a list-like, and `bool()` of that raises.
+
+    A list-valued cell is not a missing label, it is a malformed one, so it
+    must reach the format check rather than crash or be waved through as
+    "no tags". Guards the `is_scalar` half of the absence test.
+    """
+    _write(texts_dir, "s1", "John lives here")
+    df = pd.DataFrame({"filename": ["s1"], "label": [["B-PER", "O", "O"]]})
+    result = validator.validate(df)  # must not raise
+    assert not result.is_valid
+    assert "invalid BIO tag" in result.errors[0]
+
+
+def test_pd_na_counts_as_missing_too(validator, texts_dir):
+    """The nullable-dtype flavour of absence, not just float NaN."""
+    _write(texts_dir, "s1", "")
+    df = pd.DataFrame({"filename": ["s1"], "label": pd.array([None], dtype="string")})
+    result = validator.validate(df)
+    assert not result.is_valid
+    assert "holds no BIO tags" in result.errors[0]
