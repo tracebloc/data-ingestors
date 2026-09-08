@@ -15,10 +15,20 @@ name: contract consumers
 # exercise is an unrequired job is advice rather than a gate (CLAUDE.md rule 2).
 # CI supplies the real inputs; the required suite proves the comparison works.
 #
+# WHO THE CONSUMERS ARE. Two, enumerated in `DECLARED_CONSUMERS`:
+# `e2e-test-agent`, which reads the contract out of a `data-ingestors` checkout,
+# and `tracebloc/cli` (backend#3146), which VENDORS it byte-for-byte into
+# `internal/schema/` and refuses an unsupported version at load since cli#634.
+# The CLI was outside this gate while having the same failure mode, so a bump
+# here could go green and break it -- caught only later, by the CLI's own CI or
+# by a customer.
+#
 # THE PUBLIC/PRIVATE ASYMMETRY, AND WHY THE SKIP IS NARROW. This repo is PUBLIC
-# and the consumer is PRIVATE, so reading it needs an App token -- and GitHub
-# withholds secrets from fork PRs. Rather than fail every external contribution,
-# the job asks what the PR actually changed:
+# and `e2e-test-agent` is PRIVATE, so reading it needs an App token -- and GitHub
+# withholds secrets from fork PRs. (`cli` is public, but the token gates the run
+# either way: a run that can read only half the consumers is not a run that can
+# report agreement.) Rather than fail every external contribution, the job asks
+# what the PR actually changed:
 #
 #   * no schema file touched  -> there is nothing this check could tell us, so a
 #     missing token is a NOTICE and the job passes. Not a hole: the risk it
@@ -160,7 +170,7 @@ jobs:
             echo "no published contract in this diff ($(wc -l < "$RUNNER_TEMP/pr-files.txt" | tr -d ' ') file(s) changed)"
           fi
 
-      - name: Mint a token for the private consumer
+      - name: Mint a token for the consumer checkouts
         id: token
         # `continue-on-error` so an ABSENT secret (a fork PR) reaches the step
         # below, which decides what that means. Without it the job dies here
@@ -172,7 +182,13 @@ jobs:
           app-id: ${{ secrets.RELEASE_TRAIN_APP_ID }}
           private-key: ${{ secrets.RELEASE_TRAIN_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
-          repositories: e2e-test-agent
+          # BOTH consumers (backend#3146). `cli` is public and would clone
+          # unauthenticated, but `actions/checkout` always presents a token, so
+          # scoping the mint to cover it keeps one code path for both checkouts
+          # instead of a second, differently-behaving one for the public repo.
+          repositories: |
+            e2e-test-agent
+            cli
           # LEAST PRIVILEGE, EXPLICITLY (Bugbot, #536). Without this the token
           # inherits the App's FULL installation grant -- and `actions/checkout`
           # stores it in `.consumer/.git`, after which this job runs the PR's own
@@ -211,8 +227,34 @@ jobs:
           # Nothing here pushes or re-fetches, so persisting it buys nothing.
           persist-credentials: false
 
+      # THE SECOND CONSUMER (backend#3146). `tracebloc/cli` vendors
+      # `layout.v1.json` byte-for-byte into `internal/schema/` and refuses an
+      # unsupported version at load (cli#634) -- the same failure mode as the
+      # harness, and until now outside the only check designed to catch it. The
+      # producer could bump the contract, watch this job go green, and break it.
+      - name: Check out the CLI consumer
+        if: steps.token.outcome == 'success'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: tracebloc/cli
+          # `develop`, and it is the CLI's default branch too -- named anyway,
+          # for the same reason as above: the ref that actually reads us should
+          # be stated, not inherited from a repo setting that can change.
+          ref: develop
+          token: ${{ steps.token.outputs.token }}
+          path: .consumer-cli
+          persist-credentials: false
+
       - name: Every declared consumer can read every contract we publish
         if: steps.token.outcome == 'success'
         run: |
           set -euo pipefail
-          python3 scripts/contract_consumers.py --producer . --consumer .consumer
+          # REPO-QUALIFIED, and every DECLARED consumer must appear: the script
+          # compares this list against `DECLARED_CONSUMERS` and fails when they
+          # differ. A consumer added there but not checked out here is a
+          # question this run did not ask, and the script refuses to let that
+          # read as an answer.
+          python3 scripts/contract_consumers.py \
+            --producer . \
+            --consumer tracebloc/e2e-test-agent=.consumer \
+            --consumer tracebloc/cli=.consumer-cli
