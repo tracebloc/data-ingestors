@@ -14,8 +14,12 @@ that has never been shown to fail.
 from __future__ import annotations
 
 import json
+import os
+import re
+import subprocess
 import sys
 from pathlib import Path
+from typing import Dict, List
 
 import pytest
 
@@ -24,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scripts.contract_consumers import (  # noqa: E402
     DECLARED_CONSUMERS,
     AgreementError,
+    ConsumerContract,
     check,
     check_consumers,
     consumer_contracts,
@@ -31,6 +36,80 @@ from scripts.contract_consumers import (  # noqa: E402
     go_consumer_contracts,
     published_version,
 )
+
+#: The env var `tests.yml` sets: one `OWNER/REPO=PATH` per real consumer
+#: checkout the REQUIRED `pytest` job supplies, newline- or comma-separated.
+#: The same `REPO=PATH` spelling as the script's `--consumer` flag, so the two
+#: entry points cannot drift into different notations for the same fact.
+CHECKOUTS_ENV = "CONTRACT_CONSUMER_CHECKOUTS"
+
+#: The consumers the REQUIRED `pytest` job compares against for real, as
+#: distinct from the ones only the unrequired `contract consumers` job reaches.
+#:
+#: PUBLIC ONLY, and that is a constraint rather than a preference.
+#: `actions/checkout` reaches a public repo with the default read-only
+#: `github.token`, which a fork PR DOES receive; a private consumer needs an App
+#: token, which GitHub withholds from forks. Listing `e2e-test-agent` here would
+#: turn the required context red on every external contribution -- the exact
+#: asymmetry #536 split the two jobs over. It stays with the agreement job.
+REAL_CONSUMERS_IN_THE_REQUIRED_JOB = ("tracebloc/cli",)
+
+#: The Makefile target `tests.yml` invokes to select the marker below.
+REAL_CONSUMERS_TARGET = "real-consumers"
+
+#: The marker that keeps this off a developer machine WITHOUT a skip.
+REAL_CONSUMERS_MARKER = "real_consumers"
+
+
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
+#: `REPO=PATH` entries are separated by a comma or a newline, so the workflow
+#: can write one per line and a shell can pass them inline.
+_CHECKOUT_SEPARATOR = re.compile(r"[,\n]")
+
+
+def _parse_checkouts(raw: str, source: str) -> Dict[str, str]:
+    """`"tracebloc/cli=.consumers/cli"` -> `{"tracebloc/cli": ".consumers/cli"}`.
+
+    ONE parser, used for both the environment variable at run time and the
+    workflow's own `env:` block when the suite reads it back. Two spellings of
+    the same format is how the two copies come to disagree about an entry
+    neither side thinks is malformed.
+
+    Every unreadable entry RAISES. "I could not read this" is a third state and
+    it belongs with the failures, not folded into the empty dict that means
+    "nobody supplied anything" -- those two have different fixes, and a caller
+    that cannot tell them apart will pick the wrong one.
+    """
+    out: Dict[str, str] = {}
+    for entry in (e.strip() for e in _CHECKOUT_SEPARATOR.split(raw)):
+        if not entry:
+            continue
+        repo, sep, path = entry.partition("=")
+        if not sep or not repo.strip() or not path.strip():
+            raise AssertionError(
+                f"{source} entry {entry!r} is not REPO=PATH "
+                f"(e.g. tracebloc/cli=.consumers/cli)"
+            )
+        if repo.strip() in out:
+            raise AssertionError(
+                f"{source} names {repo.strip()!r} twice; two answers is not a "
+                f"better answer than none"
+            )
+        out[repo.strip()] = path.strip()
+    return out
+
+
+def _supplied_checkouts() -> Dict[str, Path]:
+    """`CONTRACT_CONSUMER_CHECKOUTS` parsed, or `{}` when it is unset."""
+    return {
+        repo: Path(path)
+        for repo, path in _parse_checkouts(
+            os.environ.get(CHECKOUTS_ENV, ""), CHECKOUTS_ENV
+        ).items()
+    }
 
 
 def _consumer(tmp_path: Path, **modules: str) -> Path:
@@ -288,24 +367,373 @@ class TestTheRealReposAgreeToday:
     """Run against the actual files in this repo, not a fixture.
 
     The fixtures above prove the logic; this proves the logic is pointed at
-    something real. It skips only when no consumer checkout is present -- CI
-    provides one, and a developer without it is not blocked.
+    something real.
+
+    HOW IT USED TO ANSWER THAT, AND WHY IT NEVER DID (backend#3338). The real
+    comparison looked for the consumer BESIDE this repo::
+
+        consumer = Path(__file__).resolve().parents[2] / "e2e-test-agent"
+        if not (consumer / "harness").is_dir():
+            pytest.skip("no e2e-test-agent checkout beside this repo")
+
+    and the class docstring said "CI provides one". CI never did. In the
+    required `pytest` job `parents[1]` is `$GITHUB_WORKSPACE`
+    (`/home/runner/work/data-ingestors/data-ingestors`), so `parents[2]` is
+    `/home/runner/work/data-ingestors` -- a directory GitHub creates containing
+    exactly the one checkout. `tests.yml` has a single `actions/checkout` and no
+    `path:`, so nothing can ever be a sibling; the job that DOES check a
+    consumer out puts it at `.consumer`, INSIDE the workspace, and never runs
+    pytest. The two halves could not meet, and the test and the workflow were
+    added in the SAME commit -- so the hatch fired on its first run and every
+    run after it. Measured: `1 skipped` on every sampled `tests.yml` run since,
+    with the skip reason phrased as a local-developer convenience.
+
+    It had a second wrong answer too. When a sibling checkout DID exist, it was
+    whatever the developer happened to have -- pinned to nothing. A checkout 63
+    commits behind its own `develop` produced a red for a disagreement the real
+    consumer does not have, while the workflow one directory over insists "PIN
+    THE PRODUCER TO THE REF THE CONSUMER ACTUALLY READS".
+
+    So the inputs are now NAMED by the job that supplies them
+    (`CONTRACT_CONSUMER_CHECKOUTS`), and every way of not having them is a
+    failure with a cause rather than a pass. Absent in CI is red. Absent
+    locally is a DESELECTED marker, which prints a count and claims nothing --
+    see `pytest.ini`.
     """
 
     def test_every_contract_this_repo_publishes_parses_and_carries_a_version(self):
-        root = Path(__file__).resolve().parents[1]
+        root = _repo_root()
         schemas = sorted((root / "tracebloc_ingestor" / "schema").glob("*.json"))
         assert schemas, "no schema files found — the layout moved"
         for path in schemas:
             doc = json.loads(path.read_text(encoding="utf-8"))
             assert isinstance(doc, dict), f"{path.name} is not an object"
 
-    def test_the_checked_out_consumer_can_read_us(self):
-        root = Path(__file__).resolve().parents[1]
-        consumer = Path(__file__).resolve().parents[2] / "e2e-test-agent"
-        if not (consumer / "harness").is_dir():
-            pytest.skip("no e2e-test-agent checkout beside this repo")
-        assert disagreements(root, consumer_contracts(consumer)) == []
+    @pytest.mark.real_consumers
+    def test_the_checked_out_consumers_can_read_us(self):
+        root = _repo_root()
+        supplied = _supplied_checkouts()
+
+        # (1) THE RUN MUST HAVE BEEN GIVEN SOMETHING. An unset variable is
+        # "nobody supplied a consumer", which is precisely the state the old
+        # `skip` answered with a pass. There is no fallback to fall back to.
+        assert supplied, (
+            f"{CHECKOUTS_ENV} is unset or empty. This test compares against a "
+            f"REAL consumer checkout and has no default: it is selected only by "
+            f"`make {REAL_CONSUMERS_TARGET}`, which tests.yml runs with the "
+            f"variable set. A run that was given no consumer could not ask the "
+            f"question, and that must not read as an answer."
+        )
+
+        # (2) THE COUNT, CROSS-CHECKED AGAINST TWO OTHER SOURCES. The env var
+        # alone is self-consistent -- comparing it only with itself would let a
+        # run that supplied one of two consumers pass as thoroughly as one that
+        # supplied both. So the literal claim above and the checkouts tests.yml
+        # actually performs are both parsed, and all three must agree on the
+        # repos AND on the paths.
+        claimed = set(REAL_CONSUMERS_IN_THE_REQUIRED_JOB)
+        in_workflow = _real_consumer_checkouts_in_tests_workflow()
+        assert set(supplied) == claimed, (
+            f"{CHECKOUTS_ENV} supplied {sorted(supplied)}, but the required job "
+            f"claims to compare {sorted(claimed)}. Missing: "
+            f"{sorted(claimed - set(supplied)) or 'none'}; unexpected: "
+            f"{sorted(set(supplied) - claimed) or 'none'}."
+        )
+        assert supplied == {r: Path(p) for r, p in in_workflow.items()}, (
+            f"{CHECKOUTS_ENV} ({ {r: str(p) for r, p in supplied.items()} }) "
+            f"does not match the checkouts tests.yml performs ({in_workflow}). "
+            f"A variable pointing somewhere the workflow does not check out is "
+            f"an unreadable path, not a comparison."
+        )
+        assert len(supplied) == len(REAL_CONSUMERS_IN_THE_REQUIRED_JOB)
+
+        # (3) EVERY SUPPLIED CHECKOUT MUST BE READABLE AND MUST YIELD PAIRS,
+        # per consumer rather than over the total: one probe silently finding
+        # nothing while a sibling keeps the list non-empty is the partial miss
+        # Bugbot found inside the Python probe on #536.
+        by_repo = {c.repo: c for c in DECLARED_CONSUMERS}
+        contracts: List[ConsumerContract] = []
+        compared: List[str] = []
+        for repo in sorted(supplied):
+            path = supplied[repo]
+            assert repo in by_repo, (
+                f"{repo} is supplied to this test but is not in "
+                f"DECLARED_CONSUMERS, so nothing knows how to read it"
+            )
+            assert path.is_dir(), (
+                f"{CHECKOUTS_ENV} names {repo} at {path}, which is not a "
+                f"directory. The checkout did not happen -- that is a failure "
+                f"of this run, not a reason to report agreement."
+            )
+            found = by_repo[repo].probe(path, repo)
+            assert found, (
+                f"read {repo} at {path} and found no contract declarations "
+                f"({by_repo[repo].declares}). Zero parsed pairs compares equal "
+                f"to zero parsed pairs, so this would pass for ever."
+            )
+            contracts.extend(found)
+            compared.append(repo)
+
+        assert len(compared) == len(REAL_CONSUMERS_IN_THE_REQUIRED_JOB), (
+            f"compared {compared}, expected "
+            f"{list(REAL_CONSUMERS_IN_THE_REQUIRED_JOB)}"
+        )
+        assert len(contracts) >= len(compared), (
+            f"{len(contracts)} contract pair(s) across {len(compared)} "
+            f"consumer(s) -- fewer pairs than consumers means one was walked "
+            f"and produced nothing"
+        )
+
+        # (4) And only now the question the test is named for.
+        assert disagreements(root, contracts) == []
+
+
+def _tests_workflow_job() -> dict:
+    """The required `pytest` job, from tests.yml."""
+    import yaml
+
+    parsed = yaml.safe_load((_repo_root() / ".github/workflows/tests.yml").read_text())
+    return parsed["jobs"]["pytest"]
+
+
+def _tests_workflow_steps() -> List[dict]:
+    """The steps of the required `pytest` job, from tests.yml."""
+    return list(_tests_workflow_job()["steps"])
+
+
+def _real_consumer_checkouts_in_tests_workflow() -> Dict[str, str]:
+    """`{"tracebloc/cli": ".consumers/cli"}` -- what tests.yml checks out.
+
+    Read from the workflow rather than restated, for the same reason the
+    producer/consumer pairing is: a hand-kept copy agrees with itself while
+    disagreeing with the job that actually runs.
+    """
+    out: Dict[str, str] = {}
+    for step in _tests_workflow_steps():
+        with_ = step.get("with") or {}
+        if "checkout" in step.get("uses", "") and with_.get("repository"):
+            # A cross-repo checkout with no `path:` lands ON TOP of this repo.
+            # Refused here rather than returned as `None`, which the caller
+            # would turn into `Path(None)` -- a TypeError whose message names
+            # neither the repo nor the mistake.
+            if not with_.get("path"):
+                raise AssertionError(
+                    f"tests.yml checks out {with_['repository']} with no "
+                    f"`path:`, so it would land on top of this repo instead of "
+                    f"its own directory"
+                )
+            out[with_["repository"]] = with_["path"]
+    return out
+
+
+class TestTheCheckoutListIsParsedOrRefused:
+    """`_parse_checkouts` reads both the env var and the workflow's `env:` block.
+
+    Its refusal paths are the ones that decide whether "I could not read this"
+    reaches the caller or is quietly folded into "nobody supplied anything" --
+    two states with different fixes. So they are exercised rather than assumed.
+    """
+
+    def test_a_comma_or_newline_separated_list_is_read(self):
+        parsed = _parse_checkouts(" a/one=p1 ,\n b/two=p2 \n\n", "test")
+        assert parsed == {"a/one": "p1", "b/two": "p2"}
+        assert len(parsed) == 2
+
+    def test_an_unset_variable_is_empty_rather_than_an_error(self):
+        # The one benign empty: nothing was supplied. The CALLER decides what
+        # that means, and in the real-consumer test it means failure.
+        assert _parse_checkouts("", "test") == {}
+
+    def test_an_entry_without_a_path_is_refused(self):
+        with pytest.raises(AssertionError, match="is not REPO=PATH"):
+            _parse_checkouts("tracebloc/cli", "test")
+
+    def test_an_entry_with_an_empty_half_is_refused(self):
+        with pytest.raises(AssertionError, match="is not REPO=PATH"):
+            _parse_checkouts("tracebloc/cli=", "test")
+        with pytest.raises(AssertionError, match="is not REPO=PATH"):
+            _parse_checkouts("=.consumers/cli", "test")
+
+    def test_the_same_repo_named_twice_is_refused(self):
+        # Silently keeping the last would compare one checkout while the run
+        # believes it compared the other.
+        with pytest.raises(AssertionError, match="twice"):
+            _parse_checkouts("a/one=p1,a/one=p2", "test")
+
+
+class TestTheRequiredJobSuppliesTheRealConsumers:
+    """The other half of the fix, and the half that can rot silently.
+
+    Assertions (3) and (4) above are only as good as the inputs the workflow
+    hands them, and a job that stops supplying them would not fail -- the test
+    simply would not be SELECTED, and a marker that is never selected is the
+    permanently-skipped test again under a different name. So the wiring is
+    pinned here, in the required suite, where the fix is.
+    """
+
+    def test_the_claim_is_not_empty_and_names_only_declared_consumers(self):
+        assert REAL_CONSUMERS_IN_THE_REQUIRED_JOB, (
+            "no real consumer is compared in the required context, which is the "
+            "state backend#3338 is about"
+        )
+        declared = {c.repo for c in DECLARED_CONSUMERS}
+        assert set(REAL_CONSUMERS_IN_THE_REQUIRED_JOB) <= declared, (
+            f"{sorted(set(REAL_CONSUMERS_IN_THE_REQUIRED_JOB) - declared)} is "
+            f"compared here but not declared in DECLARED_CONSUMERS"
+        )
+
+    def test_tests_yml_checks_out_every_consumer_the_required_job_claims(self):
+        checkouts = _real_consumer_checkouts_in_tests_workflow()
+        assert set(checkouts) == set(REAL_CONSUMERS_IN_THE_REQUIRED_JOB), (
+            f"tests.yml checks out {sorted(checkouts)} but the required job "
+            f"claims to compare {sorted(REAL_CONSUMERS_IN_THE_REQUIRED_JOB)}"
+        )
+
+    def test_every_consumer_checkout_here_is_pinned_to_a_named_ref(self):
+        # Same rule the agreement job states and the old sibling lookup broke:
+        # compare the ref that actually reads us, not whatever a repo setting
+        # currently points at.
+        offenders = [
+            (step.get("with") or {})["repository"]
+            for step in _tests_workflow_steps()
+            if "checkout" in step.get("uses", "")
+            and (step.get("with") or {}).get("repository")
+            and not (step.get("with") or {}).get("ref")
+        ]
+        assert not offenders, (
+            f"these consumer checkouts inherit the repo default branch instead "
+            f"of naming the ref that reads us: {offenders}"
+        )
+
+    def test_the_required_job_selects_the_marker(self):
+        for step in _tests_workflow_steps():
+            if REAL_CONSUMERS_TARGET in (step.get("run") or ""):
+                return
+        raise AssertionError(
+            f"no step in tests.yml runs `make {REAL_CONSUMERS_TARGET}`, so the "
+            f"marked comparison is never SELECTED -- which is the "
+            f"permanently-skipped test of backend#3338 wearing a marker"
+        )
+
+    def test_the_required_job_names_the_checkouts_at_JOB_level(self):
+        # JOB level, not step level, and the distinction is load-bearing: the
+        # guard below fails when GITHUB_ACTIONS is set and this variable is not,
+        # so it has to be visible to EVERY step that runs pytest in this job.
+        # Scoped to the one step that selects the marker, that guard would fire
+        # on the `make coverage` step instead and have to be weakened.
+        env = _tests_workflow_job().get("env") or {}
+        assert CHECKOUTS_ENV in env, (
+            f"the pytest job does not set {CHECKOUTS_ENV} at job level, so a "
+            f"step that runs the suite without supplying consumers would "
+            f"deselect the comparison instead of failing"
+        )
+        supplied = _parse_checkouts(
+            str(env[CHECKOUTS_ENV]), f"{CHECKOUTS_ENV} in tests.yml"
+        )
+        assert supplied == _real_consumer_checkouts_in_tests_workflow(), (
+            f"{CHECKOUTS_ENV} in tests.yml ({env[CHECKOUTS_ENV]!r}) does not "
+            f"match the checkouts the same job performs"
+        )
+
+    def test_the_marker_is_registered_and_deselected_by_default(self):
+        # The local half of the design: `pytest.ini` deselects the marker, so a
+        # developer without a checkout sees "deselected" -- a count, not a pass.
+        # Delete the addopts line and `make coverage` starts hard-failing for
+        # want of the env var, which is loud; delete the MARKER registration and
+        # --strict-markers turns the decorator into an error. Both directions
+        # are red, and this pins the intended one.
+        ini = (_repo_root() / "pytest.ini").read_text(encoding="utf-8")
+        assert f"not {REAL_CONSUMERS_MARKER}" in ini, (
+            "pytest.ini no longer deselects the marker by default, so a plain "
+            "local run collects a test whose inputs only CI supplies"
+        )
+        assert f"{REAL_CONSUMERS_MARKER}:" in ini, (
+            "the marker is not registered in pytest.ini; with --strict-markers "
+            "that is an error, and without it a typo silently selects nothing"
+        )
+
+    def test_ci_without_the_checkouts_variable_is_a_FAILURE_not_a_deselect(self):
+        """The belt to the workflow assertions' braces, and NOT marked.
+
+        Everything else in this class reads the workflow FILE, so it catches a
+        human editing it. It does not catch the runtime shape: a job that runs
+        this suite while `CONTRACT_CONSUMER_CHECKOUTS` is absent or empty. There
+        the marked test is simply DESELECTED, nothing fails, and the required
+        context goes green having compared nothing -- backend#3338 again, one
+        level out.
+
+        So this test is unmarked, runs in every CI invocation of the suite
+        including `make coverage`, and turns "CI, no consumers supplied" into a
+        red. Locally `GITHUB_ACTIONS` is unset and it says nothing, which is the
+        only environment where not having a checkout is legitimate.
+        """
+        if not os.environ.get("GITHUB_ACTIONS"):
+            return
+        raw = os.environ.get(CHECKOUTS_ENV)
+        assert raw and raw.strip(), (
+            f"running under GITHUB_ACTIONS with {CHECKOUTS_ENV}="
+            f"{raw!r}. In CI the real-consumer comparison is not optional: an "
+            f"absent or empty variable deselects it silently and the required "
+            f"context goes green having compared nothing. Set it at JOB level "
+            f"in the workflow, as tests.yml does."
+        )
+        # Non-empty is not the same as usable -- parse it, so a malformed entry
+        # is a red here rather than inside the marked test that CI might not
+        # have selected.
+        assert set(_parse_checkouts(raw, CHECKOUTS_ENV)) == set(
+            REAL_CONSUMERS_IN_THE_REQUIRED_JOB
+        ), (
+            f"CI supplied {raw!r}, which is not the "
+            f"{list(REAL_CONSUMERS_IN_THE_REQUIRED_JOB)} this job claims to "
+            f"compare"
+        )
+
+    def test_the_deselection_is_VISIBLE_in_the_run_count(self):
+        """A marker that deselects silently is a skip wearing a different hat.
+
+        The whole argument for a marker over `pytest.skip` is that the run says
+        so. That is a property of pytest's output, not of our code, so it is
+        measured rather than assumed: collect this file with the default options
+        and the summary must report exactly one deselected test.
+        """
+        proc = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "pytest",
+                "--collect-only",
+                "-q",
+                str(Path(__file__)),
+            ],
+            cwd=str(_repo_root()),
+            capture_output=True,
+            text=True,
+        )
+        # `--collect-only` returns 0 when it collected something; a non-zero
+        # exit is "I could not tell", which is a failure and not a pass.
+        assert proc.returncode == 0, (
+            f"collecting this file failed ({proc.returncode}):\n"
+            f"{proc.stdout}\n{proc.stderr}"
+        )
+        assert "1 deselected" in proc.stdout, (
+            f"the default run does not report the deselection, so a developer "
+            f"cannot tell the real-consumer comparison did not run -- which is "
+            f"exactly what made the old `skip` invisible. Summary was:\n"
+            f"{proc.stdout.strip().splitlines()[-1] if proc.stdout.strip() else '(empty)'}"
+        )
+
+    def test_the_makefile_target_selects_the_marker(self):
+        makefile = (_repo_root() / "Makefile").read_text(encoding="utf-8")
+        assert f"\n{REAL_CONSUMERS_TARGET}:" in makefile, (
+            f"tests.yml runs `make {REAL_CONSUMERS_TARGET}` but the Makefile "
+            f"has no such target"
+        )
+        body = makefile.split(f"\n{REAL_CONSUMERS_TARGET}:", 1)[1].split("\n\n", 1)[0]
+        assert f"-m {REAL_CONSUMERS_MARKER}" in body, (
+            f"`make {REAL_CONSUMERS_TARGET}` does not select the "
+            f"{REAL_CONSUMERS_MARKER} marker, so the required job would run the "
+            f"default (deselected) set and compare nothing: {body!r}"
+        )
 
 
 class TestTheWorkflowScopeStepFailsClosed:
