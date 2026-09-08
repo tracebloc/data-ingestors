@@ -7,12 +7,20 @@ client-side training.
 For each row it checks, against the corresponding ``.txt`` file (one
 whitespace-tokenized word per token):
 
-1. **Count alignment** — the ``label`` column holds a space-separated string
+1. **Tags present at all** — a row whose ``label`` cell is missing, empty or
+   whitespace-only carries NO annotation. It is rejected, because the count
+   check below cannot see it: with an empty ``.txt`` both sides are zero and
+   ``0 == 0`` passes, so such a row was ingested as a training sample whose
+   every token resolves to ``-100`` (tracebloc/backend#3352). Rejecting it also
+   makes ``sum(tag occurrences) >= row count`` true by construction, which is
+   what a consumer bounding a row draw by the tag histogram relies on
+   (tracebloc/backend#3350).
+2. **Count alignment** — the ``label`` column holds a space-separated string
    of BIO tags, and there must be exactly one tag per word in the ``.txt``.
    A mismatch is the exact condition that makes the client drop tokens to
    ``-100`` (or raise), so we reject it here against the dataset author.
-2. **Tag format** — every tag must be ``O`` or ``B-XXX`` / ``I-XXX`` (IOB2).
-3. **IOB2 sequence (warning)** — an ``I-<TYPE>`` should be preceded by a
+3. **Tag format** — every tag must be ``O`` or ``B-XXX`` / ``I-XXX`` (IOB2).
+4. **IOB2 sequence (warning)** — an ``I-<TYPE>`` should be preceded by a
    ``B-<TYPE>`` / ``I-<TYPE>`` of the same type (entities start with ``B-``).
    An ``I-`` that opens an entity is malformed under IOB2 but LEGAL under IOB1,
    so it's surfaced as a WARNING rather than a hard reject — failing it would
@@ -132,7 +140,20 @@ class BIOLabelValidator(BaseValidator):
     ) -> Tuple[List[str], List[str]]:
         row_label = f"Row {idx}"
         filename = str(row[filename_col])
-        tags = str(row[label_col]).strip().split()
+
+        # A MISSING cell is not a tag. `pd.read_csv` turns a blank cell into
+        # `NaN`, and `str(NaN)` is the literal `"nan"` — a perfectly
+        # tag-shaped string that the format check below then reports as an
+        # "invalid BIO tag", which is a confusing diagnosis for "the label is
+        # empty" and also invents a phantom tag that skews the count check.
+        # So absence is resolved to NO TAGS here, before either runs.
+        #
+        # `is_scalar` first because `pd.isna` returns an ARRAY for a list-like
+        # and `bool()` of that raises; a list-like label is not missing, it is
+        # malformed, and the format check is what should say so.
+        raw = row[label_col]
+        missing = pd.api.types.is_scalar(raw) and bool(pd.isna(raw))
+        tags = [] if missing else str(raw).strip().split()
 
         # Invalid tag format (independent of the file).
         bad = [t for t in tags if not _BIO_TAG_RE.match(t)]
@@ -173,6 +194,26 @@ class BIOLabelValidator(BaseValidator):
                 word_count = len(f.read().strip().split())
         except OSError as e:
             errors.append(f"{row_label}: could not read text file: {e}")
+            return errors, warnings
+
+        # NO TAGS AT ALL (tracebloc/backend#3352). Checked BEFORE the count
+        # comparison and separately from it, because the comparison cannot
+        # catch this case: an empty label against an empty `.txt` is `0 == 0`,
+        # which passes, and the row is then ingested as a training sample with
+        # no annotation. The count check is about a MISMATCH; this is about
+        # there being nothing to match.
+        #
+        # Reported with the word count because the two shapes want different
+        # fixes: words but no tags is a missing annotation, while no words and
+        # no tags is a row that should not be in the manifest at all.
+        if not tags:
+            errors.append(
+                f"{row_label} ('{filename}'): the label column holds no BIO "
+                f"tags (it is missing, empty or whitespace-only) while the "
+                f".txt holds {word_count} word(s). Every word needs exactly "
+                f"one tag, and a row with no tags carries no annotation, so it "
+                f"cannot be a training sample."
+            )
             return errors, warnings
 
         if word_count != len(tags):
