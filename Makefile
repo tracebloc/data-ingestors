@@ -42,7 +42,11 @@ help:
 	@echo "  setup       pip install -r requirements-dev.txt && pip install -e ."
 	@echo "  install-hooks  (re)install the git pre-push hook that runs 'make check'"
 	@echo
-	@echo "  individual: lint test coverage e2e"
+	@echo "  individual: lint test coverage real-consumers e2e"
+	@echo
+	@echo "  real-consumers needs a checkout of each consumer repo, named in"
+	@echo "  CONTRACT_CONSUMER_CHECKOUTS as REPO=PATH — CI supplies them. It is"
+	@echo "  deselected from the other targets rather than skipped inside them."
 	@echo
 	@echo "  e2e needs a real MySQL on MYSQL_HOST/MYSQL_PORT — it is not part of"
 	@echo "  check or check-all for that reason. CI provides one as a service."
@@ -146,6 +150,30 @@ test:
 coverage:
 	$(PYTEST) tests/ --cov=tracebloc_ingestor --cov-report=term --cov-report=xml \
 	  --cov-report=html --cov-fail-under=95
+
+# real-consumers: the one comparison `coverage` deliberately leaves out —
+# this repo's published contracts against a REAL consumer checkout
+# (backend#3338).
+#
+# SPLIT OUT BECAUSE THE INPUTS DIFFER, not because it is optional. `coverage`
+# needs nothing beyond this repo; this needs a checkout of every consumer named
+# in CONTRACT_CONSUMER_CHECKOUTS, which tests.yml performs and exports. Both
+# targets run in the REQUIRED `pytest` job, so nothing left the gate — what
+# changed is that the real-repo comparison is now SELECTED there instead of
+# skipping itself, which is all it ever did.
+#
+# There is NO local fallback and that is the point. Without a checkout the
+# marker is simply not selected by `coverage`, and running THIS target with no
+# CONTRACT_CONSUMER_CHECKOUTS is an error rather than a skip: a run that was
+# handed no consumer did not ask the question, and an unasked question must not
+# read as an answer.
+#
+# The trailing `-m real_consumers` overrides the `-m "not real_consumers"` in
+# pytest.ini's addopts — pytest appends addopts BEFORE the command line, and
+# `-m` keeps the last value it is given.
+.PHONY: real-consumers
+real-consumers:
+	$(PYTEST) tests/test_contract_consumers.py -q -m real_consumers
 
 # e2e: e2e.yml — real ingestion against a real MySQL with an in-process
 # mock backend. Needs a database, hence the explicit target rather than

@@ -148,3 +148,7 @@ build
 dist
 tracebloc_ingestor.egg-info
 
+
+# Consumer checkouts for `make real-consumers` (backend#3338). CI creates
+# these; a developer who clones a consumer here should not be able to commit it.
+.consumers/
