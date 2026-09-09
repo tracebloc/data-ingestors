@@ -63,7 +63,9 @@ def _covariate_matrix(sample: Path, time_column: str, event_column: str):
     assert rows, f"{sample.relative_to(REPO_ROOT)} has no data rows"
     covariates = [c for c in rows[0].keys() if c not in (time_column, event_column)]
     assert covariates, f"{sample.relative_to(REPO_ROOT)} has no covariate columns"
-    matrix = np.array([[float(row[c]) for c in covariates] for row in rows], dtype=float)
+    matrix = np.array(
+        [[float(row[c]) for c in covariates] for row in rows], dtype=float
+    )
     return covariates, matrix
 
 
