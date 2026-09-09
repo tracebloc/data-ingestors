@@ -15,5 +15,12 @@
 pytest>=7.0.0
 pytest-cov>=4.1.0
 
+# Packaging. tests/test_check_dist_contents.py runs a real
+# `python setup.py sdist bdist_wheel` against the guard the publish workflows
+# use, so the test interpreter needs setuptools (a 3.12 venv ships none, and
+# `pip install -e .` builds in isolation without leaving one behind). >=70.1
+# has bdist_wheel built in, so no separate `wheel` package is needed.
+setuptools>=70.1
+
 # Formatting
 black>=26,<27  # keep in step with the pre-commit hook (26.3.1) — same 2026 stable style
