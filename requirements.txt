@@ -9,9 +9,9 @@
 sqlalchemy>=2.0.0
 mysql-connector-python>=8.0.0
 
-# API and HTTP
+# API and HTTP (urllib3 comes in as a hard dependency of requests; the code
+# only ever reaches it through requests.packages.urllib3)
 requests
-urllib3
 
 # Retry mechanism
 tenacity>=8.0.1
@@ -32,9 +32,6 @@ ijson>=3.2.0
 # YAML config + JSON Schema validation (declarative ingest.yaml flow)
 PyYAML>=6.0
 jsonschema>=4.0.0
-
-# Structured logging
-python-json-logger>=2.0.0
 
 # The shared contract emitter (RFC-BACKEND-1872 D2), pinned exactly as the other
 # Python services pin it. Safe to add to a PUBLIC package's runtime deps: it is

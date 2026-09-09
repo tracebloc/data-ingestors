@@ -37,9 +37,6 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt \
  && pip install --no-cache-dir --no-deps /tmp/*.whl \
  && rm /tmp/*.whl /tmp/requirements.txt
 
-ENV CUDA_VISIBLE_DEVICES=-1
-ENV TF_CPP_MIN_LOG_LEVEL=2
-
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 

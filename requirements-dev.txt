@@ -1,7 +1,12 @@
-# Development / CI dependencies: everything needed to test, lint, type-check,
-# and publish the package — but NOT required at runtime. Kept out of
-# requirements.txt so `pip install tracebloc_ingestor` and the signed Docker
-# image stay lean.
+# Development / CI dependencies: everything needed to test and lint the
+# package — but NOT required at runtime. Kept out of requirements.txt so
+# `pip install tracebloc_ingestor` and the signed Docker image stay lean.
+#
+# Only tools that something in this repo actually invokes belong here
+# (Makefile, .github/workflows, .pre-commit-config.yaml). ruff is installed
+# separately by `make setup` at the version the org code-quality gate pins.
+# Publishing is done by the release workflows (see RELEASING.md), so no
+# upload tool is needed locally.
 #
 # Local dev / CI install:  pip install -r requirements-dev.txt
 -r requirements.txt
@@ -10,15 +15,5 @@
 pytest>=7.0.0
 pytest-cov>=4.1.0
 
-# Type checking
-mypy>=1.0.0
-types-requests
-types-urllib3
-
-# Linting / formatting
+# Formatting
 black>=26,<27  # keep in step with the pre-commit hook (26.3.1) — same 2026 stable style
-isort>=5.12.0
-flake8>=6.0.0
-
-# Release / publishing
-twine
