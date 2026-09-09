@@ -35,11 +35,7 @@ def _read_requirements(filename):
     requirements.txt and requirements-dev.txt.
     """
     lines = (this_directory / filename).read_text().splitlines()
-    return [
-        s
-        for line in lines
-        if (s := line.strip()) and not s.startswith(("#", "-"))
-    ]
+    return [s for line in lines if (s := line.strip()) and not s.startswith(("#", "-"))]
 
 
 requirements = _read_requirements("requirements.txt")
@@ -53,7 +49,15 @@ setup(
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/tracebloc/data-ingestors",
-    packages=find_packages(),
+    # include=, not exclude=: only the package we publish ships. tests/ has an
+    # __init__.py, so a bare find_packages() returned it too and every release
+    # up to 0.8.19 carried the whole unit-test suite (51 % of the wheel) and
+    # installed a top-level package named `tests`. exclude=["tests", "tests.*"]
+    # would fix that instance; include= fixes the class -- a future top-level
+    # directory with an __init__.py does not ship by accident. The built
+    # artefacts are checked by scripts/check_dist_contents.py in the publish
+    # workflows; the wheel is the truth, not this line.
+    packages=find_packages(include=["tracebloc_ingestor", "tracebloc_ingestor.*"]),
     package_data={
         "": ["Readme.md"],
         "tracebloc_ingestor.schema": ["*.json"],
