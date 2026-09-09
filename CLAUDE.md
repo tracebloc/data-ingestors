@@ -14,10 +14,10 @@ pip install -r requirements-dev.txt  # runtime + dev/test deps
 pytest                      # run tests
 ```
 
-Build and publish:
+Build locally (publishing is done by the release workflows, see `RELEASING.md`
+— never upload by hand):
 ```bash
 python setup.py sdist bdist_wheel
-twine upload dist/*
 ```
 
 Docker (runs the CSV ingestor as a Kubernetes job):
