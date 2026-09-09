@@ -53,7 +53,7 @@ time_to_event_prediction/
 ## Data Format
 
 ### CSV File
-The sample CSV contains a heart-failure clinical dataset with the following columns:
+The sample CSV is a synthetic set shaped like a heart-failure clinical dataset, with the following columns:
 - `age`: Patient age (FLOAT)
 - `anaemia`: Decrease of red blood cells or hemoglobin (0 or 1)
 - `creatinine_phosphokinase`: Level of CPK enzyme in the blood (FLOAT)
@@ -105,10 +105,12 @@ The script uses the following configuration:
 ## Sample Data
 
 The template includes sample data with:
-- 12 feature columns (clinical measurements)
+- 30 synthetic rows shaped like heart-failure clinical records (no real patients)
+- 11 covariate columns (clinical measurements)
 - 1 time column (`time`)
 - 1 event column (`DEATH_EVENT`)
-- Heart-failure clinical records
+
+The 11 covariate columns are linearly independent (full column rank), which a Cox proportional-hazards fit requires: a constant, duplicated or derived column makes its Hessian singular and the fit fails with a matrix-inversion error. `tests/test_template_survival_sample_full_rank.py` checks this on every change to the sample. Keep that property if you edit the rows.
 
 ## Notes
 
