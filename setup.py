@@ -38,7 +38,6 @@ def _read_requirements(filename):
     return [s for line in lines if (s := line.strip()) and not s.startswith(("#", "-"))]
 
 
-
 setup(
     name="tracebloc_ingestor",
     version=_read_version(),
