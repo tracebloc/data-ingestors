@@ -38,8 +38,6 @@ def _read_requirements(filename):
     return [s for line in lines if (s := line.strip()) and not s.startswith(("#", "-"))]
 
 
-requirements = _read_requirements("requirements.txt")
-
 setup(
     name="tracebloc_ingestor",
     version=_read_version(),
@@ -82,5 +80,5 @@ setup(
         "Operating System :: OS Independent",
     ],
     python_requires=">=3.11",
-    install_requires=requirements,
+    install_requires=_read_requirements(Path("requirements.txt")),
 )
