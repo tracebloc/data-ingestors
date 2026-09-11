@@ -8,3 +8,10 @@ include LICENSE
 # air-gapped pip installs do this) would hit the same FileNotFoundError
 # the wheel bug surfaced in cluster testing.
 recursive-include tracebloc_ingestor/schema *.json
+# Keep the unit-test suite out of the sdist. setup.py's find_packages(include=)
+# keeps `tests` out of the WHEEL, but the sdist goes through a different code
+# path: distutils' sdist.add_defaults() picks up tests/test*.py on its own,
+# whatever `packages=` says. Measured: with include= alone the wheel was clean
+# and the sdist still carried 100 tests/ members. scripts/check_dist_contents.py
+# reads both artefacts in the publish workflows, which is how this was caught.
+prune tests

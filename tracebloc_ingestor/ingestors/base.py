@@ -24,6 +24,7 @@ from ..utils import label_policy as label_policy_module
 from ..utils import redaction
 from ..utils.columns import resolve_column
 from ..utils.correlation import resolve_correlation_id
+from ..utils.staged_bytes import measure_staged_bytes
 from ..utils.validators_mapping import map_validators
 from .. import telemetry
 from ..file_transfer import map_file_transfer, reclaim_dest_tree, reclaim_source
@@ -1098,7 +1099,14 @@ class BaseIngestor(ABC):
         # rows deleted by a late failure (e.g. in summary rendering).
         dataset_registered = False
 
-        with Session(self.engine) as session:
+        # backend#3644: measure the dataset's physical size AS its files are
+        # staged. It cannot be measured afterwards — in the default
+        # shared-table mode DEST_PATH is the per-TABLE tree, which outlives a
+        # single run, so walking it would charge an earlier ingest's files to
+        # this dataset. Opened around the whole block because the value is read
+        # at the summary send at the bottom of it. Non-file-bearing categories
+        # stage nothing and never read it (see the send below).
+        with measure_staged_bytes() as staged_bytes, Session(self.engine) as session:
             try:
                 pbar = tqdm(total=total, desc="Ingesting records", unit="records")
 
@@ -1408,6 +1416,34 @@ class BaseIngestor(ABC):
                         else stats["inserted_records"]
                     )
 
+                    # backend#3644: the dataset's PHYSICAL size in bytes, so
+                    # the platform can show a real size instead of an em dash.
+                    # MEASURED, never derived: it is the sum of the files this
+                    # run actually staged, and a byte count inferred from a row
+                    # count would need a bytes-per-row constant that exists for
+                    # no data format.
+                    #
+                    # OMITTED (None) for a non-file-bearing category — the
+                    # tabular / time-series / survival family, whose data lives
+                    # entirely in MySQL rows. Their physical size is InnoDB's,
+                    # which information_schema reports page-granular and from
+                    # cached statistics, and in the default shared-table mode
+                    # the table holds other runs' rows too — so there is no
+                    # measurement to be had here, only an estimate. NULL ("not
+                    # reported") is the honest answer; a number that looked
+                    # measured would not be. Tracked for a follow-up.
+                    #
+                    # ``file_count`` is belt and braces on the same rule: a
+                    # file-bearing run that reached here has staged at least
+                    # one file (every inserted row passed map_file_transfer),
+                    # so this is unreachable — but if some path ever does stage
+                    # nothing, the total is 0, and reporting that 0 would claim
+                    # an EMPTY dataset rather than an unmeasured one.
+                    measured_files = self.category in _FILE_BEARING_CATEGORIES and (
+                        staged_bytes.file_count > 0
+                    )
+                    size_bytes = staged_bytes.total if measured_files else None
+
                     self.api_client.send_ingest_summary(
                         table_name=self.table_name,
                         physical_table=(
@@ -1431,6 +1467,7 @@ class BaseIngestor(ABC):
                         # needs (#486).
                         label_policy=self.label_policy,
                         record_count=record_count,
+                        size_bytes=size_bytes,
                     )
                     dataset_registered = True
                     stats["api_sent_records"] = stats["inserted_records"]

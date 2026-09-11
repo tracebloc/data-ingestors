@@ -47,6 +47,20 @@ jobs:
         run: |
           python setup.py sdist bdist_wheel
 
+      - name: Refuse a distribution that ships anything but the package
+        # Reads the BUILT artefacts, not setup.py: exactly one wheel + one
+        # sdist in dist/, top_level.txt == {tracebloc_ingestor}, no member
+        # under a `tests` component or named conftest.py, and every
+        # tracebloc_ingestor/schema/*.json from the source tree present in
+        # both. Every release up to 0.8.19 shipped the whole unit-test suite
+        # (51 % of the wheel) plus a top-level package named `tests`, and
+        # nothing here looked. Fails closed (exit 2) with the offending paths
+        # named; an unreadable artefact is a refusal, not a pass. Stdlib only,
+        # so it needs nothing installed. Must stay BEFORE the install and
+        # upload steps -- tests/test_check_dist_contents.py asserts the order.
+        run: |
+          python scripts/check_dist_contents.py
+
       - name: Install built package for validation
         run: |
           pip install dist/*.tar.gz
