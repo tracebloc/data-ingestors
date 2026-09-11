@@ -224,6 +224,7 @@ class APIClient:
         physical_table: Optional[str] = None,
         label_policy: str = label_policy_module.PASSTHROUGH,
         record_count: Optional[int] = None,
+        size_bytes: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         Send a single ingest summary to the backend, creating the UserDataSet in one
@@ -280,6 +281,17 @@ class APIClient:
                 object_detection, where one row IS one image. ``None`` omits the field, so an older
                 backend that predates it is unaffected and the payload stays
                 byte-identical to today's — the two repos ship in either order.
+            size_bytes: The dataset's physical size in BYTES — not GB, not GiB
+                (backend#3644). Bytes deliberately: the UI's "12 GiB used"
+                phrasing is a display concern it derives, while a stored float
+                GB cannot represent a small dataset and drifts when summed
+                across a combined dataset's sources. ``None`` OMITS the field,
+                and that is the only correct value for an unmeasured size — a
+                ``0`` would be a positive claim that the dataset holds no data,
+                which the backend cannot tell apart from a measured 0, whereas
+                a missing field stays ``NULL`` = "not reported". Same
+                optionality as ``record_count`` above, so the two repos ship in
+                either order.
 
         Returns:
             ``{"dataset_id": ..., "dataset_key": ...}``
@@ -325,6 +337,12 @@ class APIClient:
             # the backend half on backend#2770.
             if record_count is not None:
                 payload_fields["record_count"] = record_count
+            # `is not None`, mirroring record_count above: the caller decides
+            # whether the size is known, and this side only decides where it
+            # goes. Omitting is the ONLY way to say "unknown" — a 0 would be a
+            # measured "this dataset holds no bytes" (backend#3644).
+            if size_bytes is not None:
+                payload_fields["size_bytes"] = size_bytes
             payload = json.dumps(payload_fields)
             logger.info(
                 f"Sending ingest summary for {table_name}: "
