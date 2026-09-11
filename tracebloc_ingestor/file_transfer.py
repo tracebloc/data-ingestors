@@ -26,6 +26,7 @@ from tracebloc_ingestor.storage_contract import (
 )
 from tracebloc_ingestor.utils.fs import DEST_DIR_MODE as _DEST_DIR_MODE
 from tracebloc_ingestor.utils.fs import ensure_reclaimable_dir
+from tracebloc_ingestor.utils.staged_bytes import record_staged_file
 from tracebloc_ingestor.utils.constants import (
     GREEN,
     RED,
@@ -87,6 +88,12 @@ def _copy_file_with_retry(src_path: str, dest_path: str) -> None:
         os.remove(dest_path)
 
     shutil.copy(src_path, dest_path)
+    # backend#3644: THE single funnel every category's transfer copies through,
+    # so it is the one place the dataset's physical size can be measured. A
+    # no-op unless an ingest opened a meter (utils/staged_bytes). Deliberately
+    # after the copy and non-raising, so it can neither trigger this function's
+    # retry nor fail a run whose files did land.
+    record_staged_file(dest_path)
     logger.debug(f"Successfully copied file from {src_path} to {dest_path}")
 
 
