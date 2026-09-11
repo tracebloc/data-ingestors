@@ -108,36 +108,89 @@ class Config:
             )
 
     @staticmethod
-    def _require_env(env_name: str) -> str:
-        """Read a required DB-credential env var, failing fast if unset
-        (backend#1528).
+    def _read_env_alias(
+        new_name: str, old_name: str, default: Optional[str] = None
+    ) -> Optional[str]:
+        """Read ``new_name``, falling back to the deprecated ``old_name``.
 
-        DB_USER / DB_PASSWORD used to fall back to the root-equivalent
-        edgeuser identity. That fallback is gone: jobs-manager now injects
-        the per-Job tb_ingest credentials into the ingestion Job's env, so an
-        unset value means a misconfigured Job, not a cue to use edgeuser. Raise
-        a message that names the variable rather than letting SQLAlchemy
-        surface an opaque access-denied (or, worse, silently connecting as the
-        legacy identity).
+        RFC-0076 settings-naming (data-ingestors#585): alias-first, both
+        names work, ``remove_by: 2026-12-31``. ``new_name`` wins if a caller
+        (wrongly) sets both — the point of the alias is to keep the old name
+        working during the migration, not to make it authoritative. One
+        helper so each aliased field states its old/new pair once instead of
+        restating the ``os.environ`` fallback chain at every property.
+
+        A *present-but-empty* value counts as set (``is not None``, not
+        truthiness): ``TRACEBLOC_DB_NAME=""`` resolves to ``""`` and wins over
+        a real legacy ``DB_NAME`` rather than falling through to it or the
+        default. That restores the pre-alias ``os.environ.get`` behaviour and
+        preserves an explicit blank for the caller's own guard — an optional
+        field returns it as-is; a required field's ``_require_env`` still
+        rejects it (backend/client-runtime settled on the same rule).
         """
-        val = os.environ.get(env_name)
+        for name in (new_name, old_name):
+            val = os.environ.get(name)
+            if val is not None:
+                return val
+        return default
+
+    @classmethod
+    def _require_env(cls, required_name: str, canonical: Optional[str] = None) -> str:
+        """Read a required DB-credential env var, failing fast if unset
+        (backend#1528; alias per RFC-0076, remove_by 2026-12-31).
+
+        ``required_name`` is the name the spawner (jobs-manager) injects and
+        the ``runtime_env`` contract pins — it stays the *required* name until
+        a coordinated phase-2 flip, so the reader can't declare the canonical
+        required before the writer emits it (reader-before-writer). It is
+        arg 0 so the contract test reads the injected name from the AST.
+        ``canonical`` is the RFC-0076 ``TRACEBLOC_``-prefixed spelling the
+        ingestor reads alias-first (data-ingestors#585): an operator who has
+        moved to it wins, but either spelling satisfies the requirement.
+
+        The edgeuser fallback is gone: jobs-manager now injects the per-Job
+        tb_ingest credentials, so an unset — or explicitly blank — value means
+        a misconfigured Job, not a cue to use edgeuser. A present-but-blank
+        canonical is a *present* value that wins over the legacy name (see
+        ``_read_env_alias``) and then fails here: it must never fall through to
+        a stale legacy secret. Raise a message naming the variable(s) rather
+        than letting SQLAlchemy surface an opaque access-denied (or, worse,
+        silently connect as the legacy identity).
+        """
+        if canonical:
+            val = cls._read_env_alias(canonical, required_name)
+            primary, secondary = canonical, required_name
+        else:
+            val = os.environ.get(required_name)
+            primary, secondary = required_name, None
         if not val:
+            alias_hint = f" (or the deprecated {secondary})" if secondary else ""
             raise ValueError(
-                f"{env_name} is not set. The ingestor authenticates to MySQL "
-                f"as the identity jobs-manager injects per-Job (backend#1528: "
-                f"tb_ingest); set the {env_name} environment variable. The "
-                f"legacy edgeuser fallback was removed once per-Job "
-                f"credentials shipped."
+                f"{primary} is not set{alias_hint}. The ingestor authenticates "
+                f"to MySQL as the identity jobs-manager injects per-Job "
+                f"(backend#1528: tb_ingest); set the {primary} environment "
+                f"variable{alias_hint}. The legacy edgeuser fallback was "
+                f"removed once per-Job credentials shipped."
             )
         return val
 
     # ===== Database =====
-    # DB_HOST/DB_PORT/DB_NAME are connection conventions for the
-    # cluster-internal MySQL and keep their defaults. DB_USER/DB_PASSWORD do
-    # NOT: the ingestor authenticates as the identity jobs-manager injects
-    # per-Job (backend#1528 — tb_ingest, scoped to training_test_datasets).
-    # The legacy root-equivalent edgeuser fallback was removed here once
-    # those per-Job credentials shipped; both are now required from env and
+    # DB_HOST/DB_PORT read the stock MySQL-image conventions (MYSQL_HOST /
+    # MYSQL_PORT) and keep those names — that contract is the mysql client /
+    # docker-entrypoint's, not ours, and is out of scope for the RFC-0076
+    # rename below. DB_USER/DB_PASSWORD/DB_NAME ARE ours: read alias-first as
+    # of data-ingestors#585 (canonical TRACEBLOC_DB_USER / TRACEBLOC_DB_PASSWORD
+    # / TRACEBLOC_DB_NAME, falling back to the deprecated DB_USER / DB_PASSWORD
+    # / DB_NAME; remove_by 2026-12-31). The runtime_env contract still pins the
+    # *legacy* DB_USER / DB_PASSWORD as the required names the spawner injects —
+    # the required-name flip to the canonical is a coordinated phase-2 step, so
+    # _require_env takes the injected name first (arg 0, what the contract test
+    # reads) and the canonical as the alias it reads ahead of it.
+    # DB_USER/DB_PASSWORD do NOT default:
+    # the ingestor authenticates as the identity jobs-manager injects per-Job
+    # (backend#1528 — tb_ingest, scoped to training_test_datasets). The legacy
+    # root-equivalent edgeuser fallback was removed here once those per-Job
+    # credentials shipped; both are required from env (either spelling) and
     # fail fast if unset rather than silently connecting as the old identity.
     @property
     def DB_HOST(self) -> str:
@@ -153,12 +206,20 @@ class Config:
     @property
     def DB_USER(self) -> str:
         ov = self._override("DB_USER")
-        return ov if ov is not _MISSING else self._require_env("DB_USER")
+        return (
+            ov
+            if ov is not _MISSING
+            else self._require_env("DB_USER", "TRACEBLOC_DB_USER")
+        )
 
     @property
     def DB_PASSWORD(self) -> str:
         ov = self._override("DB_PASSWORD")
-        return ov if ov is not _MISSING else self._require_env("DB_PASSWORD")
+        return (
+            ov
+            if ov is not _MISSING
+            else self._require_env("DB_PASSWORD", "TRACEBLOC_DB_PASSWORD")
+        )
 
     @property
     def DB_NAME(self) -> str:
@@ -166,7 +227,9 @@ class Config:
         return (
             ov
             if ov is not _MISSING
-            else os.environ.get("DB_NAME", "training_test_datasets")
+            else self._read_env_alias(
+                "TRACEBLOC_DB_NAME", "DB_NAME", "training_test_datasets"
+            )
         )
 
     @property
@@ -223,18 +286,37 @@ class Config:
 
     # ===== Paths =====
     # No laptop-path defaults: in production, the declarative entrypoint
-    # (cli/run.py:main) sets these from the resolved ingest.yaml. Empty
-    # string fails loudly in path operations rather than silently scanning
-    # a developer-laptop directory.
+    # (cli/run.py:main) sets these as explicit Config(...) overrides from the
+    # resolved ingest.yaml, bypassing os.environ entirely (P4c) — the alias
+    # below only matters for the legacy env-var path (ingestor-job.yaml /
+    # templates/examples reading a module-level ``Config()``). Empty string
+    # fails loudly in path operations rather than silently scanning a
+    # developer-laptop directory.
+    #
+    # SRC_PATH/LABEL_FILE are ours (data-ingestors#585): read alias-first as
+    # TRACEBLOC_SRC_PATH / TRACEBLOC_LABEL_FILE, falling back to the
+    # deprecated SRC_PATH / LABEL_FILE; remove_by 2026-12-31. TABLE_NAME is
+    # deliberately NOT renamed here — it's the cross-repo ingest wire
+    # contract the launching backend job sets, and its eventual name
+    # (dataset_key / physical_table / data_vertical) is a B4 decision, not
+    # this ticket's.
     @property
     def SRC_PATH(self) -> str:
         ov = self._override("SRC_PATH")
-        return ov if ov is not _MISSING else os.environ.get("SRC_PATH", "")
+        return (
+            ov
+            if ov is not _MISSING
+            else self._read_env_alias("TRACEBLOC_SRC_PATH", "SRC_PATH", "")
+        )
 
     @property
     def LABEL_FILE(self) -> str:
         ov = self._override("LABEL_FILE")
-        return ov if ov is not _MISSING else os.environ.get("LABEL_FILE", "")
+        return (
+            ov
+            if ov is not _MISSING
+            else self._read_env_alias("TRACEBLOC_LABEL_FILE", "LABEL_FILE", "")
+        )
 
     @property
     def TABLE_NAME(self) -> str:

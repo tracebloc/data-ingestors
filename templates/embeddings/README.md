@@ -138,11 +138,13 @@ The script uses the following configuration:
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `TABLE_NAME` | Target database table | Required |
-| `LABEL_FILE` | Path to CSV manifest | Required |
-| `SRC_PATH` | Path to the parent of the `texts/` directory | Required |
+| `TRACEBLOC_LABEL_FILE` | Path to CSV manifest | Required |
+| `TRACEBLOC_SRC_PATH` | Path to the parent of the `texts/` directory | Required |
 | `BATCH_SIZE` | Ingestion batch size | 4000 |
 | `BACKEND_TOKEN` | Auth token for API | Required |
 | `CLIENT_ENV` | Environment (local/dev/stg/prod) | prod |
+
+> `TRACEBLOC_LABEL_FILE`/`TRACEBLOC_SRC_PATH` are the canonical names (RFC-0076 settings-naming); the un-prefixed `LABEL_FILE`/`SRC_PATH` still work as a deprecated alias until 2026-12-31.
 
 ## Notes
 

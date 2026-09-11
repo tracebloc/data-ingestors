@@ -121,4 +121,11 @@ def test_each_entry_says_who_is_supposed_to_provide_it():
 def test_it_currently_pins_the_two_credentials_1528_made_required():
     # A concrete anchor: if these ever stop being required, that is a
     # deliberate decision and this line should be the thing that notices.
+    # data-ingestors#585 (RFC-0076 settings-naming) adds the canonical
+    # TRACEBLOC_ spellings as alias-first reads (see runtime_env.v1.json's
+    # "aliases"), but the *required* contract name — what config.py passes to
+    # _require_env as arg 0, and what jobs-manager injects — stays DB_USER /
+    # DB_PASSWORD. Flipping the required name to the canonical is a coordinated
+    # phase-2 step (a reader can't require a name the spawner doesn't emit
+    # yet), so this contract still pins the legacy pair.
     assert _required_from_contract() == {"DB_USER", "DB_PASSWORD"}

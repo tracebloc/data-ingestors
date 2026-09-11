@@ -81,7 +81,7 @@ label_column = "DEATH_EVENT"   # the event indicator
 
 ## Usage
 
-1. Replace the sample CSV with your data, or set `LABEL_FILE` to point at your CSV
+1. Replace the sample CSV with your data, or set `TRACEBLOC_LABEL_FILE` (the deprecated `LABEL_FILE` alias still works) to point at your CSV
 2. Update the `schema` dict in `time_to_event_prediction.py` to match your feature columns
 3. Confirm `time_column` and `label_column` match your CSV's time and event column names
 4. Run the ingestion script:

@@ -14,10 +14,16 @@ validate → file-transfer → MySQL insert path end to end.
 ```bash
 docker compose -f e2e/docker-compose.yml up -d        # MySQL on :3306
 pip install -r requirements.txt && pip install -e .
-MYSQL_HOST=127.0.0.1 MYSQL_PORT=3306 DB_USER=root DB_PASSWORD=root \
-  DB_NAME=training_test_datasets pytest e2e/ -v
+MYSQL_HOST=127.0.0.1 MYSQL_PORT=3306 TRACEBLOC_DB_USER=root TRACEBLOC_DB_PASSWORD=root \
+  TRACEBLOC_DB_NAME=training_test_datasets pytest e2e/ -v
 docker compose -f e2e/docker-compose.yml down -v
 ```
+
+> The ingestor reads its DB env alias-first (RFC-0076 settings-naming), so the
+> canonical `TRACEBLOC_DB_*` spellings above work. The direct-connect contract
+> tests (`test_*_e2e.py`) still read the legacy `DB_USER`/`DB_PASSWORD`/`DB_NAME`
+> names, which this suite's `conftest.py` backfills to the same `root` defaults —
+> a phase-2 cleanup (data-ingestors#585).
 
 The suite **auto-skips when no MySQL is reachable**, so the default `pytest`
 (unit) run is unaffected. CI runs it with a MySQL service in

@@ -68,7 +68,7 @@ The script defines a schema for **feature columns only**. The label column is co
 
 ## Usage
 
-1. Replace `time_series_forecasting_sample_in_csv_format.csv` with your data, or set `LABEL_FILE` to point at your CSV
+1. Replace `time_series_forecasting_sample_in_csv_format.csv` with your data, or set `TRACEBLOC_LABEL_FILE` (the deprecated `LABEL_FILE` alias still works) to point at your CSV
 2. Update the `schema` dict in `time_series_forecasting.py` to match your feature columns
 3. Set `label_column` to the name of your target column
 4. Run the ingestion script:

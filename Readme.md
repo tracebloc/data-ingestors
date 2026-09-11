@@ -129,12 +129,14 @@ The Job needs these environment variables (set in [`ingestor-job.yaml`](ingestor
 | `CLIENT_ID`, `CLIENT_PASSWORD` | Tracebloc client credentials |
 | `CLIENT_PVC` | PVC name shared with the client (must match `values.yaml`) |
 | `MYSQL_HOST` | Hostname of the client's MySQL service |
-| `DB_USER`, `DB_PASSWORD` | **Required.** Credentials for the dataset database. There is no built-in fallback account — the Job fails at startup without these. On installs with `serviceDbAccounts: true`, use the generated `tb_ingest` account (password in the `<release-name>-secrets` Secret, key `TB_INGEST_PASSWORD`). |
-| `SRC_PATH` | Where your raw data is mounted in the ingestor pod |
-| `LABEL_FILE` | Path to labels (e.g. `Xy_train.csv`) |
+| `TRACEBLOC_DB_USER`, `TRACEBLOC_DB_PASSWORD` | **Required.** Credentials for the dataset database. There is no built-in fallback account — the Job fails at startup without these. On installs with `serviceDbAccounts: true`, use the generated `tb_ingest` account (password in the `<release-name>-secrets` Secret, key `TB_INGEST_PASSWORD`). |
+| `TRACEBLOC_SRC_PATH` | Where your raw data is mounted in the ingestor pod |
+| `TRACEBLOC_LABEL_FILE` | Path to labels (e.g. `Xy_train.csv`) |
 | `TABLE_NAME` | Destination table name in the client database |
 | `TITLE` | *(optional)* Human-readable dataset name |
 | `LOG_LEVEL` | *(optional)* `INFO`, `WARNING`, `ERROR` |
+
+> The `TRACEBLOC_`-prefixed names above are the canonical spelling (RFC-0076 settings-naming). Their un-prefixed predecessors (`DB_USER`, `DB_PASSWORD`, `SRC_PATH`, `LABEL_FILE`) still work as a deprecated alias — new deployments should use the prefixed names; the alias is scheduled for removal 2026-12-31.
 
 ### Running custom-processor flows under Pod Security Standards (`restricted`)
 
