@@ -29,7 +29,9 @@ def clean_env(monkeypatch):
     """Strip the env vars these tests read/write."""
     for var in (
         "SRC_PATH",
+        "TRACEBLOC_SRC_PATH",
         "LABEL_FILE",
+        "TRACEBLOC_LABEL_FILE",
         "TABLE_NAME",
         "TITLE",
         "BACKEND_TOKEN",
@@ -41,8 +43,11 @@ def clean_env(monkeypatch):
         "MYSQL_HOST",
         "MYSQL_PORT",
         "DB_USER",
+        "TRACEBLOC_DB_USER",
         "DB_PASSWORD",
+        "TRACEBLOC_DB_PASSWORD",
         "DB_NAME",
+        "TRACEBLOC_DB_NAME",
     ):
         monkeypatch.delenv(var, raising=False)
 
@@ -199,25 +204,131 @@ def test_numeric_int_field_still_coerces(clean_env, monkeypatch):
     assert config.BATCH_SIZE == 500
 
 
-@pytest.mark.parametrize("attr", ["DB_USER", "DB_PASSWORD"])
-def test_db_credentials_required_no_edgeuser_fallback(clean_env, attr):
-    """backend#1528: the root-equivalent 'edgeuser' fallback is gone. With the
-    env var unset, accessing DB_USER/DB_PASSWORD must fail fast with a message
-    naming the variable — never silently return the legacy edgeuser default."""
-    with pytest.raises(ValueError, match=f"{attr} is not set"):
+@pytest.mark.parametrize(
+    "attr,new_env",
+    [("DB_USER", "TRACEBLOC_DB_USER"), ("DB_PASSWORD", "TRACEBLOC_DB_PASSWORD")],
+)
+def test_db_credentials_required_no_edgeuser_fallback(clean_env, attr, new_env):
+    """backend#1528: the root-equivalent 'edgeuser' fallback is gone. With
+    neither the new (TRACEBLOC_-prefixed) nor deprecated env var set,
+    accessing DB_USER/DB_PASSWORD must fail fast with a message naming the
+    canonical variable — never silently return the legacy edgeuser default."""
+    with pytest.raises(ValueError, match=f"{new_env} is not set"):
         getattr(Config(), attr)
 
 
 @pytest.mark.parametrize(
     "attr,env,value",
-    [("DB_USER", "DB_USER", "tb_ingest"), ("DB_PASSWORD", "DB_PASSWORD", "s3cret")],
+    [
+        ("DB_USER", "DB_USER", "tb_ingest"),
+        ("DB_USER", "TRACEBLOC_DB_USER", "tb_ingest"),
+        ("DB_PASSWORD", "DB_PASSWORD", "s3cret"),
+        ("DB_PASSWORD", "TRACEBLOC_DB_PASSWORD", "s3cret"),
+    ],
 )
 def test_db_credentials_flow_from_env(clean_env, monkeypatch, attr, env, value):
+    """data-ingestors#585: DB_USER/DB_PASSWORD are read alias-first — either
+    the deprecated bare name or the new TRACEBLOC_-prefixed one works."""
     monkeypatch.setenv(env, value)
     assert getattr(Config(), attr) == value
+
+
+@pytest.mark.parametrize(
+    "attr,new_env,old_env",
+    [
+        ("DB_USER", "TRACEBLOC_DB_USER", "DB_USER"),
+        ("DB_PASSWORD", "TRACEBLOC_DB_PASSWORD", "DB_PASSWORD"),
+    ],
+)
+def test_db_credentials_new_name_wins_when_both_set(
+    clean_env, monkeypatch, attr, new_env, old_env
+):
+    """Alias-first means the new name is authoritative — the deprecated one
+    is a fallback for callers who haven't migrated yet, not a second vote."""
+    monkeypatch.setenv(new_env, "from-new")
+    monkeypatch.setenv(old_env, "from-old")
+    assert getattr(Config(), attr) == "from-new"
+
+
+@pytest.mark.parametrize(
+    "attr,new_env,old_env",
+    [
+        ("DB_USER", "TRACEBLOC_DB_USER", "DB_USER"),
+        ("DB_PASSWORD", "TRACEBLOC_DB_PASSWORD", "DB_PASSWORD"),
+    ],
+)
+def test_db_credentials_blank_new_name_wins_and_fails_fast(
+    clean_env, monkeypatch, attr, new_env, old_env
+):
+    """A present-but-blank canonical is a *present* value: it wins over a real
+    legacy secret (alias-first, is-not-None), and because the credential is
+    REQUIRED the blank then fails fast — it must never silently authenticate
+    with the stale legacy value. This is the point of preserving present-but-
+    blank at the reader (backend/client-runtime settled on the same rule)."""
+    monkeypatch.setenv(new_env, "")
+    monkeypatch.setenv(old_env, "stale-legacy-secret")
+    with pytest.raises(ValueError, match=f"{new_env} is not set"):
+        getattr(Config(), attr)
 
 
 def test_db_credentials_override_wins(clean_env):
     config = Config(DB_USER="tb_ingest", DB_PASSWORD="s3cret")
     assert config.DB_USER == "tb_ingest"
     assert config.DB_PASSWORD == "s3cret"
+
+
+# Optional aliased fields (data-ingestors#585): read alias-first, both
+# spellings work, a present-but-empty value is returned as-is, and an unset
+# field falls to its default. Same parametrized shape as the DB-cred group
+# above, minus the fail-fast — these have defaults. DB_NAME / SRC_PATH /
+# LABEL_FILE are all ours (set by ingestor-job.yaml / the legacy templates
+# path, not a third-party convention).
+_OPTIONAL_ALIAS_FIELDS = [
+    # attr, new_env, old_env, default
+    ("DB_NAME", "TRACEBLOC_DB_NAME", "DB_NAME", "training_test_datasets"),
+    ("SRC_PATH", "TRACEBLOC_SRC_PATH", "SRC_PATH", ""),
+    ("LABEL_FILE", "TRACEBLOC_LABEL_FILE", "LABEL_FILE", ""),
+]
+
+
+@pytest.mark.parametrize("attr,new_env,old_env,default", _OPTIONAL_ALIAS_FIELDS)
+def test_optional_alias_reads_new_name(
+    clean_env, monkeypatch, attr, new_env, old_env, default
+):
+    monkeypatch.setenv(new_env, "from-new")
+    assert getattr(Config(), attr) == "from-new"
+
+
+@pytest.mark.parametrize("attr,new_env,old_env,default", _OPTIONAL_ALIAS_FIELDS)
+def test_optional_alias_falls_back_to_deprecated_name(
+    clean_env, monkeypatch, attr, new_env, old_env, default
+):
+    monkeypatch.setenv(old_env, "from-old")
+    assert getattr(Config(), attr) == "from-old"
+
+
+@pytest.mark.parametrize("attr,new_env,old_env,default", _OPTIONAL_ALIAS_FIELDS)
+def test_optional_alias_new_name_wins_when_both_set(
+    clean_env, monkeypatch, attr, new_env, old_env, default
+):
+    monkeypatch.setenv(new_env, "from-new")
+    monkeypatch.setenv(old_env, "from-old")
+    assert getattr(Config(), attr) == "from-new"
+
+
+@pytest.mark.parametrize("attr,new_env,old_env,default", _OPTIONAL_ALIAS_FIELDS)
+def test_optional_alias_blank_new_name_wins_over_real_old(
+    clean_env, monkeypatch, attr, new_env, old_env, default
+):
+    """A present-but-empty canonical wins over a real legacy value and is
+    returned as-is — restores the pre-alias os.environ.get behaviour for these
+    optional fields (the caller, not the reader, decides whether blank is a
+    problem)."""
+    monkeypatch.setenv(new_env, "")
+    monkeypatch.setenv(old_env, "real-legacy-value")
+    assert getattr(Config(), attr) == ""
+
+
+@pytest.mark.parametrize("attr,new_env,old_env,default", _OPTIONAL_ALIAS_FIELDS)
+def test_optional_alias_default_when_unset(clean_env, attr, new_env, old_env, default):
+    assert getattr(Config(), attr) == default

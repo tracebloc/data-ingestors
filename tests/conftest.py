@@ -18,7 +18,9 @@ import pytest
 
 _ENV_VARS = (
     "SRC_PATH",
+    "TRACEBLOC_SRC_PATH",
     "LABEL_FILE",
+    "TRACEBLOC_LABEL_FILE",
     "TABLE_NAME",
     "TITLE",
     "BACKEND_TOKEN",
@@ -30,8 +32,11 @@ _ENV_VARS = (
     "MYSQL_HOST",
     "MYSQL_PORT",
     "DB_USER",
+    "TRACEBLOC_DB_USER",
     "DB_PASSWORD",
+    "TRACEBLOC_DB_PASSWORD",
     "DB_NAME",
+    "TRACEBLOC_DB_NAME",
     "TRACEBLOC_INGEST_CORRELATION_ID",
 )
 

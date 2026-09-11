@@ -7,14 +7,18 @@
       "since": "0.8.0",
       "provided_by": "jobs-manager, gated on SERVICE_DB_ACCOUNTS",
       "was_defaulted_to": "edgeuser",
-      "reason": "backend#1528 D10 retired the root-equivalent edgeuser identity; the ingestor now authenticates as the per-Job tb_ingest account the spawner injects."
+      "reason": "backend#1528 D10 retired the root-equivalent edgeuser identity; the ingestor now authenticates as the per-Job tb_ingest account the spawner injects.",
+      "aliases": ["TRACEBLOC_DB_USER"],
+      "alias_reason": "DB_USER is the name jobs-manager injects and the required contract name today; TRACEBLOC_DB_USER is the canonical the ingestor reads alias-first; the required-name flip is a coordinated phase-2 step when the spawner injects the canonical."
     },
     {
       "name": "DB_PASSWORD",
       "since": "0.8.0",
       "provided_by": "jobs-manager, gated on SERVICE_DB_ACCOUNTS",
       "was_defaulted_to": "<the legacy edgeuser password>",
-      "reason": "Same as DB_USER. Injected as a secretKeyRef so the value never lands in the Job spec."
+      "reason": "Same as DB_USER. Injected as a secretKeyRef so the value never lands in the Job spec.",
+      "aliases": ["TRACEBLOC_DB_PASSWORD"],
+      "alias_reason": "DB_PASSWORD is the name jobs-manager injects and the required contract name today; TRACEBLOC_DB_PASSWORD is the canonical the ingestor reads alias-first; the required-name flip is a coordinated phase-2 step when the spawner injects the canonical."
     }
   ]
 }

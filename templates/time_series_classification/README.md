@@ -88,7 +88,7 @@ If individual rows fail to insert, the post-insert group-integrity pass removes 
 
 ## Usage
 
-1. Replace the sample CSV with your data, or set `LABEL_FILE` to point at your CSV
+1. Replace the sample CSV with your data, or set `TRACEBLOC_LABEL_FILE` (the deprecated `LABEL_FILE` alias still works) to point at your CSV
 2. Update the `schema` dict in `time_series_classification.py` to match your feature columns (keep `sequence_id` and `timestamp` — the names are fixed)
 3. Confirm `label_column` matches your CSV's outcome column name
 4. Run the ingestion script:
