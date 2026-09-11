@@ -48,15 +48,38 @@ def _required_from_contract() -> set:
     return {entry["name"] for entry in _contract()["required"]}
 
 
-def _required_from_code() -> set:
-    """Every env var `config.py` passes to `_require_env`, read from the AST.
+def _aliases_from_contract() -> dict:
+    """{required name -> set of declared aliases} from the contract."""
+    return {
+        entry["name"]: set(entry.get("aliases", []))
+        for entry in _contract()["required"]
+    }
+
+
+def _lit_str(node) -> str:
+    assert isinstance(node, ast.Constant) and isinstance(node.value, str), (
+        "_require_env must be called with literal env-var names so this "
+        "contract can be checked statically; got a computed value"
+    )
+    return node.value
+
+
+def _require_env_calls() -> dict:
+    """{required name -> canonical alias (or None)} for each `_require_env`
+    call in `config.py`, read from the AST.
 
     Parsed rather than imported: importing the package pulls in sqlalchemy and
     the rest of the runtime, and a contract test should depend on the source it
     is pinning, not on the environment it happens to run in.
+
+    `_require_env(required_name, canonical=None)` — arg 0 is the required name
+    the spawner injects (the contract `name`); arg 1 (positional or the
+    `canonical` keyword) is the RFC-0076 spelling read alias-first (the
+    contract `aliases`). Both are captured so the two copies can be pinned
+    against each other in either direction.
     """
     tree = ast.parse(CONFIG_PY.read_text(encoding="utf-8"))
-    found = set()
+    calls = {}
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
@@ -64,13 +87,33 @@ def _required_from_code() -> set:
         name = getattr(fn, "attr", None) or getattr(fn, "id", None)
         if name != "_require_env" or not node.args:
             continue
-        arg = node.args[0]
-        assert isinstance(arg, ast.Constant) and isinstance(arg.value, str), (
-            "_require_env must be called with a literal env-var name so this "
-            "contract can be checked statically; got a computed value"
-        )
-        found.add(arg.value)
-    return found
+        required_name = _lit_str(node.args[0])
+        canonical = None
+        if len(node.args) > 1:
+            canonical = _lit_str(node.args[1])
+        else:
+            for kw in node.keywords:
+                if kw.arg == "canonical":
+                    canonical = _lit_str(kw.value)
+        calls[required_name] = canonical
+    return calls
+
+
+def _required_from_code() -> set:
+    """Every env var `config.py` passes to `_require_env` as its required name."""
+    return set(_require_env_calls())
+
+
+def _aliases_from_code() -> dict:
+    """{required name -> set of aliases} the reader actually accepts.
+
+    An alias-first `_require_env(name, canonical)` accepts `canonical` ahead of
+    `name`; a bare `_require_env(name)` accepts no alias.
+    """
+    return {
+        req: ({canonical} if canonical else set())
+        for req, canonical in _require_env_calls().items()
+    }
 
 
 def test_the_contract_is_a_version_we_understand():
@@ -103,6 +146,31 @@ def test_the_contract_does_not_claim_requirements_the_code_dropped():
     assert not stale, (
         f"runtime_env.v1.json declares {sorted(stale)} as required but nothing "
         "in config.py requires them any more."
+    )
+
+
+def test_declared_aliases_match_what_the_reader_accepts():
+    """The `aliases` list must pin, in both directions, the exact alias-first
+    names `config.py` reads — nothing the reader ignores, nothing it accepts
+    but the contract omits.
+
+    Without this, the schema's `aliases` and `_require_env`'s `canonical`
+    argument are two hand-kept copies of the same fact. A consumer that trusts
+    `aliases` would then accept a name the reader no longer honors (contract
+    over-claims), or fail to inject a name the reader actually accepts
+    (contract under-claims) — the drift Bugbot flagged on data-ingestors#587.
+    """
+    contract = _aliases_from_contract()
+    code = _aliases_from_code()
+    # Only the required entries carry an `aliases` contract; both maps are keyed
+    # by the same required names (pinned by the two tests above), so compare the
+    # alias sets entry by entry.
+    assert contract == code, (
+        "runtime_env.v1.json `aliases` disagree with the alias-first names "
+        f"config.py reads.\n  contract: {contract}\n  code:     {code}\n"
+        "Whichever side changed, the other must follow — a consumer trusting "
+        "`aliases` would otherwise accept a name the reader ignores, or miss "
+        "one it honors."
     )
 
 
